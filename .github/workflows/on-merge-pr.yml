@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Setup .NET tooling
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 6.0.x
       - name: Install GitVersion
@@ -63,10 +63,10 @@ jobs:
     needs: [build-and-pack]
     steps:
       - name: Setup .NET tooling
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 6.0.x
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
           name: nupkg
       - name: Publish to NuGet
@@ -78,12 +78,12 @@ jobs:
     needs: [build-and-pack]
     steps:
       - name: Setup .NET tooling
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 6.0.x
       - name: Git Checkout
         uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
           name: nupkg
       - name: Update CHANGELOG
