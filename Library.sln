@@ -2,7 +2,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.3.32825.248
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MongoZen", "src\MongoZen\MongoZen.csproj", "{24361E4F-5C04-461B-9F9F-282BBD10B30F}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Library", "src\Library\Library.csproj", "{24361E4F-5C04-461B-9F9F-282BBD10B30F}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{E4D7A95D-AEAD-4B22-B232-A3F4705B32B9}"
 	ProjectSection(SolutionItems) = preProject
@@ -27,14 +27,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "workflows", "workflows", "{
 		.github\workflows\on-pull-request.yml = .github\workflows\on-pull-request.yml
 	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MongoZen.Tests", "tests\MongoZen.Tests\MongoZen.Tests.csproj", "{29D288B7-F1C1-49C7-89D0-06C86754A14D}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MongoZen.SourceGenerator", "src\MongoZen.SourceGenerator\MongoZen.SourceGenerator.csproj", "{4BF62039-C36F-489A-8E6D-F8AEB81DD90C}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MongoZen.SourceGenerator.Tests", "tests\MongoZen.SourceGenerator.Tests\MongoZen.SourceGenerator.Tests.csproj", "{DBB27EF1-F229-46CB-8DF2-C66B49FECE6A}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Playground", "src\Playground\Playground.csproj", "{65F7E643-DAC4-45DF-9581-15ADC4522B5D}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -45,22 +37,6 @@ Global
 		{24361E4F-5C04-461B-9F9F-282BBD10B30F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{24361E4F-5C04-461B-9F9F-282BBD10B30F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{24361E4F-5C04-461B-9F9F-282BBD10B30F}.Release|Any CPU.Build.0 = Release|Any CPU
-		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Release|Any CPU.Build.0 = Release|Any CPU
-		{4BF62039-C36F-489A-8E6D-F8AEB81DD90C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{4BF62039-C36F-489A-8E6D-F8AEB81DD90C}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{4BF62039-C36F-489A-8E6D-F8AEB81DD90C}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{4BF62039-C36F-489A-8E6D-F8AEB81DD90C}.Release|Any CPU.Build.0 = Release|Any CPU
-		{DBB27EF1-F229-46CB-8DF2-C66B49FECE6A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{DBB27EF1-F229-46CB-8DF2-C66B49FECE6A}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{DBB27EF1-F229-46CB-8DF2-C66B49FECE6A}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{DBB27EF1-F229-46CB-8DF2-C66B49FECE6A}.Release|Any CPU.Build.0 = Release|Any CPU
-		{65F7E643-DAC4-45DF-9581-15ADC4522B5D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{65F7E643-DAC4-45DF-9581-15ADC4522B5D}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{65F7E643-DAC4-45DF-9581-15ADC4522B5D}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{65F7E643-DAC4-45DF-9581-15ADC4522B5D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -6,23 +6,23 @@
     <BaseIntermediateOutputPath>$(RepoRootPath)obj\$([MSBuild]::MakeRelative($(RepoRootPath), $(MSBuildProjectDirectory)))\</BaseIntermediateOutputPath>
     <BaseOutputPath Condition=" '$(BaseOutputPath)' == '' ">$(RepoRootPath)bin\$(MSBuildProjectName)\</BaseOutputPath>
     <PackageOutputPath>$(RepoRootPath)bin\Packages\$(Configuration)\</PackageOutputPath>
+    <LangVersion>10.0</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AnalysisLevel>latest</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
-    <NoWarn>1591</NoWarn>
-    
+
     <!-- https://github.com/dotnet/msbuild/blob/main/documentation/ProjectReference-Protocol.md#setplatform-negotiation -->
     <EnableDynamicPlatformResolution>true</EnableDynamicPlatformResolution>
 
     <!-- Local builds should embed PDBs so we never lose them when a subsequent build occurs. -->
     <DebugType Condition=" '$(CI)' != 'true' ">embedded</DebugType>
 
-    <Company>Michael Yarichuk</Company>
-    <Authors>Michael Yarichuk</Authors>
-    <Copyright>© Michael Yarichuk. All rights reserved.</Copyright>
+    <Company>COMPANY-PLACEHOLDER</Company>
+    <Authors>COMPANY-PLACEHOLDER</Authors>
+    <Copyright>© COMPANY-PLACEHOLDER. All rights reserved.</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>

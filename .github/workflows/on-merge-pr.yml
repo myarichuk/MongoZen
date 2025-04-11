@@ -20,11 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Setup .NET tooling
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v3
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 6.0.x
       - name: Install GitVersion
-        uses: gittools/actions/gitversion/setup@v3.2.0
+        uses: gittools/actions/gitversion/setup@v0.10.2
         with:
           versionSpec: '5.x'
       - uses: actions/checkout@v4
@@ -32,7 +32,7 @@ jobs:
           fetch-depth: 0
       - name: Determine version
         id: gitversion
-        uses: gittools/actions/gitversion/execute@v3.2.0
+        uses: gittools/actions/gitversion/execute@v0.10.2
         with:
           useConfigFile: true
           configFilePath: ./.github/gitversion.yml
@@ -45,7 +45,7 @@ jobs:
       - name: Pack NuGet
         run: dotnet pack --configuration release /p:CI=true -o:package /p:AssemblyVersion=${{ steps.gitversion.outputs.AssemblySemVer }} /p:Version=${{ steps.gitversion.outputs.AssemblySemVer }} /p:PackageVersion=${{ steps.gitversion.outputs.AssemblySemVer }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v3
         with:
           name: nupkg
           path: |
@@ -63,10 +63,10 @@ jobs:
     needs: [build-and-pack]
     steps:
       - name: Setup .NET tooling
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v3
         with:
           dotnet-version: 6.0.x
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
           name: nupkg
       - name: Publish to NuGet
@@ -78,12 +78,12 @@ jobs:
     needs: [build-and-pack]
     steps:
       - name: Setup .NET tooling
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v3
         with:
           dotnet-version: 6.0.x
       - name: Git Checkout
         uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
           name: nupkg
       - name: Update CHANGELOG
