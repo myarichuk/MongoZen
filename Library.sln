@@ -27,6 +27,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "workflows", "workflows", "{
 		.github\workflows\on-pull-request.yml = .github\workflows\on-pull-request.yml
 	EndProjectSection
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Library.Tests", "tests\Library.Tests\Library.Tests.csproj", "{29D288B7-F1C1-49C7-89D0-06C86754A14D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -37,6 +39,10 @@ Global
 		{24361E4F-5C04-461B-9F9F-282BBD10B30F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{24361E4F-5C04-461B-9F9F-282BBD10B30F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{24361E4F-5C04-461B-9F9F-282BBD10B30F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
