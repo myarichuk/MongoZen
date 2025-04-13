@@ -8,7 +8,7 @@ public abstract class FilterElementTranslatorBase : IFilterElementTranslator
 
     public abstract Expression Handle(string field, BsonValue value, ParameterExpression param);
 
-    protected Expression BuildSafeMemberAccess(Expression root, string field, out Expression nullCheck)
+    protected Expression BuildSafeMemberAccess(Expression root, string field, out Expression? nullCheck)
     {
         var parts = field.Split('.');
         var current = root;
