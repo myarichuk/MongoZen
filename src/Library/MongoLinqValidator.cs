@@ -12,7 +12,8 @@ public static class MongoLinqValidator
     {
         protected override Expression VisitMethodCall(MethodCallExpression node)
         {
-            if (node.Method.Name != nameof(Enumerable.Contains)) //contains is supported by Mongo linq provider
+            // those are supported by MongoDB Linq provider
+            if (node.Method.Name is not nameof(Enumerable.Contains) and not nameof(Enumerable.Any))
             {
                 throw new NotSupportedException($"Method call '{node.Method.Name}' is not supported");
             }
