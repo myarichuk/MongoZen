@@ -6,15 +6,15 @@ public static class FilterToLinqTranslatorFactory
 {
     private static readonly ConcurrentDictionary<Type, IFilterToLinqTranslator> TranslatorCache = new();
 
-    public static FilterToLinqToLinqTranslator<TDoc> Create<TDoc>() =>
-        (FilterToLinqToLinqTranslator<TDoc>)Create(typeof(TDoc));
+    public static FilterToLinqTranslator<TDoc> Create<TDoc>() =>
+        (FilterToLinqTranslator<TDoc>)Create(typeof(TDoc));
 
     public static IFilterToLinqTranslator Create(Type docType) =>
         TranslatorCache.GetOrAdd(docType, CreateTranslatorForType);
 
     private static IFilterToLinqTranslator CreateTranslatorForType(Type docType)
     {
-        var translatorType = typeof(FilterToLinqToLinqTranslator<>).MakeGenericType(docType);
+        var translatorType = typeof(FilterToLinqTranslator<>).MakeGenericType(docType);
         var factory = TranslatorFactoryCache.GetFactory(translatorType);
 
         return factory();

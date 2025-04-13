@@ -7,7 +7,7 @@ using MongoDB.Driver;
 // ReSharper disable MemberCanBePrivate.Global
 namespace Library.FilterUtils;
 
-public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLinqTranslator
+public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLinqTranslator
 {
     private static readonly RenderArgs<T> RenderArgs = new(BsonSerializer.LookupSerializer<T>(), BsonSerializer.SerializerRegistry);
     private static readonly ParameterExpression Param = Expression.Parameter(typeof(T), "x");
@@ -15,25 +15,25 @@ public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilt
     private readonly Dictionary<string, IFilterElementTranslator> _elementTranslators;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="FilterToLinqToLinqTranslator{T}"/> class using a custom set of filter element translators.
+    /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using a custom set of filter element translators.
     /// </summary>
     /// <param name="translators">The filter element translators keyed by the operator they handle.</param>
-    public FilterToLinqToLinqTranslator(IEnumerable<IFilterElementTranslator> translators) => 
+    public FilterToLinqTranslator(IEnumerable<IFilterElementTranslator> translators) => 
         _elementTranslators = new(
             translators.ToDictionary(t => t.Operator), 
             StringComparer.InvariantCultureIgnoreCase);
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="FilterToLinqToLinqTranslator{T}"/> class using default translators from the current library.
+    /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using default translators from the current library.
     /// </summary>
-    public FilterToLinqToLinqTranslator()
+    public FilterToLinqTranslator()
         : this(FilterElementTranslatorDiscovery.DiscoverFromLibrary()) { }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="FilterToLinqToLinqTranslator{T}"/> class using translators discovered from the specified assemblies.
+    /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using translators discovered from the specified assemblies.
     /// </summary>
     /// <param name="assemblies">The assemblies to scan for filter element translators.</param>
-    public FilterToLinqToLinqTranslator(params Assembly[] assemblies)
+    public FilterToLinqTranslator(params Assembly[] assemblies)
         : this(FilterElementTranslatorDiscovery.DiscoverFrom(assemblies)) { }
 
     /// <summary>
@@ -71,7 +71,7 @@ public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilt
             {
                 if (value is not BsonArray array)
                 {
-                    throw new NotSupportedException($"{key} must be an array");
+                    throw new NotSupportedException($"Logical operator '{key}' must be an array but was {value?.BsonType}.\nOffending value: {value}");
                 }
 
                 var subExprs = new List<Expression>();
@@ -86,7 +86,7 @@ public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilt
                     "$or" => subExprs.Aggregate(Expression.OrElse),
                     "$nor" => Expression.Not(subExprs.Aggregate(Expression.OrElse)),
                     "$and" => subExprs.Aggregate(Expression.AndAlso),
-                    _ => throw new NotSupportedException($"Unsupported logical operator {key}"),
+                    _ => throw new NotSupportedException($"Logical operator '{key}' is not supported.\nDocument: {doc}"),
                 };
 
                 expressions.Add(combined);
@@ -101,7 +101,7 @@ public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilt
                         var opKey = op.Name;
                         if (!_elementTranslators.TryGetValue(opKey, out var translator))
                         {
-                            throw new NotSupportedException($"Operator '{op.Name}' not supported");
+                            throw new NotSupportedException($"Operator '{op.Name}' is not supported for field '{key}'.\nDocument: {opDoc}");
                         }
 
                         expressions.Add(translator.Handle(key, op.Value, param));
@@ -112,7 +112,7 @@ public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilt
                     // regex needs special case as it is not always bson doc
                     if (!_elementTranslators.TryGetValue("$regex", out var translator))
                     {
-                        throw new NotSupportedException("Operator '$regex' not supported");
+                        throw new NotSupportedException($"Operator '$regex' not supported.\nKey: {key}, Value: {value}");
                     }
 
                     expressions.Add(translator.Handle(key, value, param));                    
@@ -122,7 +122,8 @@ public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilt
                     // implicit $eq
                     if (!_elementTranslators.TryGetValue("$eq", out var translator))
                     {
-                        throw new NotSupportedException("Operator '$eq' not supported");
+                        throw new NotSupportedException(
+                            $"Operator '$eq' not supported for implicit equality.\nKey: {key}, Value: {value}");
                     }
 
                     expressions.Add(translator.Handle(key, value, param));
@@ -130,7 +131,9 @@ public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilt
             }
         }
 
-        return expressions.Aggregate(Expression.AndAlso);
+        return expressions.Count == 0 ?
+            Expression.Constant(true) :
+            expressions.Aggregate(Expression.AndAlso);
     }
 
     public Expression Translate(BsonDocument filter, ParameterExpression parameter) => ParseDocument(filter, parameter);

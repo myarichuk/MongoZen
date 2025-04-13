@@ -8,9 +8,9 @@ using MongoDB.Driver;
 
 namespace Library.Tests;
 
-public class FilterToLinqToLinqTranslatorTests
+public class FilterToLinqTests
 {
-    private readonly FilterToLinqToLinqTranslator<Person> _translator = new();
+    private readonly FilterToLinqTranslator<Person> _translator = new();
 
     [Fact]
     public void EqFilter_ExpressionField_ShouldMatchCorrectly()
@@ -162,7 +162,7 @@ public class FilterToLinqToLinqTranslatorTests
     public void TypeOperator_OnObject_ShouldMatchCorrectly()
     {
         var filter = new BsonDocument("Metadata", new BsonDocument("$type", "int")).ToFilterDefinition<Order>();
-        var translator = new FilterToLinqToLinqTranslator<Order>();
+        var translator = new FilterToLinqTranslator<Order>();
         var expr = translator.Translate(filter).Compile();
 
         Assert.True(expr(new Order { Metadata = 30 }));
@@ -247,7 +247,7 @@ public class FilterToLinqToLinqTranslatorTests
     [Fact]
     public void NestedFieldFilter_ShouldMatchCorrectly()
     {
-        var translator = new FilterToLinqToLinqTranslator<PersonWithAddress>();
+        var translator = new FilterToLinqTranslator<PersonWithAddress>();
         var filter = Builders<PersonWithAddress>.Filter.Eq(p => p.Address.City, "London");
         var expr = translator.Translate(filter).Compile();
 
@@ -258,7 +258,7 @@ public class FilterToLinqToLinqTranslatorTests
     [Fact]
     public void RawNestedFieldFilter_ShouldMatchCorrectly()
     {
-        var translator = new FilterToLinqToLinqTranslator<PersonWithAddress>();
+        var translator = new FilterToLinqTranslator<PersonWithAddress>();
         var filter = new BsonDocument("Address.City", "London").ToFilterDefinition<PersonWithAddress>();
         var expr = translator.Translate(filter).Compile();
 
@@ -303,7 +303,7 @@ public class FilterToLinqToLinqTranslatorTests
     [Fact]
     public void ElemMatch_SimpleEquality_ShouldMatchCorrectly()
     {
-        var translator = new FilterToLinqToLinqTranslator<Order>();
+        var translator = new FilterToLinqTranslator<Order>();
 
         var filter = Builders<Order>.Filter.ElemMatch(
             o => o.Lines,
@@ -333,7 +333,7 @@ public class FilterToLinqToLinqTranslatorTests
     [Fact]
     public void ElemMatch_MultipleConditions_ShouldMatchCorrectly()
     {
-        var translator = new FilterToLinqToLinqTranslator<Order>();
+        var translator = new FilterToLinqTranslator<Order>();
 
         var filter = Builders<Order>.Filter.ElemMatch(
             o => o.Lines,
@@ -370,7 +370,7 @@ public class FilterToLinqToLinqTranslatorTests
     [Fact]
     public void ElemMatch_WithOrCondition_ShouldMatchCorrectly()
     {
-        var translator = new FilterToLinqToLinqTranslator<Order>();
+        var translator = new FilterToLinqTranslator<Order>();
 
         var filter = Builders<Order>.Filter.ElemMatch(
             o => o.Lines,
@@ -405,7 +405,7 @@ public class FilterToLinqToLinqTranslatorTests
     [Fact]
     public void ElemMatch_UnsupportedOperator_ShouldThrow()
     {
-        var translator = new FilterToLinqToLinqTranslator<Order>();
+        var translator = new FilterToLinqTranslator<Order>();
 
         var filter = new BsonDocument("Lines", new BsonDocument(
             "$elemMatch",
@@ -572,7 +572,7 @@ public class FilterToLinqToLinqTranslatorTests
 
         public int Age { get; init; }
 
-        public List<string>? Tags { get; set; } = new();
+        public List<string?>? Tags { get; set; } = new();
     }
 
     private class Address
