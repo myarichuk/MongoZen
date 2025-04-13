@@ -17,6 +17,7 @@ public static class MongoLinqValidator
             // those are supported by MongoDB Linq provider
             if (node.Method.Name is not nameof(Enumerable.Contains)
                 and not nameof(Enumerable.Any)
+                and not nameof(Enumerable.All)
                 and not nameof(Regex.IsMatch))
             {
                 throw new NotSupportedException($"Method call '{node.Method.Name}' is not supported");
