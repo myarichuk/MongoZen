@@ -458,6 +458,78 @@ public class FilterToLinqToLinqTranslatorTests
 
         Assert.Throws<NotSupportedException>(() => _translator.Translate(filter));
     }
+    
+    [Fact]
+    public void AllFilter_WithSingleElement_ShouldMatchCorrectly()
+    {
+        var filter = Builders<Person>.Filter.All(p => p.Tags, ["blogger"]);
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.True(expr(new Person { Tags = [null!, "blogger"] }));
+        Assert.True(expr(new Person { Tags = ["blogger"] }));
+        Assert.True(expr(new Person { Tags = ["blogger", "dev"] }));
+        Assert.True(expr(new Person { Tags = ["promoter", "blogger", "dev"] }));
+        Assert.False(expr(new Person { Tags = null }));
+        Assert.False(expr(new Person { Tags = [] }));
+        Assert.False(expr(new Person { Tags = ["dev"] }));
+    }
+    
+    [Fact]
+    public void AllFilter_WithMultiElement_ShouldMatchCorrectly()
+    {
+        var filter = Builders<Person>.Filter.All(p => p.Tags, ["dev", "blogger"]);
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.True(expr(new Person { Tags = [null!, "blogger", null, "dev"] }));
+        Assert.False(expr(new Person { Tags = ["blogger"] }));
+        Assert.True(expr(new Person { Tags = ["blogger", "dev"] }));
+        Assert.True(expr(new Person { Tags = ["promoter", "blogger", "seo", "dev"] }));
+        Assert.False(expr(new Person { Tags = null }));
+        Assert.False(expr(new Person { Tags = [] }));
+        Assert.False(expr(new Person { Tags = ["dev"] }));
+    }
+    
+    [Fact]
+    public void AllFilter_OnNullProperty_ShouldNotMatch()
+    {
+        var filter = Builders<Person>.Filter.All(p => p.Tags, ["dev"]);
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.False(expr(new Person { Tags = null }));
+        Assert.False(expr(new Person { Tags = [] }));
+    }
+
+    [Fact]
+    public void AllFilter_OnNonCollection_ShouldThrow()
+    {
+        var filter = new BsonDocument("Age", new BsonDocument("$all", new BsonArray { 30 })).ToFilterDefinition<Person>();
+        Assert.Throws<InvalidOperationException>(() => _translator.Translate(filter));
+    }
+    
+    [Fact]
+    public void AllFilter_ShouldMatch_WhenAllItemsExist()
+    {
+        var filter = Builders<Person>.Filter.All(p => p.Tags, ["dev", "blogger"]);
+
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.True(expr(new Person { Tags = ["dev", "blogger", "coffee lover"] }));
+        Assert.True(expr(new Person { Tags = ["blogger", "dev"] }));
+
+        Assert.False(expr(new Person { Tags = ["dev"] }));
+        Assert.False(expr(new Person { Tags = ["blogger"] }));
+        Assert.False(expr(new Person { Tags = ["writer", "reader"] }));
+    }
+    
+    [Fact]
+    public void AllFilter_WithEmptyArray_ShouldAlwaysMatch()
+    {
+        var filter = Builders<Person>.Filter.All(p => p.Tags, Array.Empty<string>());
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.True(expr(new Person { Tags = [] }));
+        Assert.True(expr(new Person { Tags = ["random"] }));
+    }
 
     public class Order
     {
@@ -499,6 +571,8 @@ public class FilterToLinqToLinqTranslatorTests
         public string Name { get; init; }
 
         public int Age { get; init; }
+
+        public List<string>? Tags { get; set; } = new();
     }
 
     private class Address

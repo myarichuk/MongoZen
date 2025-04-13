@@ -35,7 +35,9 @@ public abstract class FilterElementTranslatorBase : IFilterElementTranslator
     protected Expression BuildContainsExpression(Expression memberAccess, BsonValue value, bool isIn)
     {
         if (value is not BsonArray array)
+        {
             throw new NotSupportedException("$in/$nin expects an array value");
+        }
 
         var elementType = memberAccess.Type;
 
