@@ -415,6 +415,50 @@ public class FilterToLinqToLinqTranslatorTests
         Assert.Throws<NotSupportedException>(() => translator.Translate(filter));
     }
     
+    [Fact]
+    public void RegexFilter_SimpleMatch_ShouldWorkCorrectly()
+    {
+        var filter = Builders<Person>.Filter.Regex(p => p.Name, new BsonRegularExpression("^Al.*"));
+
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.True(expr(new Person { Name = "Alice" }));
+        Assert.True(expr(new Person { Name = "Alfred" }));
+        Assert.False(expr(new Person { Name = "Bob" }));
+    }
+    
+    [Fact]
+    public void RegexFilter_CaseSensitive_ShouldRespectCase()
+    {
+        var filter = Builders<Person>.Filter.Regex(p => p.Name, new BsonRegularExpression("^alice$", "i"));
+
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.True(expr(new Person { Name = "Alice" }));
+        Assert.True(expr(new Person { Name = "alice" }));
+        Assert.False(expr(new Person { Name = "Bob" }));
+    }
+
+    [Fact]
+    public void RawRegexFilter_ShouldTranslateCorrectly()
+    {
+        var filter = new BsonDocument("Name", new BsonDocument("$regex", "^A.*e$")).ToFilterDefinition<Person>();
+
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.True(expr(new Person { Name = "Alice" }));
+        Assert.True(expr(new Person { Name = "Anne" }));
+        Assert.False(expr(new Person { Name = "Bob" }));
+    }
+
+    [Fact]
+    public void UnsupportedRegexOption_ShouldThrow()
+    {
+        var filter = new BsonDocument("Name", new BsonDocument("$regex", "^Alice").Add("$options", "x"));
+
+        Assert.Throws<NotSupportedException>(() => _translator.Translate(filter));
+    }
+
     public class Order
     {
         public string Id { get; set; }

@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Library;
 
 // TODO: review this for possible missed use cases (use Mongo driver docs!)
@@ -13,11 +15,13 @@ public static class MongoLinqValidator
         protected override Expression VisitMethodCall(MethodCallExpression node)
         {
             // those are supported by MongoDB Linq provider
-            if (node.Method.Name is not nameof(Enumerable.Contains) and not nameof(Enumerable.Any))
+            if (node.Method.Name is not nameof(Enumerable.Contains)
+                and not nameof(Enumerable.Any)
+                and not nameof(Regex.IsMatch))
             {
                 throw new NotSupportedException($"Method call '{node.Method.Name}' is not supported");
             }
-            
+
             return base.VisitMethodCall(node);
         }
 

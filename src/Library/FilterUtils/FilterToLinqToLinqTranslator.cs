@@ -98,7 +98,7 @@ public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilt
                     var opDoc = value.AsBsonDocument;
                     foreach (var op in opDoc.Elements)
                     {
-                        var opKey = op.Name.ToLowerInvariant();
+                        var opKey = op.Name;
                         if (!_elementTranslators.TryGetValue(opKey, out var translator))
                         {
                             throw new NotSupportedException($"Operator '{op.Name}' not supported");
@@ -106,6 +106,16 @@ public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilt
 
                         expressions.Add(translator.Handle(key, op.Value, param));
                     }
+                }
+                else if (value.IsBsonRegularExpression)
+                {
+                    // regex needs special case as it is not always bson doc
+                    if (!_elementTranslators.TryGetValue("$regex", out var translator))
+                    {
+                        throw new NotSupportedException("Operator '$regex' not supported");
+                    }
+
+                    expressions.Add(translator.Handle(key, value, param));                    
                 }
                 else
                 {
