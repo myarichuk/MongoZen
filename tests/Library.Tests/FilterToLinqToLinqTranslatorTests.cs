@@ -8,15 +8,15 @@ using MongoDB.Driver;
 
 namespace Library.Tests;
 
-public class BsonFilterToLinqTranslatorTests
+public class FilterToLinqToLinqTranslatorTests
 {
-    private readonly FilterToLinqToLinqTranslator<Person> _toLinqTranslator = new();
+    private readonly FilterToLinqToLinqTranslator<Person> _translator = new();
 
     [Fact]
     public void EqFilter_ExpressionField_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.Eq(p => p.Name, "Alice");
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice" }));
         Assert.False(expr(new Person { Name = "Bob" }));
@@ -26,7 +26,7 @@ public class BsonFilterToLinqTranslatorTests
     public void EqFilter_StringField_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.Eq("Name", "Alice");
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice" }));
         Assert.False(expr(new Person { Name = "Bob" }));
@@ -36,7 +36,7 @@ public class BsonFilterToLinqTranslatorTests
     public void GtFilter_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.Gt(p => p.Age, 25);
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Age = 30 }));
         Assert.False(expr(new Person { Age = 25 }));
@@ -47,7 +47,7 @@ public class BsonFilterToLinqTranslatorTests
     public void GteFilter_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.Gte(p => p.Age, 25);
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Age = 30 }));
         Assert.True(expr(new Person { Age = 25 }));
@@ -58,7 +58,7 @@ public class BsonFilterToLinqTranslatorTests
     public void LtFilter_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.Lt(p => p.Age, 40);
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Age = 30 }));
         Assert.False(expr(new Person { Age = 40 }));
@@ -69,7 +69,7 @@ public class BsonFilterToLinqTranslatorTests
     public void LteFilter_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.Lte(p => p.Age, 40);
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Age = 30 }));
         Assert.True(expr(new Person { Age = 40 }));        
@@ -80,7 +80,7 @@ public class BsonFilterToLinqTranslatorTests
     public void RawEqFilterWithoutSubDocument_ShouldMatchCorrectly()
     {
         var filter = new BsonDocument("Name", "Alice").ToFilterDefinition<Person>();
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice" }));
         Assert.False(expr(new Person { Name = "NotAlice" }));
@@ -94,7 +94,7 @@ public class BsonFilterToLinqTranslatorTests
             Builders<Person>.Filter.Gt(p => p.Age, 25)
         );
 
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 30 }));
         Assert.False(expr(new Person { Name = "Alice", Age = 20 }));
@@ -105,7 +105,7 @@ public class BsonFilterToLinqTranslatorTests
     public void NeFilter_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.Ne(p => p.Name, "Alice");
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.False(expr(new Person { Name = "Alice" }));
         Assert.True(expr(new Person { Name = "Bob" }));
@@ -115,7 +115,7 @@ public class BsonFilterToLinqTranslatorTests
     public void InFilter_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.In(p => p.Name, ["Alice", "Bob"]);
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice" }));
         Assert.True(expr(new Person { Name = "Bob" }));
@@ -126,7 +126,7 @@ public class BsonFilterToLinqTranslatorTests
     public void NinFilter_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.Nin(p => p.Name, ["Alice", "Bob"]);
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.False(expr(new Person { Name = "Alice" }));
         Assert.True(expr(new Person { Name = "Charlie" }));
@@ -136,7 +136,7 @@ public class BsonFilterToLinqTranslatorTests
     public void NotFilter_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.Not(Builders<Person>.Filter.Eq(p => p.Name, "Alice"));
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.False(expr(new Person { Name = "Alice" }));
         Assert.True(expr(new Person { Name = "Bob" }));
@@ -146,21 +146,30 @@ public class BsonFilterToLinqTranslatorTests
     public void ExistsFilter_ShouldThrowNotSupported()
     {
         var filter = new BsonDocument("Name", new BsonDocument("$exists", true)).ToFilterDefinition<Person>();
-        var expr = _toLinqTranslator.Translate(filter).Compile();
-
-        Assert.Throws<NotSupportedException>(() => expr(new Person { Name = "Alice" }));
-        //will only work correctly when handling null or missing fields explicitly
+        Assert.Throws<NotSupportedException>(() =>  _translator.Translate(filter).Compile());
     }
 
     [Fact]
-    public void TypeOperator_ShouldMatchCorrectly()
+    public void TypeOperator_OnStronglyTyped_ShouldMatchCorrectly()
     {
         var filter = new BsonDocument("Age", new BsonDocument("$type", "int")).ToFilterDefinition<Person>();
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Age = 30 }));
     }
 
+    [Fact]
+    public void TypeOperator_OnObject_ShouldMatchCorrectly()
+    {
+        var filter = new BsonDocument("Metadata", new BsonDocument("$type", "int")).ToFilterDefinition<Order>();
+        var translator = new FilterToLinqToLinqTranslator<Order>();
+        var expr = translator.Translate(filter).Compile();
+
+        Assert.True(expr(new Order { Metadata = 30 }));
+        Assert.False(expr(new Order { Metadata = "New-York City" }));
+        Assert.False(expr(new Order { Metadata = new Person { Age = 30 } }));
+    }
+    
     [Fact]
     public void OrFilter_ShouldMatchCorrectly()
     {
@@ -169,7 +178,7 @@ public class BsonFilterToLinqTranslatorTests
             Builders<Person>.Filter.Lt(p => p.Age, 20)
         );
 
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 30 }));
         Assert.True(expr(new Person { Name = "Charlie", Age = 10 }));
@@ -184,7 +193,7 @@ public class BsonFilterToLinqTranslatorTests
             Builders<Person>.Filter.Lt(p => p.Age, 20)
         );
 
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.False(expr(new Person { Name = "Alice", Age = 30 }));
         Assert.True(expr(new Person { Name = "Alice", Age = 18 }));
@@ -196,14 +205,14 @@ public class BsonFilterToLinqTranslatorTests
     public void UnknownOperator_ShouldThrow()
     {
         var filter = new BsonDocument("Age", new BsonDocument("$mod", new BsonArray { 10, 1 })).ToFilterDefinition<Person>();
-        Assert.Throws<NotSupportedException>(() => _toLinqTranslator.Translate(filter));
+        Assert.Throws<NotSupportedException>(() => _translator.Translate(filter));
     }
 
     [Fact]
     public void UnknownField_ShouldThrow()
     {
         var filter = new BsonDocument("NonexistentField", 1).ToFilterDefinition<Person>();
-        Assert.Throws<ArgumentException>(() => _toLinqTranslator.Translate(filter));
+        Assert.Throws<ArgumentException>(() => _translator.Translate(filter));
     }
 
     [Fact]
@@ -213,7 +222,7 @@ public class BsonFilterToLinqTranslatorTests
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
             Builders<Person>.Filter.Gte(p => p.Age, 25)
         );
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 30 }));
         Assert.True(expr(new Person { Name = "Alice", Age = 25 }));
@@ -228,7 +237,7 @@ public class BsonFilterToLinqTranslatorTests
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
             Builders<Person>.Filter.Lt(p => p.Age, 20)
         );
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 50 }));
         Assert.True(expr(new Person { Name = "Charlie", Age = 15 }));
@@ -267,7 +276,7 @@ public class BsonFilterToLinqTranslatorTests
                 Builders<Person>.Filter.Eq(p => p.Age, 30)
             )
         );
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 30 }));
         Assert.True(expr(new Person { Name = "Alice", Age = 10 }));
@@ -284,7 +293,7 @@ public class BsonFilterToLinqTranslatorTests
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
             Builders<Person>.Filter.Lt(p => p.Age, 20)));
 
-        var expr = _toLinqTranslator.Translate(filter).Compile();
+        var expr = _translator.Translate(filter).Compile();
 
         Assert.False(expr(new Person { Name = "Alice", Age = 30 }));
         Assert.False(expr(new Person { Name = "Charlie", Age = 15 }));
@@ -314,7 +323,7 @@ public class BsonFilterToLinqTranslatorTests
 
         var nonMatchingOrder = new Order
         {
-            Lines = [new OrderLine(product: "Oranges", quantity: 1)]
+            Lines = [new OrderLine(product: "Oranges", quantity: 1)],
         };
 
         Assert.True(expr(matchingOrder));
@@ -375,17 +384,17 @@ public class BsonFilterToLinqTranslatorTests
 
         var matchingOrder1 = new Order
         {
-            Lines = [new OrderLine(product: "Apples", quantity: 2)]
+            Lines = [new OrderLine(product: "Apples", quantity: 2)],
         };
 
         var matchingOrder2 = new Order
         {
-            Lines = [new OrderLine(product: "Bananas", quantity: 20)]
+            Lines = [new OrderLine(product: "Bananas", quantity: 20)],
         };
 
         var nonMatchingOrder = new Order
         {
-            Lines = [new OrderLine(product: "Oranges", quantity: 1)]
+            Lines = [new OrderLine(product: "Oranges", quantity: 1)],
         };
 
         Assert.True(expr(matchingOrder1));
@@ -398,7 +407,8 @@ public class BsonFilterToLinqTranslatorTests
     {
         var translator = new FilterToLinqToLinqTranslator<Order>();
 
-        var filter = new BsonDocument("Lines", new BsonDocument("$elemMatch", 
+        var filter = new BsonDocument("Lines", new BsonDocument(
+            "$elemMatch",
             new BsonDocument("Quantity", new BsonDocument("$mod", new BsonArray { 2, 0 }))
         )).ToFilterDefinition<Order>();
 
@@ -408,6 +418,8 @@ public class BsonFilterToLinqTranslatorTests
     public class Order
     {
         public string Id { get; set; }
+
+        public object Metadata { get; set; }
 
         public List<OrderLine> Lines { get; set; }
     }
