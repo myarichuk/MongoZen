@@ -1,5 +1,3 @@
-using MongoDB.Bson;
-
 namespace Library.FilterUtils.ExpressionTranslators;
 
 // doc: https://www.mongodb.com/docs/manual/reference/operator/query/eq/

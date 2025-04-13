@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reflection;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -6,31 +7,33 @@ using MongoDB.Driver;
 // ReSharper disable MemberCanBePrivate.Global
 namespace Library.FilterUtils;
 
-public class FilterToLinqTranslator<T> : IFilterTranslator<T>
+public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLinqTranslator
 {
     private static readonly RenderArgs<T> RenderArgs = new(BsonSerializer.LookupSerializer<T>(), BsonSerializer.SerializerRegistry);
     private static readonly ParameterExpression Param = Expression.Parameter(typeof(T), "x");
 
-    private readonly Dictionary<string, IFilterElementTranslator> _translators;
+    private readonly Dictionary<string, IFilterElementTranslator> _elementTranslators;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using a custom set of filter element translators.
+    /// Initializes a new instance of the <see cref="FilterToLinqToLinqTranslator{T}"/> class using a custom set of filter element translators.
     /// </summary>
     /// <param name="translators">The filter element translators keyed by the operator they handle.</param>
-    public FilterToLinqTranslator(IEnumerable<IFilterElementTranslator> translators) =>
-        _translators = translators.ToDictionary(t => t.Operator);
+    public FilterToLinqToLinqTranslator(IEnumerable<IFilterElementTranslator> translators) => 
+        _elementTranslators = new(
+            translators.ToDictionary(t => t.Operator), 
+            StringComparer.InvariantCultureIgnoreCase);
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using default translators from the current library.
+    /// Initializes a new instance of the <see cref="FilterToLinqToLinqTranslator{T}"/> class using default translators from the current library.
     /// </summary>
-    public FilterToLinqTranslator()
+    public FilterToLinqToLinqTranslator()
         : this(FilterElementTranslatorDiscovery.DiscoverFromLibrary()) { }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using translators discovered from the specified assemblies.
+    /// Initializes a new instance of the <see cref="FilterToLinqToLinqTranslator{T}"/> class using translators discovered from the specified assemblies.
     /// </summary>
     /// <param name="assemblies">The assemblies to scan for filter element translators.</param>
-    public FilterToLinqTranslator(params Assembly[] assemblies)
+    public FilterToLinqToLinqTranslator(params Assembly[] assemblies)
         : this(FilterElementTranslatorDiscovery.DiscoverFrom(assemblies)) { }
 
     /// <summary>
@@ -96,7 +99,7 @@ public class FilterToLinqTranslator<T> : IFilterTranslator<T>
                     foreach (var op in opDoc.Elements)
                     {
                         var opKey = op.Name.ToLowerInvariant();
-                        if (!_translators.TryGetValue(opKey, out var translator))
+                        if (!_elementTranslators.TryGetValue(opKey, out var translator))
                         {
                             throw new NotSupportedException($"Operator '{op.Name}' not supported");
                         }
@@ -107,7 +110,7 @@ public class FilterToLinqTranslator<T> : IFilterTranslator<T>
                 else
                 {
                     // implicit $eq
-                    if (!_translators.TryGetValue("$eq", out var translator))
+                    if (!_elementTranslators.TryGetValue("$eq", out var translator))
                     {
                         throw new NotSupportedException("Operator '$eq' not supported");
                     }
@@ -119,4 +122,6 @@ public class FilterToLinqTranslator<T> : IFilterTranslator<T>
 
         return expressions.Aggregate(Expression.AndAlso);
     }
+
+    public Expression Translate(BsonDocument filter, ParameterExpression parameter) => ParseDocument(filter, parameter);
 }
