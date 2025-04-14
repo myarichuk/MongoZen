@@ -14,7 +14,7 @@ public class DbSet<T> : IDbSet<T>
         _collectionAsQueryable = collection.AsQueryable();
     }
 
-    public async ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter) => 
+    public async ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter) =>
         await (await _collection.FindAsync(filter)).ToListAsync();
 
     public async ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter) =>
@@ -25,6 +25,8 @@ public class DbSet<T> : IDbSet<T>
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
     public Type ElementType => _collectionAsQueryable.ElementType;
+
     public Expression Expression => _collectionAsQueryable.Expression;
+
     public IQueryProvider Provider => _collectionAsQueryable.Provider;
 }
