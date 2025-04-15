@@ -47,7 +47,13 @@ public class IntegrationTestBase: IAsyncLifetime
     {
         if (_databaseName != null)
         {
-            await _mongoClient.DropDatabaseAsync(_databaseName);
+            try
+            {
+                await _mongoClient.DropDatabaseAsync(_databaseName);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
 
         _mongoClient.Dispose();
