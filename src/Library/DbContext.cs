@@ -27,10 +27,23 @@ public abstract class DbContext: IDisposable
             .GetProperties(System.Reflection.BindingFlags.Public |
                            System.Reflection.BindingFlags.NonPublic |
                            System.Reflection.BindingFlags.Instance)
-            .Where(p => p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == dbSetInterface);
+            .Where(p => p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == dbSetInterface)
+            .ToArray();
+
+        //sanity check
+        if (!props.Any())
+        {
+            throw new InvalidOperationException("No IDbSet<T> properties defined. This is probably a bug.");
+        }
 
         foreach (var prop in props)
         {
+            if (!prop.CanWrite || !prop.CanRead)
+            {
+                throw new InvalidOperationException(
+                    $"Property name {prop.Name} has no setter, but it should. Every IDbSet<T> property representing a collection must have a getter and a setter.");
+            }
+
             var entityType = prop.PropertyType.GetGenericArguments()[0];
             object instance;
 
@@ -43,15 +56,15 @@ public abstract class DbContext: IDisposable
             {
                 if (Options.Mongo == null)
                 {
-                    throw new InvalidOperationException("Mongo database not configured");
+                    throw new InvalidOperationException("Mongo database not configured. This is not supposed to happen and is likely a bug.");
                 }
 
-                var getCollectionMethod = typeof(IMongoDatabase).GetMethod(nameof(IMongoDatabase.GetCollection),
-                                              [typeof(string), typeof(MongoDB.Bson.Serialization.IBsonSerializer)]) ??
-                                          typeof(IMongoDatabase).GetMethod(nameof(IMongoDatabase.GetCollection),
-                                              [typeof(string)]);
-                var collection = getCollectionMethod!.MakeGenericMethod(entityType)
-                    .Invoke(Options.Mongo, [prop.Name])!;
+                var getCollectionMethod =
+                    typeof(IMongoDatabase).GetMethod(nameof(IMongoDatabase.GetCollection),
+                        [typeof(string), typeof(MongoCollectionSettings)]);
+                var genericGetCollection = getCollectionMethod!.MakeGenericMethod(entityType);
+
+                var collection = genericGetCollection.Invoke(Options.Mongo, [prop.Name, null])!;
 
                 var constructed = typeof(DbSet<>).MakeGenericType(entityType);
                 instance = Activator.CreateInstance(constructed, collection)!;
