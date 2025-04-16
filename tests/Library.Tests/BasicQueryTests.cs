@@ -1,10 +1,5 @@
-using System.Collections.Generic;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
-using Xunit;
 
 namespace Library.Tests;
 
@@ -22,7 +17,7 @@ public class DbContextQueryTests : IntegrationTestBase
 
     private class TestDbContext : DbContext
     {
-        public IDbSet<User> Users { get; }
+        public IDbSet<User> Users { get; set; }
 
         public TestDbContext(DbContextOptions options) : base(options)
         {
@@ -39,14 +34,61 @@ public class DbContextQueryTests : IntegrationTestBase
         ]);
     }
 
+    private static void InsertInMemoryTestUsers(TestDbContext ctx)
+    {
+        ((InMemoryDbSet<User>)ctx.Users).Add(new User { Id = "1", Name = "Alice", Age = 30 });
+        ((InMemoryDbSet<User>)ctx.Users).Add(new User { Id = "2", Name = "Bob", Age = 40 });
+    }
+
     [Fact]
-    public async Task CanInsertAndQueryUser()
+    public async Task Can_Query_DB_WithLinq()
     {
         await InsertTestUsersAsync();
 
         using var ctx = new TestDbContext(new DbContextOptions(Database));
 
         var result = await ctx.Users.QueryAsync(u => u.Age > 35);
+
+        Assert.Single(result);
+        Assert.Equal("Bob", result.First().Name);
+    }
+
+    [Fact]
+    public async Task Can_Query_InMemory_WithLinq()
+    {
+        using var ctx = new TestDbContext(new DbContextOptions());
+
+        InsertInMemoryTestUsers(ctx);
+
+        var result = await ctx.Users.QueryAsync(u => u.Age > 35);
+
+        Assert.Single(result);
+        Assert.Equal("Bob", result.First().Name);
+    }
+
+    [Fact]
+    public async Task Can_Query_DB_WithFilter()
+    {
+        await InsertTestUsersAsync();
+
+        using var ctx = new TestDbContext(new DbContextOptions(Database));
+
+        var filter = Builders<User>.Filter.Gt(u => u.Age, 35);
+        var result = await ctx.Users.QueryAsync(filter);
+
+        Assert.Single(result);
+        Assert.Equal("Bob", result.First().Name);
+    }
+
+    [Fact]
+    public async Task Can_Query_InMemory_WithFilter()
+    {
+        using var ctx = new TestDbContext(new DbContextOptions());
+
+        InsertInMemoryTestUsers(ctx);
+
+        var filter = Builders<User>.Filter.Gt(u => u.Age, 35);
+        var result = await ctx.Users.QueryAsync(filter);
 
         Assert.Single(result);
         Assert.Equal("Bob", result.First().Name);
