@@ -93,4 +93,35 @@ public class DbContextQueryTests : IntegrationTestBase
         Assert.Single(result);
         Assert.Equal("Bob", result.First().Name);
     }
+
+    [Fact]
+    public void Can_Remove_InMemory_ById()
+    {
+        var ctx = new TestDbContext(new DbContextOptions());
+        InsertInMemoryTestUsers(ctx);
+
+        var set = (InMemoryDbSet<User>)ctx.Users;
+        set.RemoveById("1");
+
+        var result = set.QueryAsync(u => true).Result.ToList();
+
+        Assert.Single(result);
+        Assert.Equal("Bob", result.First().Name);
+    }
+
+    [Fact]
+    public async Task Can_Remove_DB_ById()
+    {
+        await InsertTestUsersAsync();
+
+        using var ctx = new TestDbContext(new DbContextOptions(Database));
+
+        var dbSet = (DbSet<User>)ctx.Users;
+        await dbSet.RemoveById("1");
+
+        var result = await ctx.Users.QueryAsync(u => true);
+
+        Assert.Single(result);
+        Assert.Equal("Bob", result.First().Name);
+    }
 }
