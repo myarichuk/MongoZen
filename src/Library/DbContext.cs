@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using MongoDB.Driver;
+// ReSharper disable ComplexConditionExpression
 
 namespace Library;
 
@@ -72,22 +73,6 @@ public abstract class DbContext: IDisposable
 
             prop.SetValue(this, instance);
         }
-    }
-
-    protected IDbSet<T> InitSet<T>(string collectionName)
-    {
-        if (Options.UseInMemory)
-        {
-            return new InMemoryDbSet<T>();
-        }
-
-        if (Options.Mongo == null)
-        {
-            throw new InvalidOperationException("Mongo database not configured.");
-        }
-
-        var collection = Options.Mongo.GetCollection<T>(collectionName);
-        return new DbSet<T>(collection);
     }
 
     public void Dispose() => Options.Mongo?.Client.Dispose();
