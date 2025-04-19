@@ -6,36 +6,43 @@ using MongoDB.Driver;
 
 namespace Library;
 
-public class MutableDbSet<T> : IMutableDbSet<T>
+public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 {
-    private readonly IDbSet<T> _baseSet;
+    private readonly Conventions _conventions;
+    private readonly IDbSet<TEntity> _baseSet;
 
-    private readonly List<T> _added = [];
-    private readonly List<T> _removed = [];
-    private readonly List<T> _updated = [];
+    private readonly List<TEntity> _added = [];
+    private readonly List<TEntity> _removed = [];
+    private readonly List<TEntity> _updated = [];
 
-    public MutableDbSet(IDbSet<T> baseSet) => _baseSet = baseSet;
+    internal MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
+    {
+        _baseSet = baseSet;
+        _conventions = conventions ?? new();
 
-    public void Add(T entity) => _added.Add(entity);
+        EntityIdAccessor<TEntity>.SetConvention(_conventions.IdConvention);
+    }
 
-    public void Remove(T entity) => _removed.Add(entity);
+    public void Add(TEntity entity) => _added.Add(entity);
 
-    public void Update(T entity) => _updated.Add(entity);
+    public void Remove(TEntity entity) => _removed.Add(entity);
 
-    public IEnumerable<T> GetAdded() => _added;
+    public void Update(TEntity entity) => _updated.Add(entity);
 
-    public IEnumerable<T> GetRemoved() => _removed;
+    public IEnumerable<TEntity> GetAdded() => _added;
 
-    public IEnumerable<T> GetUpdated() => _updated;
+    public IEnumerable<TEntity> GetRemoved() => _removed;
+
+    public IEnumerable<TEntity> GetUpdated() => _updated;
 
     public async Task CommitAsync()
     {
         switch (_baseSet)
         {
-            case InMemoryDbSet<T> memSet:
+            case InMemoryDbSet<TEntity> memSet:
                 await InternalCommitAsync(memSet);
                 break;
-            case DbSet<T> mongoSet:
+            case DbSet<TEntity> mongoSet:
                 await InternalCommitAsync(mongoSet);
                 break;
             default:
@@ -47,7 +54,7 @@ public class MutableDbSet<T> : IMutableDbSet<T>
         _updated.Clear();
     }
 
-    private async Task InternalCommitAsync(DbSet<T> mongoSet)
+    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet)
     {
         var collection = mongoSet.Collection;
 
@@ -58,7 +65,7 @@ public class MutableDbSet<T> : IMutableDbSet<T>
                 continue;
             }
 
-            var filter = Builders<T>.Filter.Eq("_id", id);
+            var filter = Builders<TEntity>.Filter.Eq("_id", id);
             var result = await collection.ReplaceOneAsync(filter, entity);
 
             // this means we are missing this document, so we mimic MongoDB driver and add it
@@ -88,7 +95,7 @@ public class MutableDbSet<T> : IMutableDbSet<T>
             foreach (var docGroup in addedWithUniqueIds.Where(group => group.Count() > 1))
             {
                 var replacementDoc = docGroup.Last();
-                await collection.ReplaceOneAsync(Builders<T>.Filter.Eq("_id", docGroup.Key), replacementDoc);
+                await collection.ReplaceOneAsync(Builders<TEntity>.Filter.Eq("_id", docGroup.Key), replacementDoc);
             }
         }
 
@@ -99,12 +106,12 @@ public class MutableDbSet<T> : IMutableDbSet<T>
                 .Where(id => id != null)
                 .ToList();
 
-            var filter = Builders<T>.Filter.In("_id", ids);
+            var filter = Builders<TEntity>.Filter.In("_id", ids);
             await collection.DeleteManyAsync(filter); // in theory, could be non-existing IDs here
         }
     }
 
-    private async Task InternalCommitAsync(InMemoryDbSet<T> memSet)
+    private async Task InternalCommitAsync(InMemoryDbSet<TEntity> memSet)
     {
         foreach (var entity in _added)
         {
@@ -141,7 +148,7 @@ public class MutableDbSet<T> : IMutableDbSet<T>
             }
         }
 
-        T? GetExistingFromInMemory(T entity)
+        TEntity? GetExistingFromInMemory(TEntity entity)
         {
             if (!entity.TryGetId(out var id))
             {
@@ -156,7 +163,7 @@ public class MutableDbSet<T> : IMutableDbSet<T>
     }
 
     // IQueryable passthrough
-    public IEnumerator<T> GetEnumerator() => _baseSet.GetEnumerator();
+    public IEnumerator<TEntity> GetEnumerator() => _baseSet.GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
@@ -166,7 +173,7 @@ public class MutableDbSet<T> : IMutableDbSet<T>
 
     public IQueryProvider Provider => _baseSet.Provider;
 
-    public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter) => _baseSet.QueryAsync(filter);
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter) => _baseSet.QueryAsync(filter);
 
-    public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter) => _baseSet.QueryAsync(filter);
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter) => _baseSet.QueryAsync(filter);
 }

@@ -45,8 +45,13 @@ public class InMemoryDbSet<T> : IDbSet<T>
 
     public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter)
     {
-        var result = _items.AsQueryable().Where(filter).Select(Clone).ToList();
-        return ValueTask.FromResult((IEnumerable<T>)result);
+        var result = _items.AsQueryable()
+            .Where(filter)
+            .AsEnumerable()
+            .Select(Clone)
+            .ToList();
+
+        return ValueTask.FromResult<IEnumerable<T>>(result);
     }
 
     public IEnumerator<T> GetEnumerator() => _items.AsQueryable().GetEnumerator();
