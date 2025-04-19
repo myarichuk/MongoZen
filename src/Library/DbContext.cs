@@ -6,7 +6,7 @@ namespace Library;
 
 public abstract class DbContext: IDisposable
 {
-    protected DbContextOptions Options { get; }
+    public DbContextOptions Options { get; }
 
     protected DbContext(DbContextOptions options)
     {
