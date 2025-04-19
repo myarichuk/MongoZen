@@ -1,4 +1,6 @@
+using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Driver;
+// ReSharper disable FlagArgument
 
 namespace Library;
 
@@ -6,15 +8,22 @@ public class DbContextOptions
 {
     public bool UseInMemory { get; set; }
 
+    public Conventions Conventions { get; set; }
+
     public IMongoDatabase? Mongo { get; set; }
 
-    public DbContextOptions(IMongoDatabase mongo)
+    public DbContextOptions(IMongoDatabase mongo, Conventions? conventions = null)
     {
         UseInMemory = false;
         Mongo = mongo;
+        Conventions = conventions ?? new Conventions();
     }
 
-    public DbContextOptions() => UseInMemory = true;
+    public DbContextOptions(Conventions? conventions = null)
+    {
+        UseInMemory = true;
+        Conventions = conventions ?? new Conventions();
+    }
 
     /// <summary>
     /// Creates a <see cref="DbContextOptions"/> configured for a real MongoDB instance.
@@ -26,6 +35,7 @@ public class DbContextOptions
     /// <param name="authDatabase">Optional name of the authentication database (defaults to target database if null).</param>
     /// <param name="useTls">Whether to enable TLS/SSL for the connection.</param>
     /// <param name="replicaSet">Optional replica set name to connect to.</param>
+    /// <param name="conventions">Optional conventions to adjust</param>
     /// <returns>A configured <see cref="DbContextOptions"/> instance.</returns>
     /// <remarks>
     /// Example:
@@ -45,10 +55,10 @@ public class DbContextOptions
         string? password = null,
         string? authDatabase = null,
         bool useTls = false,
-        string? replicaSet = null)
+        string? replicaSet = null,
+        Conventions? conventions = null)
     {
         var settings = MongoClientSettings.FromConnectionString(connectionString);
-
         if (!string.IsNullOrEmpty(username) && !string.IsNullOrEmpty(password))
         {
             settings.Credential = MongoCredential.CreateCredential(
@@ -70,6 +80,6 @@ public class DbContextOptions
 
         var client = new MongoClient(settings);
         var database = client.GetDatabase(databaseName);
-        return new DbContextOptions(database);
+        return new DbContextOptions(database, conventions);
     }
 }

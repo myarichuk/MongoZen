@@ -31,7 +31,7 @@ public abstract class DbContext: IDisposable
             .Where(p => p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == dbSetInterface)
             .ToArray();
 
-        //sanity check
+        // sanity check
         if (!props.Any())
         {
             throw new InvalidOperationException("No IDbSet<T> properties defined. This is probably a bug.");
