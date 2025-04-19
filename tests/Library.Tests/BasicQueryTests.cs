@@ -36,8 +36,8 @@ public class DbContextQueryTests : IntegrationTestBase
 
     private static void InsertInMemoryTestUsers(TestDbContext ctx)
     {
-        ((InMemoryDbSet<User>)ctx.Users).Add(new User { Id = "1", Name = "Alice", Age = 30 });
-        ((InMemoryDbSet<User>)ctx.Users).Add(new User { Id = "2", Name = "Bob", Age = 40 });
+        ((InMemoryDbSet<User>)ctx.Users).Collection.Add(new User { Id = "1", Name = "Alice", Age = 30 });
+        ((InMemoryDbSet<User>)ctx.Users).Collection.Add(new User { Id = "2", Name = "Bob", Age = 40 });
     }
 
     [Fact]
@@ -89,21 +89,6 @@ public class DbContextQueryTests : IntegrationTestBase
 
         var filter = Builders<User>.Filter.Gt(u => u.Age, 35);
         var result = await ctx.Users.QueryAsync(filter);
-
-        Assert.Single(result);
-        Assert.Equal("Bob", result.First().Name);
-    }
-
-    [Fact]
-    public void Can_Remove_InMemory_ById()
-    {
-        var ctx = new TestDbContext(new DbContextOptions());
-        InsertInMemoryTestUsers(ctx);
-
-        var set = (InMemoryDbSet<User>)ctx.Users;
-        set.RemoveById("1");
-
-        var result = set.QueryAsync(u => true).Result.ToList();
 
         Assert.Single(result);
         Assert.Equal("Bob", result.First().Name);

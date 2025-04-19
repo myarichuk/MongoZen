@@ -14,24 +14,20 @@ public class InMemoryDbSet<T> : IDbSet<T>
     private readonly FilterToLinqTranslator<T> _translator =
         FilterToLinqTranslatorFactory.Create<T>();
 
+    internal IList<T> Collection => _items;
+    
     /// <summary>
     /// Initializes a new instance of the <see cref="InMemoryDbSet{T}"/> class.
     /// </summary>
     /// <param name="items">Initial items for the in-memory collection</param>
-    public InMemoryDbSet(IEnumerable<T> items) => _items = new List<T>(items);
+    public InMemoryDbSet(IEnumerable<T> items) => _items = [..items];
 
     /// <summary>
     /// Initializes a new instance of the <see cref="InMemoryDbSet{T}"/> class.
     /// </summary>
     public InMemoryDbSet()
-        : this(Enumerable.Empty<T>())
+        : this([])
     {
-    }
-
-    private static PropertyInfo? GetIdProperty()
-    {
-        return typeof(T).GetProperties().FirstOrDefault(p =>
-            p.Name == "Id" || p.GetCustomAttributes(typeof(BsonIdAttribute), true).Any());
     }
 
     private static T Clone(T source)
@@ -51,28 +47,6 @@ public class InMemoryDbSet<T> : IDbSet<T>
     {
         var result = _items.AsQueryable().Where(filter).Select(Clone).ToList();
         return ValueTask.FromResult((IEnumerable<T>)result);
-    }
-
-    public void Add(T entity) => _items.Add(entity);
-
-    public void Remove(T entity)
-    {
-        var idProp = GetIdProperty();
-        if (idProp != null)
-        {
-            var id = idProp.GetValue(entity);
-            _items.RemoveAll(e => Equals(idProp.GetValue(e), id));
-        }
-        else
-        {
-            _items.Remove(entity);
-        }
-    }
-
-    public void RemoveById(object id)
-    {
-        var idProp = GetIdProperty() ?? throw new InvalidOperationException("No Id or [BsonId] property found");
-        _items.RemoveAll(e => Equals(idProp.GetValue(e), id));
     }
 
     public IEnumerator<T> GetEnumerator() => _items.AsQueryable().GetEnumerator();
