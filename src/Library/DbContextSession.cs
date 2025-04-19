@@ -1,8 +1,9 @@
 namespace Library;
 
-public class DbContextSession
+public abstract class DbContextSession<TDbContext>
+    where TDbContext : DbContext
 {
-    internal DbContextSession(DbContext dbContext)
-    {
-    }
+    private readonly TDbContext _dbContext;
+
+    public DbContextSession(TDbContext dbContext) => _dbContext = dbContext;
 }

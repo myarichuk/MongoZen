@@ -15,7 +15,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     private readonly List<TEntity> _removed = [];
     private readonly List<TEntity> _updated = [];
 
-    internal MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
+    public MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
     {
         _baseSet = baseSet;
         _conventions = conventions ?? new();

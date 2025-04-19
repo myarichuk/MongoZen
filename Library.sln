@@ -29,6 +29,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "workflows", "workflows", "{
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Library.Tests", "tests\Library.Tests\Library.Tests.csproj", "{29D288B7-F1C1-49C7-89D0-06C86754A14D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Library.SourceGenerator", "src\Library.SourceGenerator\Library.SourceGenerator\Library.SourceGenerator.csproj", "{4BF62039-C36F-489A-8E6D-F8AEB81DD90C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Library.SourceGenerator.Tests", "tests\Library.SourceGenerator.Tests\Library.SourceGenerator.Tests.csproj", "{DBB27EF1-F229-46CB-8DF2-C66B49FECE6A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -43,6 +47,14 @@ Global
 		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{29D288B7-F1C1-49C7-89D0-06C86754A14D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4BF62039-C36F-489A-8E6D-F8AEB81DD90C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4BF62039-C36F-489A-8E6D-F8AEB81DD90C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4BF62039-C36F-489A-8E6D-F8AEB81DD90C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4BF62039-C36F-489A-8E6D-F8AEB81DD90C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DBB27EF1-F229-46CB-8DF2-C66B49FECE6A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DBB27EF1-F229-46CB-8DF2-C66B49FECE6A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DBB27EF1-F229-46CB-8DF2-C66B49FECE6A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DBB27EF1-F229-46CB-8DF2-C66B49FECE6A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
