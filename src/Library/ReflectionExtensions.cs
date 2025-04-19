@@ -5,28 +5,49 @@ using MongoDB.Bson.Serialization.Attributes;
 // ReSharper disable ComplexConditionExpression
 namespace Library;
 
+internal sealed class DefaultIdConvention : IIdConvention
+{
+    public PropertyInfo? ResolveIdProperty<TEntity>()
+    {
+        var type = typeof(TEntity);
+        return type.GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                   .FirstOrDefault(p => p.IsDefined(typeof(BsonIdAttribute), true) && p.CanRead)
+            ?? type.GetProperty("Id", BindingFlags.Instance | BindingFlags.Public);
+    }
+}
+
+public interface IIdConvention
+{
+    PropertyInfo? ResolveIdProperty<TEntity>();
+}
+
+internal static class GlobalIdConventionProvider
+{
+    public static IIdConvention Convention { get; private set; } = new DefaultIdConvention();
+}
+
 internal static class EntityIdAccessor<TEntity>
 {
-    internal static readonly Func<TEntity, object?> Get = Build();
+    internal static Func<TEntity, object?> Get { get; private set; } = Build();
 
-    private static Func<TEntity, object?> Build()
+    internal static void SetConvention(IIdConvention convention) => Get = Build(convention);
+
+    private static Func<TEntity, object?> Build(IIdConvention? customResolver = null)
     {
-        var prop = typeof(TEntity).GetProperties(BindingFlags.Instance | BindingFlags.Public)
-                       .FirstOrDefault(p => p.IsDefined(typeof(BsonIdAttribute), true) && p.CanRead)
-                   ?? typeof(TEntity).GetProperty("Id", BindingFlags.Instance | BindingFlags.Public);
+        var prop = customResolver != null ?
+            customResolver.ResolveIdProperty<TEntity>() :
+            GlobalIdConventionProvider.Convention.ResolveIdProperty<TEntity>();
 
         if (prop is null)
         {
             return _ => null;
         }
 
-        // typed delegate: Func<T, TValue>
-        var typed = prop.GetGetMethod()!
+        var getter = prop.GetGetMethod()!
             .CreateDelegate(typeof(Func<,>)
                 .MakeGenericType(typeof(TEntity), prop.PropertyType));
 
-        // wrapper boxes only if TValue is a struct
-        return entity => ((Delegate)typed).DynamicInvoke(entity);
+        return entity => getter.DynamicInvoke(entity);
     }
 }
 
@@ -50,6 +71,6 @@ internal static class ReflectionExtensions
     {
         var id = EntityIdAccessor<TEntity>.Get(obj);
         return id ?? throw new InvalidOperationException(
-            $"Object of type {obj.GetType().Name} doesn’t expose an Id.");
+            $"Object of type {obj.GetType().Name} doesn't expose an Id.");
     }
 }
