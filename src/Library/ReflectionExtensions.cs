@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using MongoDB.Bson.Serialization.Attributes;
 
 // ReSharper disable ComplexConditionExpression
-namespace Library;
+namespace MongoFlow;
 
 internal sealed class DefaultIdConvention : IIdConvention
 {

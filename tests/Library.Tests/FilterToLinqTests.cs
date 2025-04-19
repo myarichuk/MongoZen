@@ -1,4 +1,4 @@
-using Library.FilterUtils;
+using MongoFlow.FilterUtils;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -6,7 +6,7 @@ using MongoDB.Driver;
 // ReSharper disable ClassTooBig
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
-namespace Library.Tests;
+namespace MongoFlow.Tests;
 
 public class FilterToLinqTests
 {

@@ -2,7 +2,7 @@ using EphemeralMongo;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
-namespace Library.Tests;
+namespace MongoFlow.Tests;
 
 public class IntegrationTestBase: IAsyncLifetime
 {

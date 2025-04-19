@@ -5,7 +5,7 @@ using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 // ReSharper disable MemberCanBePrivate.Global
-namespace Library.FilterUtils;
+namespace MongoFlow.FilterUtils;
 
 public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLinqTranslator
 {
@@ -24,10 +24,10 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
             StringComparer.InvariantCultureIgnoreCase);
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using default translators from the current library.
+    /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using default translators from the current MongoFlow.
     /// </summary>
     public FilterToLinqTranslator()
-        : this(FilterElementTranslatorDiscovery.DiscoverFromLibrary()) { }
+        : this(FilterElementTranslatorDiscovery.DiscoverFromMongoFlow()) { }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using translators discovered from the specified assemblies.

@@ -1,6 +1,6 @@
 using MongoDB.Bson;
 
-namespace Library.FilterUtils;
+namespace MongoFlow.FilterUtils;
 
 public interface IFilterElementTranslator
 {

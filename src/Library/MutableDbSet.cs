@@ -4,7 +4,7 @@ using MongoDB.Driver;
 // ReSharper disable ComplexConditionExpression
 // ReSharper disable MethodTooLong
 
-namespace Library;
+namespace MongoFlow;
 
 public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 {

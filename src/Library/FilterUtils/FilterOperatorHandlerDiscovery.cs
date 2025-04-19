@@ -1,10 +1,10 @@
 using System.Reflection;
 
-namespace Library.FilterUtils;
+namespace MongoFlow.FilterUtils;
 
 public static class FilterElementTranslatorDiscovery
 {
-    public static IEnumerable<IFilterElementTranslator> DiscoverFromLibrary() =>
+    public static IEnumerable<IFilterElementTranslator> DiscoverFromMongoFlow() =>
         typeof(FilterElementTranslatorDiscovery).Assembly.GetTypes()
             .Where(t => t is { IsAbstract: false, IsInterface: false, IsGenericType: false } && typeof(IFilterElementTranslator).IsAssignableFrom(t))
             .Select(t => (IFilterElementTranslator)Activator.CreateInstance(t));

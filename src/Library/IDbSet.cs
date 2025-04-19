@@ -1,6 +1,6 @@
 using MongoDB.Driver;
 
-namespace Library;
+namespace MongoFlow;
 
 public interface IDbSet<T> : IQueryable<T>
 {

@@ -1,7 +1,7 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
 
-namespace Library.FilterUtils;
+namespace MongoFlow.FilterUtils;
 
 public interface IFilterToLinqTranslator
 {

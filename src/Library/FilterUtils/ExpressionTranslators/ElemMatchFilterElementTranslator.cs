@@ -2,7 +2,7 @@ using System.Reflection;
 using MongoDB.Bson;
 // ReSharper disable ComplexConditionExpression
 
-namespace Library.FilterUtils.ExpressionTranslators;
+namespace MongoFlow.FilterUtils.ExpressionTranslators;
 
 public class ElemMatchFilterElementTranslator: FilterElementTranslatorBase
 {

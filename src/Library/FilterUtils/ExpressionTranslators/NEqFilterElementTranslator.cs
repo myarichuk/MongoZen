@@ -1,4 +1,4 @@
-namespace Library.FilterUtils.ExpressionTranslators;
+namespace MongoFlow.FilterUtils.ExpressionTranslators;
 
 // doc: https://www.mongodb.com/docs/manual/reference/operator/query/ne/
 public class NEqFilterElementTranslator : BinaryOperatorFilterElementTranslator

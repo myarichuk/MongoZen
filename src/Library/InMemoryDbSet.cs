@@ -1,11 +1,11 @@
 using System.Collections;
 using System.Reflection;
 using System.Text.Json;
-using Library.FilterUtils;
+using MongoFlow.FilterUtils;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 
-namespace Library;
+namespace MongoFlow;
 
 public class InMemoryDbSet<T> : IDbSet<T>
 {

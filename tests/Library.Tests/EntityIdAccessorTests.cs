@@ -1,7 +1,7 @@
 using MongoDB.Bson.Serialization.Attributes;
 using System.Reflection;
 
-namespace Library.Tests;
+namespace MongoFlow.Tests;
 
 // here we change global static state, so we don't run those concurrently
 [Collection("NoConcurrency")]

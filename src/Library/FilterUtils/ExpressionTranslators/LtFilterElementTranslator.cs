@@ -1,4 +1,4 @@
-namespace Library.FilterUtils.ExpressionTranslators;
+namespace MongoFlow.FilterUtils.ExpressionTranslators;
 
 public class LtFilterElementTranslator : BinaryOperatorFilterElementTranslator
 {

@@ -2,7 +2,7 @@ using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Driver;
 // ReSharper disable FlagArgument
 
-namespace Library;
+namespace MongoFlow;
 
 public class DbContextOptions
 {

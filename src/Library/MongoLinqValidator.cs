@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Library;
+namespace MongoFlow;
 
 // TODO: review this for possible missed use cases (use Mongo driver docs!)
 public static class MongoLinqValidator
