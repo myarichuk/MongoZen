@@ -1,4 +1,4 @@
-namespace Library;
+namespace MongoFlow;
 
 public abstract class DbContextSession<TDbContext>
     where TDbContext : DbContext

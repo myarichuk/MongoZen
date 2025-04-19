@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using MongoDB.Bson;
 
-namespace Library.FilterUtils.ExpressionTranslators;
+namespace MongoFlow.FilterUtils.ExpressionTranslators;
 
 public class FilterRegexElementTranslator: FilterElementTranslatorBase
 {

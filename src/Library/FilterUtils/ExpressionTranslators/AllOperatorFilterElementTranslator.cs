@@ -1,7 +1,7 @@
 using MongoDB.Bson;
 // ReSharper disable ComplexConditionExpression
 
-namespace Library.FilterUtils.ExpressionTranslators;
+namespace MongoFlow.FilterUtils.ExpressionTranslators;
 
 public sealed class AllOperatorFilterElementTranslator : FilterElementTranslatorBase
 {

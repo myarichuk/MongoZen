@@ -1,7 +1,7 @@
 using System.Linq.Expressions;
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
-namespace Library.Tests;
+namespace MongoFlow.Tests;
 
 public class MongoLinqValidatorTests
 {

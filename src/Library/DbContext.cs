@@ -2,7 +2,7 @@ using System.Linq.Expressions;
 using MongoDB.Driver;
 // ReSharper disable ComplexConditionExpression
 
-namespace Library;
+namespace MongoFlow;
 
 public abstract class DbContext: IDisposable
 {

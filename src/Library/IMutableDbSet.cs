@@ -1,4 +1,4 @@
-namespace Library;
+namespace MongoFlow;
 
 public interface IMutableDbSet<T> : IDbSet<T>
 {

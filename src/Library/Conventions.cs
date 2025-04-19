@@ -1,4 +1,4 @@
-namespace Library;
+namespace MongoFlow;
 
 public record Conventions
 {

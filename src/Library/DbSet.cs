@@ -7,7 +7,7 @@ using System.Linq;
 using MongoDB.Bson.Serialization.Attributes;
 // ReSharper disable ComplexConditionExpression
 
-namespace Library;
+namespace MongoFlow;
 
 public class DbSet<T> : IDbSet<T>
 {

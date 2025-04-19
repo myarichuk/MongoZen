@@ -1,7 +1,7 @@
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 
-namespace Library.Tests;
+namespace MongoFlow.Tests;
 
 public class DbContextQueryTests : IntegrationTestBase
 {

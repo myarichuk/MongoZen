@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace Library.FilterUtils;
+namespace MongoFlow.FilterUtils;
 
 public static class FilterToLinqTranslatorFactory
 {

@@ -1,6 +1,6 @@
 using MongoDB.Bson.Serialization.Attributes;
 
-namespace Library.Tests;
+namespace MongoFlow.Tests;
 
 public class TryGetIdTests
 {
