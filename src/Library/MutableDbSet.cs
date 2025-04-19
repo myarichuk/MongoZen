@@ -1,6 +1,5 @@
 using System.Collections;
 using MongoDB.Driver;
-using MongoDB.Bson.Serialization.Attributes;
 
 // ReSharper disable ComplexConditionExpression
 // ReSharper disable MethodTooLong
@@ -11,9 +10,9 @@ public class MutableDbSet<T> : IMutableDbSet<T>
 {
     private readonly IDbSet<T> _baseSet;
 
-    private readonly List<T> _added = new();
-    private readonly List<T> _removed = new();
-    private readonly List<T> _updated = new();
+    private readonly List<T> _added = [];
+    private readonly List<T> _removed = [];
+    private readonly List<T> _updated = [];
 
     public MutableDbSet(IDbSet<T> baseSet) => _baseSet = baseSet;
 
@@ -52,57 +51,56 @@ public class MutableDbSet<T> : IMutableDbSet<T>
     {
         var collection = mongoSet.Collection;
 
-        if (_added.Count > 0)
-        {
-            await collection.InsertManyAsync(_added);
-        }
-
         foreach (var entity in _updated)
         {
-            var idProp = typeof(T).GetProperties().FirstOrDefault(p => p.GetCustomAttributes(typeof(BsonIdAttribute), true).Any())
-                         ?? typeof(T).GetProperty("Id");
-
-            if (idProp == null)
-            {
-                continue;
-            }
-
-            var id = idProp.GetValue(entity);
-            if (id == null)
+            if (!entity.TryGetId(out var id))
             {
                 continue;
             }
 
             var filter = Builders<T>.Filter.Eq("_id", id);
             var result = await collection.ReplaceOneAsync(filter, entity);
+
+            // this means we are missing this document, so we mimic MongoDB driver and add it
             if (result.MatchedCount != 1 || result.ModifiedCount != 1)
             {
-                throw new InvalidOperationException($"Update failed for entity with Id '{id}'.");
+                var existing = _added.FirstOrDefault(addItem => addItem != null && addItem.GetId().Equals(entity.GetId()));
+
+                // so we "override" the added item with updated item
+                if (existing != null)
+                {
+                    _added.Remove(existing);
+                }
+
+                _added.Add(entity);
             }
         }
 
-        foreach (var entity in _removed)
+        if (_added.Count > 0)
         {
-            var idProp = typeof(T).GetProperties().FirstOrDefault(p => p.GetCustomAttributes(typeof(BsonIdAttribute), true).Any())
-                         ?? typeof(T).GetProperty("Id");
+            var addedWithUniqueIds = _added.GroupBy(doc => doc.GetId());
+            var uniqueDocs = addedWithUniqueIds
+                .Select(x => x.FirstOrDefault())
+                .Where(x => x != null);
 
-            if (idProp == null)
-            {
-                continue;
-            }
+            await collection.InsertManyAsync(uniqueDocs);
 
-            var id = idProp.GetValue(entity);
-            if (id == null)
+            foreach (var docGroup in addedWithUniqueIds.Where(group => group.Count() > 1))
             {
-                continue;
+                var replacementDoc = docGroup.Last();
+                await collection.ReplaceOneAsync(Builders<T>.Filter.Eq("_id", docGroup.Key), replacementDoc);
             }
+        }
 
-            var filter = Builders<T>.Filter.Eq("_id", id);
-            var result = await collection.DeleteOneAsync(filter);
-            if (result.DeletedCount != 1)
-            {
-                throw new InvalidOperationException($"Delete failed for entity with Id '{id}'.");
-            }
+        if (_removed.Count > 0)
+        {
+            var ids = _removed
+                .Select(e => e.GetId())
+                .Where(id => id != null)
+                .ToList();
+
+            var filter = Builders<T>.Filter.In("_id", ids);
+            await collection.DeleteManyAsync(filter); // in theory, could be non-existing IDs here
         }
     }
 
@@ -110,32 +108,50 @@ public class MutableDbSet<T> : IMutableDbSet<T>
     {
         foreach (var entity in _added)
         {
-            memSet.Add(entity);
+            var existing = GetExistingFromInMemory(entity);
+            if (existing != null)
+            {
+                memSet.Collection.Remove(existing);
+            }
+
+            memSet.Collection.Add(entity);
         }
 
         foreach (var entity in _removed)
         {
-            memSet.Remove(entity);
+            var existing = GetExistingFromInMemory(entity);
+            if (existing != null)
+            {
+                if (!memSet.Collection.Remove(existing))
+                {
+                    throw new InvalidOperationException($"Expected to delete {existing} but didn't... this is not supposed to happen.");
+                }
+            }
         }
 
         // updates -> remove + add for simplicity
         foreach (var entity in _updated)
         {
-            var idProp = typeof(T).GetProperties().FirstOrDefault(p => p.GetCustomAttributes(typeof(BsonIdAttribute), true).Any())
-                         ?? typeof(T).GetProperty("Id");
+            var existing = GetExistingFromInMemory(entity);
 
-            if (idProp == null)
-            {
-                continue;
-            }
-
-            var id = idProp.GetValue(entity);
-            var existing = (await memSet.QueryAsync(x => idProp.GetValue(x).Equals(id) == true)).FirstOrDefault();
             if (existing != null)
             {
-                memSet.Remove(existing);
-                memSet.Add(entity);
+                memSet.Collection.Remove(existing);
+                memSet.Collection.Add(entity);
             }
+        }
+
+        T? GetExistingFromInMemory(T entity)
+        {
+            if (!entity.TryGetId(out var id))
+            {
+                throw new InvalidOperationException($"Cannot fetch entity Id without known Id property.");
+            }
+
+            var existing = memSet
+                .Collection
+                .FirstOrDefault(x => x.GetId() != null && x.GetId()!.Equals(id));
+            return existing;
         }
     }
 
