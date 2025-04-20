@@ -19,7 +19,7 @@ namespace MongoFlow.SourceGenerator;
 /// method that calls <c>CommitAsync()</c> on each of those mutable sets.
 /// </summary>
 [Generator]
-public sealed class DbContextGenerator : IIncrementalGenerator
+public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 {
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
@@ -35,7 +35,7 @@ public sealed class DbContextGenerator : IIncrementalGenerator
                     }
 
                     var compilation = ctx.SemanticModel.Compilation;
-                    return !InheritsFrom(symbol, "MongoFlow.DbContext", compilation) ? null :
+                    return !Utils.InheritsFrom(symbol, "MongoFlow.DbContext", compilation) ? null :
                         symbol.IsAbstract ? null : symbol;
                 })
             .Where(static symbol => symbol is not null)!
@@ -47,26 +47,6 @@ public sealed class DbContextGenerator : IIncrementalGenerator
                 $"{ctxSymbol.Name}Session.g.cs",
                 SourceText.From(GenerateSessionClass(ctxSymbol), Encoding.UTF8));
         });
-    }
-
-    private static bool InheritsFrom(INamedTypeSymbol type, string fullMetadataName, Compilation compilation)
-    {
-        var baseType = compilation.GetTypeByMetadataName(fullMetadataName);
-        if (baseType == null)
-        {
-            return false;
-        }
-
-        for (var current = type.BaseType; current != null; current = current.BaseType)
-        {
-            // note: makes better sense use symbol comparer than string comparer
-            if (SymbolEqualityComparer.Default.Equals(current, baseType))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static string GenerateSessionClass(INamedTypeSymbol ctxSymbol)

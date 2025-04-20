@@ -7,7 +7,7 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace MongoFlow.SourceGenerator.Tests
 {
-    public class DbContextGeneratorTests
+    public class DbContextSessionsGeneratorTests
     {
         [Fact]
         public async Task GeneratesSessionForDbContext()
@@ -51,7 +51,7 @@ public sealed class BloggingContextSession : MongoFlow.DbContextSession<Blogging
 }
 ";
 
-            var test = new CSharpSourceGeneratorTest<SourceGenerator.DbContextGenerator, XUnitVerifier>
+            var test = new CSharpSourceGeneratorTest<SourceGenerator.DbContextSessionsGenerator, XUnitVerifier>
             {
                 TestState =
                 {
@@ -59,7 +59,7 @@ public sealed class BloggingContextSession : MongoFlow.DbContextSession<Blogging
                     ReferenceAssemblies = ReferenceAssemblies.Net.Net80,
                     GeneratedSources =
                     {
-                        (typeof(SourceGenerator.DbContextGenerator), "BloggingContextSession.g.cs", 
+                        (typeof(SourceGenerator.DbContextSessionsGenerator), "BloggingContextSession.g.cs", 
                             SourceText.From(expected, Encoding.UTF8)),
                     },
                 },
