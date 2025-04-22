@@ -13,7 +13,7 @@ namespace MongoFlow.SourceGenerator;
 
 /// <summary>
 /// Generates a unit‑of‑work façade ― <c>{DbContextName}Session</c> ― for every
-/// concrete class that derives from <see cref="MongoFlow.DbContext" />.
+/// concrete class that derives from MongoFlow.DbContext.
 /// The session exposes one <c>IMutableDbSet&lt;T&gt;</c> per <c>IDbSet&lt;T&gt;</c>
 /// property found on the underlying context and a <c>SaveChangesAsync()</c>
 /// method that calls <c>CommitAsync()</c> on each of those mutable sets.
@@ -43,6 +43,12 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(dbContextSymbols, static (spc, ctxSymbol) =>
         {
+            spc.ReportDiagnostic(Diagnostic.Create(
+                    new DiagnosticDescriptor("MF001", "MongoFlow Generator", 
+                        "Processing DBContext: {0}", "MongoFlow", 
+                        DiagnosticSeverity.Info, true), 
+                    null,
+                    ctxSymbol.Name));
             spc.AddSource(
                 $"{ctxSymbol.Name}Session.g.cs",
                 SourceText.From(GenerateSessionClass(ctxSymbol), Encoding.UTF8));
@@ -62,7 +68,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.AppendLine("using System.Threading.Tasks;");
         sb.AppendLine("using MongoFlow;");
         sb.AppendLine();
-        
+
         if (ns is not null)
         {
             sb.Append("namespace ").AppendLine(ns).AppendLine("{");

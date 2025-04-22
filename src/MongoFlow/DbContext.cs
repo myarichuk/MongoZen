@@ -1,12 +1,15 @@
 using System.Linq.Expressions;
 using MongoDB.Driver;
 // ReSharper disable ComplexConditionExpression
+// ReSharper disable VirtualMemberCallInConstructor
 
 namespace MongoFlow;
 
 public abstract class DbContext: IDisposable
 {
     public DbContextOptions Options { get; }
+
+    public void Dispose() => Options.Mongo?.Client.Dispose();
 
     protected DbContext(DbContextOptions options)
     {
@@ -61,7 +64,8 @@ public abstract class DbContext: IDisposable
                 }
 
                 var getCollectionMethod =
-                    typeof(IMongoDatabase).GetMethod(nameof(IMongoDatabase.GetCollection),
+                    typeof(IMongoDatabase).GetMethod(
+                        nameof(IMongoDatabase.GetCollection),
                         [typeof(string), typeof(MongoCollectionSettings)]);
                 var genericGetCollection = getCollectionMethod!.MakeGenericMethod(entityType);
 
@@ -74,6 +78,4 @@ public abstract class DbContext: IDisposable
             prop.SetValue(this, instance);
         }
     }
-
-    public void Dispose() => Options.Mongo?.Client.Dispose();
 }

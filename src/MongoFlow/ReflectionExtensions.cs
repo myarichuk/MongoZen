@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using MongoDB.Bson.Serialization.Attributes;
@@ -67,8 +68,9 @@ internal static class ReflectionExtensions
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static object GetId<TEntity>(this TEntity obj)
+    public static object GetId<TEntity>([DisallowNull] this TEntity obj)
     {
+        ArgumentNullException.ThrowIfNull(obj);
         var id = EntityIdAccessor<TEntity>.Get(obj);
         return id ?? throw new InvalidOperationException(
             $"Object of type {obj.GetType().Name} doesn't expose an Id.");

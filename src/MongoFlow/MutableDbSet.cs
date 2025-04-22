@@ -85,10 +85,11 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
         if (_added.Count > 0)
         {
-            var addedWithUniqueIds = _added.GroupBy(doc => doc.GetId());
+            var addedWithUniqueIds = _added.GroupBy(doc => doc!.GetId());
             var uniqueDocs = addedWithUniqueIds
                 .Select(x => x.FirstOrDefault())
-                .Where(x => x != null);
+                .Where(x => x != null)
+                .Cast<TEntity>();
 
             await collection.InsertManyAsync(uniqueDocs);
 
@@ -111,7 +112,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         }
     }
 
-    private async Task InternalCommitAsync(InMemoryDbSet<TEntity> memSet)
+    private Task InternalCommitAsync(InMemoryDbSet<TEntity> memSet)
     {
         foreach (var entity in _added)
         {
@@ -160,6 +161,8 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 .FirstOrDefault(x => x.GetId() != null && x.GetId()!.Equals(id));
             return existing;
         }
+
+        return Task.CompletedTask;
     }
 
     // IQueryable passthrough

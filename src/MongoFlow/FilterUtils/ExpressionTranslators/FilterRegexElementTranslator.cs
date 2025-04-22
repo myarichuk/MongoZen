@@ -22,7 +22,7 @@ public class FilterRegexElementTranslator: FilterElementTranslatorBase
             pattern = regex.Pattern;
             options = regex.Options;
         }
-        else if(value.IsString)
+        else if (value.IsString)
         {
             pattern = value.AsString;
         }

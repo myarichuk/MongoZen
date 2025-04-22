@@ -12,7 +12,7 @@ public abstract class FilterElementTranslatorBase : IFilterElementTranslator
     {
         var parts = field.Split('.');
         var current = root;
-        Expression check = null;
+        Expression? check = null;
 
         for (var i = 0; i < parts.Length; i++)
         {

@@ -6,18 +6,18 @@ namespace MongoFlow;
 
 public class DbContextOptions
 {
-    public bool UseInMemory { get; set; }
-
-    public Conventions Conventions { get; set; }
-
-    public IMongoDatabase? Mongo { get; set; }
-
     public DbContextOptions(IMongoDatabase mongo, Conventions? conventions = null)
     {
         UseInMemory = false;
         Mongo = mongo;
         Conventions = conventions ?? new Conventions();
     }
+    
+    public bool UseInMemory { get; set; }
+
+    public Conventions Conventions { get; set; }
+
+    public IMongoDatabase? Mongo { get; set; }
 
     public DbContextOptions(Conventions? conventions = null)
     {

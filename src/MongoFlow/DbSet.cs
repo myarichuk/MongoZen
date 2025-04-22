@@ -1,30 +1,20 @@
 using System.Collections;
 using MongoDB.Driver;
-using System.Linq.Expressions;
-using System.Threading.Tasks;
-using System;
-using System.Linq;
 using MongoDB.Bson.Serialization.Attributes;
+
 // ReSharper disable ComplexConditionExpression
 
 namespace MongoFlow;
 
-public class DbSet<T> : IDbSet<T>
+public class DbSet<T>(IMongoCollection<T> collection) : IDbSet<T>
 {
-    private readonly IQueryable<T> _collectionAsQueryable;
-    private readonly IMongoCollection<T> _collection;
-
-    public DbSet(IMongoCollection<T> collection)
-    {
-        _collection = collection;
-        _collectionAsQueryable = collection.AsQueryable();
-    }
+    private readonly IQueryable<T> _collectionAsQueryable = collection.AsQueryable();
 
     public async ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter) =>
-        await (await _collection.FindAsync(filter)).ToListAsync();
+        await (await collection.FindAsync(filter)).ToListAsync();
 
     public async ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter) =>
-        await (await _collection.FindAsync(Builders<T>.Filter.Where(filter))).ToListAsync();
+        await (await collection.FindAsync(Builders<T>.Filter.Where(filter))).ToListAsync();
 
     public IEnumerator<T> GetEnumerator() => _collectionAsQueryable.GetEnumerator();
 
@@ -36,7 +26,7 @@ public class DbSet<T> : IDbSet<T>
 
     public IQueryProvider Provider => _collectionAsQueryable.Provider;
 
-    internal IMongoCollection<T> Collection => _collection;
+    internal IMongoCollection<T> Collection => collection;
 
     public async Task RemoveById(object id)
     {
@@ -46,7 +36,7 @@ public class DbSet<T> : IDbSet<T>
                      throw new InvalidOperationException("No Id or [BsonId] property found on type " + typeof(T).Name);
 
         var filter = Builders<T>.Filter.Eq("_id", id);
-        var result = await _collection.DeleteOneAsync(filter);
+        var result = await collection.DeleteOneAsync(filter);
 
         if (result.DeletedCount != 1)
         {

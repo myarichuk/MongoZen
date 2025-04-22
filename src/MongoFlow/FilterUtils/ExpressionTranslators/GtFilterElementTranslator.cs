@@ -12,12 +12,3 @@ public class GtFilterElementTranslator : BinaryOperatorFilterElementTranslator
 }
 
 // doc: https://www.mongodb.com/docs/manual/reference/operator/query/gte/
-public class GteFilterElementTranslator : BinaryOperatorFilterElementTranslator
-{
-    public GteFilterElementTranslator()
-        : base(Expression.GreaterThanOrEqual)
-    {
-    }
-
-    public override string Operator => "$gte";
-}

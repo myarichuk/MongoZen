@@ -24,8 +24,8 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\..\src\Library.SourceGenerator\Library.SourceGenerator\Library.SourceGenerator.csproj" />
-      <ProjectReference Include="..\..\src\Library\Library.csproj" />
+      <ProjectReference Include="..\..\src\MongoFlow.SourceGenerator\MongoFlow.SourceGenerator.csproj" />
+      <ProjectReference Include="..\..\src\MongoFlow\MongoFlow.csproj" />
     </ItemGroup>
 
 </Project>
