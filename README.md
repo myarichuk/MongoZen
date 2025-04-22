@@ -1,20 +1,94 @@
-# Library.Template
-
-This is a template for a .Net library project. The main idea is to provide convenient preconfigured project structure that would utilize [Github Flow](https://docs.github.com/en/get-started/quickstart/github-flow) for development process and [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for semantic versioning and generating a change log.
-
+# MongoFlow
+is a lightweight, developer-friendly library that provides an **Entity Framework Core-like experience** for MongoDB. It bridges the gap between the flexibility of MongoDB and the structure of an ORM, making it easier to query, manage, and interact with your MongoDB collections using object-oriented patterns. **MongoFlow**
 ## Features
+- **EF-Core-Like Abstractions**:
+    - for centralizing database access logic and managing collections (). `DbContext``IDbSet`
+    - LINQ support, including server-side filtering and querying.
 
-* GitHub Actions
-  * When PR is opened, run tests and lint commit messages for [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) standards
-  * When PR is merged, run tests, publish to NuGet, update the changelog file and create GitHub release while using [GitVersion](https://gitversion.net/) to figure out the next version. GitVersion is configured to use Conventional Commits to figure out the next release version.
-* Preconfigured [StyleCop](https://github.com/StyleCop/StyleCop) rules
-* [Pre-Commit](https://pre-commit.com/) configuration and scripts to install the tool and it's hooks
-* Scripts to install dependencies so development can be started quicker
+- **In-Memory Database for Testing**:
+    - Seamlessly switch between MongoDB collections and in-memory collections for unit testing.
 
-## How to start development with this template?
+- **BSON and MongoDB Integration**:
+    - Supports MongoDB specifics like for custom ID handling. `[BsonId]`
+    - Handles default and custom ID conventions with flexibility.
 
-1. Create a GitHub repository with this project as it's tempalte
-2. Execute ``install-dependencies`` script (if on Windows execute PowerShell script, on Linux execute the Bash script). This will ensure there is correct .Net SDK installed, install dotnet-format tool and execute pre-commit install script
-3. In order for ``nuget.org`` deployment to work, create [NuGet API key](https://docs.microsoft.com/en-us/nuget/nuget-org/publish-a-package#create-api-keys) and set it in the repository ``secrets`` as ``NUGET_TOKEN``.
-4. Replace 'Michael Yarichuk' in ``stylecop.json`` to have a correct value
-5. Replace 'Michael Yarichuk' values in ``Directory.Build.props`` file to proper values
+- **Source Generators**:
+    - Simplifies repetitive tasks such as entity mapping.
+
+- **Comprehensive Testing**:
+    - Robust test coverage with integration and unit tests.
+
+- **CI/CD and Precommit Hook Integration**:
+    - StyleCop for consistent code formatting.
+    - GitHub Actions for automated builds and releases.
+
+## Installation
+To get started, install the NuGet package:
+``` bash
+dotnet add package MongoFlow
+```
+## Getting Started
+### 1. Define Your `DbContext`
+Create a class that inherits from `MongoFlow.DbContext`:
+> Note that ``IDbSet<TEntity>`` properties with public get and set are required
+``` csharp
+public class MyDbContext : DbContext
+{
+    public IDbSet<MyEntity> MyEntities { get; set; }
+
+    public MyDbContext(DbContextOptions options) : base(options) { }
+}
+```
+### 2. Define Your DAL Entities
+
+Define DAL-specific entities with required ID properties and MongoDB attributes:
+``` csharp
+[BsonIgnoreExtraElements]
+public class MyEntity
+{
+    [BsonId]
+    public string Id { get; set; }
+    public string Name { get; set; }
+    public int Age { get; set; }
+}
+```
+### 3. Configure `DbContextOptions`
+Configure connection settings using : `DbContextOptions`
+``` csharp
+var options = new DbContextOptions
+{
+    Mongo = new MongoDbOptions
+    {
+        ConnectionString = "mongodb://localhost:27017",
+        DatabaseName = "MyDatabase"
+    }
+};
+
+var context = new MyDbContext(options);
+```
+### 4. Query with LINQ
+Use LINQ or MongoDB filters to query data:
+``` csharp
+var results = await context.MyEntities.QueryAsync(e => e.Age > 30);
+```
+### 5. In-Memory Testing
+Switch to the in-memory mode for safe unit testing:
+``` csharp
+var inMemoryOptions = new DbContextOptions(); // In-memory mode enabled
+var testContext = new MyDbContext(inMemoryOptions);
+```
+## Documentation
+Further documentation and details can be found on the [project's GitHub page](https://github.com/your-repo-url).
+## Contributing
+Contributions are welcome! Follow these steps to contribute:
+1. Fork the repository.
+2. Create a branch for your feature or bug fix.
+3. Push your changes and make a pull request.
+
+Before submitting PRs, ensure:
+- Tests are added or updated.
+- Code passes the precommit hooks ( rules). `stylecop.json`
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
+
+## License
+MongoFlow is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

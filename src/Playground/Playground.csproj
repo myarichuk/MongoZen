@@ -13,8 +13,9 @@
 
     <ItemGroup>
         <!-- Note, transitive project reference to source generator is impossible -->
-        <ProjectReference Include="..\MongoZen.SourceGenerator\MongoZen.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-      <ProjectReference Include="..\MongoZen\MongoZen.csproj" PrivateAssets="None" />
+        <ProjectReference Include="..\MongoFlow.SourceGenerator\MongoFlow.SourceGenerator.csproj"
+                          OutputItemType="Analyzer" ReferenceOutputAssembly="false"/>
+      <ProjectReference Include="..\MongoFlow\MongoFlow.csproj" PrivateAssets="None" />
     </ItemGroup>
 
 </Project>
