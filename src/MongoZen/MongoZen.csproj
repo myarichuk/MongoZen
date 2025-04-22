@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+
+    <!-- NuGet Metadata -->
+    <PackageId>MongoZen</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Michael Yarichuk</Authors>
+    <Company>Michael Yarichuk</Company>
+    <PackageReleaseNotes>Note: this is not yet ready for production - it is WIP!</PackageReleaseNotes>
+    <Description>MongoFlow: A minimal ceremony MongoDB-based data access library to make working with MongoDB feel more ORM-like</Description>
+    <RepositoryUrl>https://github.com/myarichuk/MongoFlow</RepositoryUrl>
+    <RootNamespace>MongoZen</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Reference MongoDB Driver -->
+    <PackageReference Include="MongoDB.Driver" Version="3.3.0" />
+
+    <!-- Include the source generator as an Analyzer -->
+    <ProjectReference Include="..\MongoZen.SourceGenerator\MongoZen.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>
