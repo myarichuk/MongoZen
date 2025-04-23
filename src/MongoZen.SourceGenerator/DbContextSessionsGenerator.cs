@@ -43,12 +43,6 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(dbContextSymbols, static (spc, ctxSymbol) =>
         {
-            spc.ReportDiagnostic(Diagnostic.Create(
-                    new DiagnosticDescriptor("MF001", "MongoZen Generator", 
-                        "Processing DBContext: {0}", "MongoZen", 
-                        DiagnosticSeverity.Info, true), 
-                    null,
-                    ctxSymbol.Name));
             spc.AddSource(
                 $"{ctxSymbol.Name}Session.g.cs",
                 SourceText.From(GenerateSessionClass(ctxSymbol), Encoding.UTF8));
