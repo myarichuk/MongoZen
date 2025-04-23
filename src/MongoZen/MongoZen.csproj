@@ -12,15 +12,26 @@
     <Authors>Michael Yarichuk</Authors>
     <Company>Michael Yarichuk</Company>
     <PackageReleaseNotes>Note: this is not yet ready for production - it is WIP!</PackageReleaseNotes>
-    <Description>MongoFlow: A minimal ceremony MongoDB-based data access library to make working with MongoDB feel more ORM-like</Description>
+    <Description>MongoZen: A minimal ceremony MongoDB-based data access library to make working with MongoDB feel more ORM-like</Description>
     <RepositoryUrl>https://github.com/myarichuk/MongoFlow</RepositoryUrl>
     <RootNamespace>MongoZen</RootNamespace>
   </PropertyGroup>
+
+  <Target Name="CopySourceGenerator" BeforeTargets="CoreCompile">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\bin\MongoZen.SourceGenerator\$(Configuration)\netstandard2.0\MongoZen.SourceGenerator.dll"
+          DestinationFolder="$(OutputPath)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup>
     <!-- Reference MongoDB Driver -->
     <PackageReference Include="MongoDB.Driver" Version="3.3.0" />
 
     <!-- Include the source generator as an Analyzer -->
     <ProjectReference Include="..\MongoZen.SourceGenerator\MongoZen.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <None Include="$(OutputPath)MongoZen.SourceGenerator.dll"
+          Pack="true"
+          PackagePath="analyzers/dotnet/cs"
+          Visible="false" />
   </ItemGroup>
 </Project>
