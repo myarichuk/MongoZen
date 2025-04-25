@@ -1,5 +1,5 @@
-# MongoFlow
-is a lightweight, developer-friendly library that provides an **Entity Framework Core-like experience** for MongoDB. It bridges the gap between the flexibility of MongoDB and the structure of an ORM, making it easier to query, manage, and interact with your MongoDB collections using object-oriented patterns. **MongoFlow**
+# MongoZen
+is a lightweight, developer-friendly library that provides an **Entity Framework Core-like experience** for MongoDB. It bridges the gap between the flexibility of MongoDB and the structure of an ORM, making it easier to query, manage, and interact with your MongoDB collections using object-oriented patterns. **MongoZen**
 ## Features
 - **EF-Core-Like Abstractions**:
     - for centralizing database access logic and managing collections (). `DbContext``IDbSet`
