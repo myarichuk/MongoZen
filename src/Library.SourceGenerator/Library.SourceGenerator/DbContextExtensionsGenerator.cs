@@ -32,8 +32,11 @@ public sealed class DbContextExtensionsGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(dbContextSymbols, static (spc, ctxSymbols) =>
         {
-            var output = GenerateSessionExtensions(ctxSymbols);
-            spc.AddSource("DbContextSessionExtensions.g.cs", SourceText.From(output, Encoding.UTF8));
+            if (ctxSymbols.Length > 0)
+            {
+                var output = GenerateSessionExtensions(ctxSymbols);
+                spc.AddSource("DbContextSessionExtensions.g.cs", SourceText.From(output, Encoding.UTF8));
+            }
         });
     }
 

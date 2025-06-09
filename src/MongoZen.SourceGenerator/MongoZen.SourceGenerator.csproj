@@ -9,7 +9,7 @@
         <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
         <IsRoslynComponent>true</IsRoslynComponent>
         <PackageId>MongoZen.SourceGenerator</PackageId>
-        <RootNamespace>MongoFlow.SourceGenerator</RootNamespace>
+        <RootNamespace>MongoZen.SourceGenerator</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>

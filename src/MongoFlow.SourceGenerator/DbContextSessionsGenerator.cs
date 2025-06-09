@@ -80,9 +80,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(" : MongoFlow.DbContextSession<").Append(ctxSymbol.ToDisplayString()).AppendLine(">");
         sb.Append(indent).AppendLine("{");
 
-        var propBlock = new StringBuilder(); // Add before loop
 
-        sb.Append(propBlock); // Then insert just before the constructor
 
         // Constructor
         sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
@@ -93,7 +91,10 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
         {
-            if (!member.Type.ToDisplayString().Contains("IDbSet<"))
+            if (member.Type is not INamedTypeSymbol named ||
+                named.Name != "IDbSet" ||
+                named.Arity != 1 ||
+                named.ContainingNamespace.ToDisplayString() != "MongoFlow")
             {
                 continue;
             }
@@ -117,7 +118,10 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.AppendLine();
         foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
         {
-            if (!member.Type.ToDisplayString().Contains("IDbSet<"))
+            if (member.Type is not INamedTypeSymbol named ||
+                named.Name != "IDbSet" ||
+                named.Arity != 1 ||
+                named.ContainingNamespace.ToDisplayString() != "MongoFlow")
             {
                 continue;
             }
