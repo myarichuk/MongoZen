@@ -18,20 +18,15 @@
   </PropertyGroup>
 
   <Target Name="CopySourceGenerator" BeforeTargets="CoreCompile">
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\bin\MongoZen.SourceGenerator\$(Configuration)\netstandard2.0\MongoZen.SourceGenerator.dll"
-          DestinationFolder="$(OutputPath)"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\bin\MongoZen.SourceGenerator\$(Configuration)\netstandard2.0\MongoZen.SourceGenerator.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
   </Target>
 
   <ItemGroup>
     <!-- Reference MongoDB Driver -->
-    <PackageReference Include="MongoDB.Driver" Version="3.3.0" />
+    <PackageReference Include="MongoDB.Driver" Version="3.4.2" />
 
     <!-- Include the source generator as an Analyzer -->
     <ProjectReference Include="..\MongoZen.SourceGenerator\MongoZen.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-    <None Include="$(OutputPath)MongoZen.SourceGenerator.dll"
-          Pack="true"
-          PackagePath="analyzers/dotnet/cs"
-          Visible="false" />
+    <None Include="$(OutputPath)MongoZen.SourceGenerator.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
   </ItemGroup>
 </Project>
