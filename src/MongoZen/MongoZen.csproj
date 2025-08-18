@@ -25,7 +25,7 @@
 
   <ItemGroup>
     <!-- Reference MongoDB Driver -->
-    <PackageReference Include="MongoDB.Driver" Version="3.3.0" />
+    <PackageReference Include="MongoDB.Driver" Version="3.4.2" />
 
     <!-- Include the source generator as an Analyzer -->
     <ProjectReference Include="..\MongoZen.SourceGenerator\MongoZen.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
