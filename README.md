@@ -93,7 +93,6 @@ session.BeginTransaction();
 
 session.MyEntities.Add(new MyEntity { Id = "1", Name = "Alice", Age = 42 });
 await session.SaveChangesAsync();
-await session.CommitTransactionAsync();
 ```
 ## Documentation
 Further documentation and details can be found on the [project's GitHub page](https://github.com/your-repo-url).
