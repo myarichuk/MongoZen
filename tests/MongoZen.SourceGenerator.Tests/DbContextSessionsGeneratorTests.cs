@@ -45,8 +45,23 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
 
     public async ValueTask SaveChangesAsync()
     {
-        await Blogs.CommitAsync();
-        await Posts.CommitAsync();
+        EnsureTransactionActive();
+        try
+        {
+            await Blogs.CommitAsync(Transaction);
+            await Posts.CommitAsync(Transaction);
+
+            await CommitTransactionAsync();
+        }
+        catch
+        {
+            if (Transaction.IsActive)
+            {
+                await AbortTransactionAsync();
+            }
+
+            throw;
+        }
     }
 }
 ";
@@ -110,7 +125,22 @@ namespace MyNamespace
 
         public async ValueTask SaveChangesAsync()
         {
-            await Users.CommitAsync();
+            EnsureTransactionActive();
+            try
+            {
+                await Users.CommitAsync(Transaction);
+
+                await CommitTransactionAsync();
+            }
+            catch
+            {
+                if (Transaction.IsActive)
+                {
+                    await AbortTransactionAsync();
+                }
+
+                throw;
+            }
         }
     }
 }

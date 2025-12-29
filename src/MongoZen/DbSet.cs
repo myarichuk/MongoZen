@@ -16,6 +16,12 @@ public class DbSet<T>(IMongoCollection<T> collection) : IDbSet<T>
     public async ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter) =>
         await (await collection.FindAsync(Builders<T>.Filter.Where(filter))).ToListAsync();
 
+    public async ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, IClientSessionHandle session) =>
+        await (await collection.FindAsync(session, filter)).ToListAsync();
+
+    public async ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, IClientSessionHandle session) =>
+        await (await collection.FindAsync(session, Builders<T>.Filter.Where(filter))).ToListAsync();
+
     public IEnumerator<T> GetEnumerator() => _collectionAsQueryable.GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();

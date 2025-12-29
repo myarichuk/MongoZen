@@ -54,6 +54,12 @@ public class InMemoryDbSet<T> : IDbSet<T>
         return ValueTask.FromResult<IEnumerable<T>>(result);
     }
 
+    public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, IClientSessionHandle session)
+        => QueryAsync(filter);
+
+    public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, IClientSessionHandle session)
+        => QueryAsync(filter);
+
     public IEnumerator<T> GetEnumerator() => _items.AsQueryable().GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();

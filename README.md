@@ -74,6 +74,16 @@ Switch to the in-memory mode for safe unit testing:
 var inMemoryOptions = new DbContextOptions(); // In-memory mode enabled
 var testContext = new MyDbContext(inMemoryOptions);
 ```
+### 6. Transactions (required for SaveChanges)
+Use the generated session to scope a transaction and persist changes atomically:
+``` csharp
+var session = context.StartSession();
+session.BeginTransaction();
+
+session.MyEntities.Add(new MyEntity { Id = "1", Name = "Alice", Age = 42 });
+await session.SaveChangesAsync();
+```
+> Note: MongoDB transactions require a replica set or sharded cluster. In-memory contexts support transactions, but you must call `BeginTransaction()` before `SaveChangesAsync()`. Queries can be issued with or without a session; pass the session to read your own uncommitted writes inside a transaction.
 ## Documentation
 Further documentation and details can be found on the [project's GitHub page](https://github.com/your-repo-url).
 ## Contributing

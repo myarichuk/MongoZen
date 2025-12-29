@@ -14,5 +14,5 @@ public interface IMutableDbSet<T> : IDbSet<T>
 
     IEnumerable<T> GetUpdated();
 
-    Task CommitAsync(); // eventually used in SaveChanges()
+    Task CommitAsync(TransactionContext transaction); // eventually used in SaveChanges()
 }
