@@ -56,7 +56,7 @@ public class IntegrationTestBase: IAsyncLifetime
             }
         }
 
-        _mongoClient.Dispose();
-        _runner.Dispose();
+        _mongoClient?.Dispose();
+        _runner?.Dispose();
     }
 }

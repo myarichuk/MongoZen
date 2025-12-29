@@ -60,7 +60,8 @@ public class EntityIdAccessorTests
         }
         finally
         {
-            EntityIdAccessor<WithBsonId>.SetConvention(null);
+            // Reset to default convention
+            EntityIdAccessor<WithBsonId>.SetConvention(GlobalIdConventionProvider.Convention);
         }
     }
 
