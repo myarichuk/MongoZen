@@ -1,5 +1,5 @@
 # MongoZen
-is a lightweight, developer-friendly library that provides an **Entity Framework Core-like experience** for MongoDB. It bridges the gap between the flexibility of MongoDB and the structure of an ORM, making it easier to query, manage, and interact with your MongoDB collections using object-oriented patterns.
+MongoZen is a lightweight, developer-friendly library that provides an **Entity Framework Core-like experience** for MongoDB. It bridges the gap between the flexibility of MongoDB and the structure of an ORM, making it easier to query, manage, and interact with your MongoDB collections using object-oriented patterns.
 ## Features
 - **EF-Core-Like Abstractions**:
     - for centralizing database access logic and managing collections (). `DbContext``IDbSet`
@@ -22,16 +22,16 @@ is a lightweight, developer-friendly library that provides an **Entity Framework
 ## Installation
 To get started, install the NuGet package:
 ``` bash
-dotnet add package MongoFlow
+dotnet add package MongoZen
 ```
 ## Getting Started
 ### 1. Define Your `DbContext`
-Create a class that inherits from `MongoFlow.DbContext`:
+Create a class that inherits from `MongoZen.DbContext`:
 > Note that ``IDbSet<TEntity>`` properties with public get and set are required
 ``` csharp
-public class MyDbContext : DbContext
+public class MyDbContext : MongoZen.DbContext
 {
-    public IDbSet<MyEntity> MyEntities { get; set; }
+    public MongoZen.IDbSet<MyEntity> MyEntities { get; set; }
 
     public MyDbContext(DbContextOptions options) : base(options) { }
 }
@@ -98,4 +98,4 @@ Before submitting PRs, ensure:
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## License
-MongoFlow is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+MongoZen is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
