@@ -5,12 +5,25 @@ using MongoDB.Driver;
 
 namespace MongoZen;
 
+/// <summary>
+/// Base class for MongoZen database contexts, providing DbSet initialization and lifecycle management.
+/// </summary>
 public abstract class DbContext: IDisposable
 {
+    /// <summary>
+    /// Gets the options used to configure this context.
+    /// </summary>
     public DbContextOptions Options { get; }
 
+    /// <summary>
+    /// Disposes the underlying MongoDB client if configured.
+    /// </summary>
     public void Dispose() => Options.Mongo?.Client.Dispose();
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DbContext"/> class.
+    /// </summary>
+    /// <param name="options">The options to configure the context.</param>
     protected DbContext(DbContextOptions options)
     {
         Options = options;
@@ -18,6 +31,9 @@ public abstract class DbContext: IDisposable
         OnModelCreating();
     }
 
+    /// <summary>
+    /// Allows derived types to customize model setup.
+    /// </summary>
     protected virtual void OnModelCreating() { }
 
     /// <summary>

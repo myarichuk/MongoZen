@@ -5,8 +5,10 @@ namespace MongoZen.FilterUtils.ExpressionTranslators;
 
 public sealed class AllOperatorFilterElementTranslator : FilterElementTranslatorBase
 {
+    /// <inheritdoc />
     public override string Operator => "$all";
 
+    /// <inheritdoc />
     public override Expression Handle(string field, BsonValue value, ParameterExpression param)
     {
         if (value is not BsonArray array)

@@ -9,8 +9,10 @@ public class FilterRegexElementTranslator: FilterElementTranslatorBase
     private static readonly MethodInfo? IsMatchMethod = typeof(Regex).GetMethod(nameof(Regex.IsMatch), [typeof(string), typeof(string), typeof(RegexOptions)
     ]);
 
+    /// <inheritdoc />
     public override string Operator => "$regex";
 
+    /// <inheritdoc />
     public override Expression Handle(string field, BsonValue value, ParameterExpression param)
     {
         string pattern;

@@ -4,8 +4,10 @@ namespace MongoZen.FilterUtils.ExpressionTranslators;
 
 public class InFilterElementTranslator : FilterElementTranslatorBase
 {
+    /// <inheritdoc />
     public override string Operator => "$in";
 
+    /// <inheritdoc />
     public override Expression Handle(string field, BsonValue value, ParameterExpression param)
     {
         if (!value.IsBsonArray)

@@ -8,9 +8,13 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace MongoZen.SourceGenerator;
 
+/// <summary>
+/// Generates extension methods that create session wrappers for DbContext types.
+/// </summary>
 [Generator]
 public sealed class DbContextExtensionsGenerator : IIncrementalGenerator
 {
+    /// <inheritdoc />
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var dbContextSymbols = context.SyntaxProvider

@@ -8,6 +8,7 @@ public class GtFilterElementTranslator : BinaryOperatorFilterElementTranslator
     {
     }
 
+    /// <inheritdoc />
     public override string Operator => "$gt";
 }
 

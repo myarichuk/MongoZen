@@ -186,6 +186,16 @@ public class FilterToLinqTests
     }
 
     [Fact]
+    public void OrFilter_WithEmptyArray_ShouldNeverMatch()
+    {
+        var filter = new BsonDocument("$or", new BsonArray()).ToFilterDefinition<Person>();
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.False(expr(new Person { Name = "Alice", Age = 30 }));
+        Assert.False(expr(new Person { Name = "Bob", Age = 10 }));
+    }
+
+    [Fact]
     public void AndFilter_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.And(
@@ -199,6 +209,16 @@ public class FilterToLinqTests
         Assert.True(expr(new Person { Name = "Alice", Age = 18 }));
         Assert.False(expr(new Person { Name = "Charlie", Age = 10 }));
         Assert.False(expr(new Person { Name = "Charlie", Age = 30 }));
+    }
+
+    [Fact]
+    public void AndFilter_WithEmptyArray_ShouldAlwaysMatch()
+    {
+        var filter = new BsonDocument("$and", new BsonArray()).ToFilterDefinition<Person>();
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.True(expr(new Person { Name = "Alice", Age = 30 }));
+        Assert.True(expr(new Person { Name = "Bob", Age = 10 }));
     }
     
     [Fact]
@@ -298,6 +318,16 @@ public class FilterToLinqTests
         Assert.False(expr(new Person { Name = "Alice", Age = 30 }));
         Assert.False(expr(new Person { Name = "Charlie", Age = 15 }));
         Assert.True(expr(new Person { Name = "Charlie", Age = 30 }));
+    }
+
+    [Fact]
+    public void NorFilter_WithEmptyArray_ShouldAlwaysMatch()
+    {
+        var filter = new BsonDocument("$nor", new BsonArray()).ToFilterDefinition<Person>();
+        var expr = _translator.Translate(filter).Compile();
+
+        Assert.True(expr(new Person { Name = "Alice", Age = 30 }));
+        Assert.True(expr(new Person { Name = "Bob", Age = 10 }));
     }
     
     [Fact]

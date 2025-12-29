@@ -2,10 +2,15 @@ using MongoDB.Bson;
 
 namespace MongoZen.FilterUtils.ExpressionTranslators;
 
+/// <summary>
+/// Base class for translating MongoDB filter operators into LINQ expressions.
+/// </summary>
 public abstract class FilterElementTranslatorBase : IFilterElementTranslator
 {
+    /// <inheritdoc />
     public abstract string Operator { get; }
 
+    /// <inheritdoc />
     public abstract Expression Handle(string field, BsonValue value, ParameterExpression param);
 
     protected Expression BuildSafeMemberAccess(Expression root, string field, out Expression? nullCheck)

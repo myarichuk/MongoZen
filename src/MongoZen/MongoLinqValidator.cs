@@ -2,11 +2,19 @@ using System.Text.RegularExpressions;
 
 namespace MongoZen;
 
+/// <summary>
+/// Validates LINQ expressions to ensure compatibility with the MongoDB LINQ provider.
+/// </summary>
 // TODO: review this for possible missed use cases (use Mongo driver docs!)
 public static class MongoLinqValidator
 {
     private static readonly Visitor ValidationVisitor = new();
 
+    /// <summary>
+    /// Validates a LINQ expression and throws when unsupported constructs are detected.
+    /// </summary>
+    /// <param name="expression">The expression tree to validate.</param>
+    /// <exception cref="NotSupportedException">Thrown when unsupported constructs are found.</exception>
     public static void ValidateAndThrowIfNeeded(Expression expression) => 
         ValidationVisitor.Visit(expression);
 

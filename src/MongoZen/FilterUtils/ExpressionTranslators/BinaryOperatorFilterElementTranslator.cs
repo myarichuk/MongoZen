@@ -2,6 +2,9 @@ using MongoDB.Bson;
 
 namespace MongoZen.FilterUtils.ExpressionTranslators;
 
+/// <summary>
+/// Base class for binary comparison operators (e.g. $eq, $lt).
+/// </summary>
 public abstract class BinaryOperatorFilterElementTranslator : FilterElementTranslatorBase
 {
     private readonly Func<Expression, Expression, Expression> _expressionBuilder;
@@ -9,6 +12,7 @@ public abstract class BinaryOperatorFilterElementTranslator : FilterElementTrans
     internal BinaryOperatorFilterElementTranslator(Func<Expression, Expression, Expression> expressionBuilder) => 
         _expressionBuilder = expressionBuilder ?? throw new ArgumentNullException(nameof(expressionBuilder));
 
+    /// <inheritdoc />
     public override Expression Handle(string field, BsonValue value, ParameterExpression param)
     {
         var dotNetValue = BsonTypeMapper.MapToDotNetValue(value); // TODO: null checks

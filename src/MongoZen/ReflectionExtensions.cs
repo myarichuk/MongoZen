@@ -19,6 +19,11 @@ internal sealed class DefaultIdConvention : IIdConvention
 
 public interface IIdConvention
 {
+    /// <summary>
+    /// Resolves the property that represents the entity identifier.
+    /// </summary>
+    /// <typeparam name="TEntity">The entity type.</typeparam>
+    /// <returns>The property info for the identifier, if found.</returns>
     PropertyInfo? ResolveIdProperty<TEntity>();
 }
 
@@ -55,6 +60,13 @@ internal static class EntityIdAccessor<TEntity>
 internal static class ReflectionExtensions
 {
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>
+    /// Tries to read the entity identifier using the configured convention.
+    /// </summary>
+    /// <typeparam name="TEntity">The entity type.</typeparam>
+    /// <param name="obj">The entity instance to read.</param>
+    /// <param name="id">When this method returns, contains the identifier if available.</param>
+    /// <returns><see langword="true"/> when an identifier is found; otherwise <see langword="false"/>.</returns>
     public static bool TryGetId<TEntity>(this TEntity? obj, out object? id)
     {
         if (obj is null)
@@ -68,6 +80,14 @@ internal static class ReflectionExtensions
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>
+    /// Gets the identifier for the specified entity or throws if none is present.
+    /// </summary>
+    /// <typeparam name="TEntity">The entity type.</typeparam>
+    /// <param name="obj">The entity instance to read.</param>
+    /// <returns>The identifier value.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="obj"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when no identifier is present.</exception>
     public static object GetId<TEntity>([DisallowNull] this TEntity obj)
     {
         ArgumentNullException.ThrowIfNull(obj);

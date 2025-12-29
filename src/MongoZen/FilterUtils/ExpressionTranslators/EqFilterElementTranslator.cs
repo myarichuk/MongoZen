@@ -8,5 +8,6 @@ public class EqFilterElementTranslator : BinaryOperatorFilterElementTranslator
     {
     }
 
+    /// <inheritdoc />
     public override string Operator => "$eq";
 }

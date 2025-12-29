@@ -1,11 +1,18 @@
-using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Driver;
 // ReSharper disable FlagArgument
 
 namespace MongoZen;
 
+/// <summary>
+/// Provides configuration for a <see cref="DbContext"/>, including MongoDB connection details and conventions.
+/// </summary>
 public class DbContextOptions
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DbContextOptions"/> class for a MongoDB-backed context.
+    /// </summary>
+    /// <param name="mongo">The MongoDB database instance.</param>
+    /// <param name="conventions">Optional conventions to adjust.</param>
     public DbContextOptions(IMongoDatabase mongo, Conventions? conventions = null)
     {
         UseInMemory = false;
@@ -13,12 +20,25 @@ public class DbContextOptions
         Conventions = conventions ?? new Conventions();
     }
     
+    /// <summary>
+    /// Gets or sets a value indicating whether the context should use in-memory storage.
+    /// </summary>
     public bool UseInMemory { get; set; }
 
+    /// <summary>
+    /// Gets or sets conventions that influence ID mapping and other behaviors.
+    /// </summary>
     public Conventions Conventions { get; set; }
 
+    /// <summary>
+    /// Gets or sets the MongoDB database used by the context.
+    /// </summary>
     public IMongoDatabase? Mongo { get; set; }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DbContextOptions"/> class for in-memory usage.
+    /// </summary>
+    /// <param name="conventions">Optional conventions to adjust.</param>
     public DbContextOptions(Conventions? conventions = null)
     {
         UseInMemory = true;

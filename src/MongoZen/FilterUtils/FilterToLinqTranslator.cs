@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Reflection;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -7,6 +6,10 @@ using MongoDB.Driver;
 // ReSharper disable MemberCanBePrivate.Global
 namespace MongoZen.FilterUtils;
 
+/// <summary>
+/// Translates MongoDB filters into LINQ expressions for a specific document type.
+/// </summary>
+/// <typeparam name="T">The document type.</typeparam>
 public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLinqTranslator
 {
     private static readonly RenderArgs<T> RenderArgs = new(BsonSerializer.LookupSerializer<T>(), BsonSerializer.SerializerRegistry);
@@ -74,9 +77,28 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
                     throw new NotSupportedException($"Logical operator '{key}' must be an array but was {value?.BsonType}.\nOffending value: {value}");
                 }
 
-                var subExprs = new List<Expression>();
-                foreach (var subDoc in array.Cast<BsonDocument>())
+                if (array.Count == 0)
                 {
+                    var emptyExpression = key switch
+                    {
+                        "$or" => Expression.Constant(false),
+                        "$and" => Expression.Constant(true),
+                        "$nor" => Expression.Constant(true),
+                        _ => throw new NotSupportedException($"Logical operator '{key}' is not supported.\nDocument: {doc}"),
+                    };
+
+                    expressions.Add(emptyExpression);
+                    continue;
+                }
+
+                var subExprs = new List<Expression>();
+                foreach (var subValue in array)
+                {
+                    if (subValue is not BsonDocument subDoc)
+                    {
+                        throw new NotSupportedException($"Logical operator '{key}' requires document elements but was {subValue.BsonType}.\nOffending value: {subValue}");
+                    }
+
                     var subExpr = ParseDocument(subDoc, param);
                     subExprs.Add(subExpr);
                 }
@@ -136,5 +158,6 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
             expressions.Aggregate(Expression.AndAlso);
     }
 
+    /// <inheritdoc />
     public Expression Translate(BsonDocument filter, ParameterExpression parameter) => ParseDocument(filter, parameter);
 }

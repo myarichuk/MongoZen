@@ -8,5 +8,6 @@ public class NEqFilterElementTranslator : BinaryOperatorFilterElementTranslator
     {
     }
 
+    /// <inheritdoc />
     public override string Operator => "$ne";
 }

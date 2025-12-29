@@ -6,6 +6,10 @@ using MongoDB.Driver;
 
 namespace MongoZen;
 
+/// <summary>
+/// Tracks pending changes for a DbSet and applies them as a unit.
+/// </summary>
+/// <typeparam name="TEntity">The entity type.</typeparam>
 public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 {
     private readonly Conventions _conventions;
@@ -15,6 +19,11 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     private readonly List<TEntity> _removed = [];
     private readonly List<TEntity> _updated = [];
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="MutableDbSet{TEntity}"/> class.
+    /// </summary>
+    /// <param name="baseSet">The underlying DbSet to operate on.</param>
+    /// <param name="conventions">Optional conventions for ID resolution.</param>
     public MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
     {
         _baseSet = baseSet;
@@ -23,18 +32,25 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         EntityIdAccessor<TEntity>.SetConvention(_conventions.IdConvention);
     }
 
+    /// <inheritdoc />
     public void Add(TEntity entity) => _added.Add(entity);
 
+    /// <inheritdoc />
     public void Remove(TEntity entity) => _removed.Add(entity);
 
+    /// <inheritdoc />
     public void Update(TEntity entity) => _updated.Add(entity);
 
+    /// <inheritdoc />
     public IEnumerable<TEntity> GetAdded() => _added;
 
+    /// <inheritdoc />
     public IEnumerable<TEntity> GetRemoved() => _removed;
 
+    /// <inheritdoc />
     public IEnumerable<TEntity> GetUpdated() => _updated;
 
+    /// <inheritdoc />
     public async Task CommitAsync()
     {
         switch (_baseSet)
@@ -166,17 +182,23 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     }
 
     // IQueryable passthrough
+    /// <inheritdoc />
     public IEnumerator<TEntity> GetEnumerator() => _baseSet.GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
+    /// <inheritdoc />
     public Type ElementType => _baseSet.ElementType;
 
+    /// <inheritdoc />
     public Expression Expression => _baseSet.Expression;
 
+    /// <inheritdoc />
     public IQueryProvider Provider => _baseSet.Provider;
 
+    /// <inheritdoc />
     public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter) => _baseSet.QueryAsync(filter);
 
+    /// <inheritdoc />
     public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter) => _baseSet.QueryAsync(filter);
 }

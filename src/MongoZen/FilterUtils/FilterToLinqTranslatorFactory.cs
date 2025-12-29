@@ -2,13 +2,26 @@ using System.Collections.Concurrent;
 
 namespace MongoZen.FilterUtils;
 
+/// <summary>
+/// Provides cached factory methods for creating filter-to-LINQ translators.
+/// </summary>
 public static class FilterToLinqTranslatorFactory
 {
     private static readonly ConcurrentDictionary<Type, IFilterToLinqTranslator> TranslatorCache = new();
 
+    /// <summary>
+    /// Creates a translator for the specified document type.
+    /// </summary>
+    /// <typeparam name="TDoc">The document type.</typeparam>
+    /// <returns>The translator instance.</returns>
     public static FilterToLinqTranslator<TDoc> Create<TDoc>() =>
         (FilterToLinqTranslator<TDoc>)Create(typeof(TDoc));
 
+    /// <summary>
+    /// Creates a translator for the specified document type.
+    /// </summary>
+    /// <param name="docType">The document type.</param>
+    /// <returns>The translator instance.</returns>
     public static IFilterToLinqTranslator Create(Type docType) =>
         TranslatorCache.GetOrAdd(docType, CreateTranslatorForType);
 

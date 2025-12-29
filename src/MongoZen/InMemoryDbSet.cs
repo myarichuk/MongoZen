@@ -1,12 +1,14 @@
 using System.Collections;
-using System.Reflection;
 using System.Text.Json;
-using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 using MongoZen.FilterUtils;
 
 namespace MongoZen;
 
+/// <summary>
+/// Provides an in-memory implementation of <see cref="IDbSet{T}"/> for testing and local evaluation.
+/// </summary>
+/// <typeparam name="T">The entity type.</typeparam>
 public class InMemoryDbSet<T> : IDbSet<T>
 {
     private readonly List<T> _items;
@@ -36,6 +38,7 @@ public class InMemoryDbSet<T> : IDbSet<T>
         return JsonSerializer.Deserialize<T>(json)!;
     }
 
+    /// <inheritdoc />
     public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter)
     {
         var expr = _translator.Translate(filter);
@@ -43,6 +46,7 @@ public class InMemoryDbSet<T> : IDbSet<T>
         return ValueTask.FromResult((IEnumerable<T>)result);
     }
 
+    /// <inheritdoc />
     public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter)
     {
         var result = _items.AsQueryable()
@@ -54,13 +58,17 @@ public class InMemoryDbSet<T> : IDbSet<T>
         return ValueTask.FromResult<IEnumerable<T>>(result);
     }
 
+    /// <inheritdoc />
     public IEnumerator<T> GetEnumerator() => _items.AsQueryable().GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
+    /// <inheritdoc />
     public Type ElementType => _items.AsQueryable().ElementType;
 
+    /// <inheritdoc />
     public Expression Expression => _items.AsQueryable().Expression;
 
+    /// <inheritdoc />
     public IQueryProvider Provider => _items.AsQueryable().Provider;
 }

@@ -137,4 +137,31 @@ public static class DbContextSessionExtensions
 
         await test.RunAsync();
     }
+
+    [Fact]
+    public async Task DoesNotGenerateForAbstractDbContext()
+    {
+        var source = @"
+using MongoZen;
+
+public abstract class BaseContext : DbContext
+{
+    protected BaseContext(DbContextOptions options) : base(options) {}
+}
+";
+
+        var test = new CSharpSourceGeneratorTest<DbContextExtensionsGenerator, XUnitVerifier>
+        {
+            TestState =
+            {
+                Sources = { source },
+                ReferenceAssemblies = ReferenceAssemblies.Net.Net80,
+            },
+        };
+
+        test.TestState.AdditionalReferences.Add(
+            MetadataReference.CreateFromFile(typeof(DbContext).Assembly.Location));
+
+        await test.RunAsync();
+    }
 }

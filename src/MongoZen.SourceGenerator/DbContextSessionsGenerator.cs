@@ -19,6 +19,7 @@ namespace MongoZen.SourceGenerator;
 [Generator]
 public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 {
+    /// <inheritdoc />
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var dbContextSymbols = context.SyntaxProvider

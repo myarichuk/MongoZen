@@ -4,8 +4,10 @@ namespace MongoZen.FilterUtils.ExpressionTranslators;
 
 public class ExistsFilterElementTranslator : IFilterElementTranslator
 {
+    /// <inheritdoc />
     public string Operator => "$exists";
 
+    /// <inheritdoc />
     public Expression Handle(string field, BsonValue value, ParameterExpression param)
     {
         throw new NotSupportedException(

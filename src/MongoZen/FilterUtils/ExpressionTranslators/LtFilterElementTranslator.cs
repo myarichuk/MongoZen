@@ -7,5 +7,6 @@ public class LtFilterElementTranslator : BinaryOperatorFilterElementTranslator
     {
     }
 
+    /// <inheritdoc />
     public override string Operator => "$lt";
 }
