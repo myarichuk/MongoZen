@@ -5,5 +5,5 @@ public abstract class DbContextSession<TDbContext>
 {
     protected readonly TDbContext _dbContext;
 
-    public DbContextSession(TDbContext dbContext) => _dbContext = dbContext;
+    protected DbContextSession(TDbContext dbContext) => _dbContext = dbContext;
 }

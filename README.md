@@ -15,9 +15,6 @@ is a lightweight, developer-friendly library that provides an **Entity Framework
 - **Source Generators**:
     - Simplifies repetitive tasks such as entity mapping.
 
-- **Comprehensive Testing**:
-    - Robust test coverage with integration and unit tests.
-
 - **CI/CD and Precommit Hook Integration**:
     - StyleCop for consistent code formatting.
     - GitHub Actions for automated builds and releases.

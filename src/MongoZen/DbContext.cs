@@ -37,7 +37,8 @@ public abstract class DbContext: IDisposable
         // sanity check
         if (!props.Any())
         {
-            throw new InvalidOperationException("No IDbSet<T> properties defined. This is probably a bug.");
+            // It's valid to have a context without DbSets, e.g. for testing or base classes.
+            return;
         }
 
         foreach (var prop in props)
