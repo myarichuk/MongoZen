@@ -35,15 +35,35 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
     public IEnumerable<TEntity> GetUpdated() => _updated;
 
-    public async Task CommitAsync()
+    public async Task CommitAsync(TransactionContext transaction)
     {
+        if (!transaction.IsActive)
+        {
+            throw new InvalidOperationException("A transaction is required to commit changes. Call BeginTransaction() on the session and pass the transaction to CommitAsync().");
+        }
+
         switch (_baseSet)
         {
             case InMemoryDbSet<TEntity> memSet:
+                if (!transaction.IsInMemoryTransaction)
+                {
+                    throw new InvalidOperationException("In-memory commits require an in-memory transaction.");
+                }
+
                 await InternalCommitAsync(memSet);
                 break;
             case DbSet<TEntity> mongoSet:
-                await InternalCommitAsync(mongoSet);
+                if (transaction.Session == null)
+                {
+                    throw new InvalidOperationException("MongoDB commits require a session-bound transaction.");
+                }
+
+                if (!transaction.Session.IsInTransaction)
+                {
+                    throw new InvalidOperationException("MongoDB commits require an active transaction.");
+                }
+
+                await InternalCommitAsync(mongoSet, transaction.Session);
                 break;
             default:
                 throw new NotSupportedException($"The type {_baseSet.GetType()} is not supported.");
@@ -54,7 +74,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         _updated.Clear();
     }
 
-    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet)
+    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle session)
     {
         var collection = mongoSet.Collection;
 
@@ -66,7 +86,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
             }
 
             var filter = Builders<TEntity>.Filter.Eq("_id", id);
-            var result = await collection.ReplaceOneAsync(filter, entity);
+            var result = await collection.ReplaceOneAsync(session, filter, entity);
 
             // this means we are missing this document, so we mimic MongoDB driver and add it
             if (result.MatchedCount != 1 || result.ModifiedCount != 1)
@@ -91,12 +111,12 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 .Where(x => x != null)
                 .Cast<TEntity>();
 
-            await collection.InsertManyAsync(uniqueDocs);
+            await collection.InsertManyAsync(session, uniqueDocs);
 
             foreach (var docGroup in addedWithUniqueIds.Where(group => group.Count() > 1))
             {
                 var replacementDoc = docGroup.Last();
-                await collection.ReplaceOneAsync(Builders<TEntity>.Filter.Eq("_id", docGroup.Key), replacementDoc);
+                await collection.ReplaceOneAsync(session, Builders<TEntity>.Filter.Eq("_id", docGroup.Key), replacementDoc);
             }
         }
 
@@ -108,7 +128,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 .ToList();
 
             var filter = Builders<TEntity>.Filter.In("_id", ids);
-            await collection.DeleteManyAsync(filter); // in theory, could be non-existing IDs here
+            await collection.DeleteManyAsync(session, filter);
         }
     }
 
@@ -179,4 +199,10 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter) => _baseSet.QueryAsync(filter);
 
     public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter) => _baseSet.QueryAsync(filter);
+
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session)
+        => _baseSet.QueryAsync(filter, session);
+
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session)
+        => _baseSet.QueryAsync(filter, session);
 }

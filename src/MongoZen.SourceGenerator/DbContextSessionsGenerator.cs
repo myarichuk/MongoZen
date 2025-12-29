@@ -126,11 +126,26 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.AppendLine();
         sb.Append(indent2).AppendLine("public async ValueTask SaveChangesAsync()");
         sb.Append(indent2).AppendLine("{");
+        sb.Append(indent2).AppendLine("    EnsureTransactionActive();");
+        sb.Append(indent2).AppendLine("    try");
+        sb.Append(indent2).AppendLine("    {");
         foreach (var prop in mutableProps)
         {
-            sb.Append(indent2).Append("    await ").Append(prop.Name).AppendLine(".CommitAsync();");
+            sb.Append(indent2).Append("        await ").Append(prop.Name).AppendLine(".CommitAsync(Transaction);");
         }
 
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("        await CommitTransactionAsync();");
+        sb.Append(indent2).AppendLine("    }");
+        sb.Append(indent2).AppendLine("    catch");
+        sb.Append(indent2).AppendLine("    {");
+        sb.Append(indent2).AppendLine("        if (Transaction.IsActive)");
+        sb.Append(indent2).AppendLine("        {");
+        sb.Append(indent2).AppendLine("            await AbortTransactionAsync();");
+        sb.Append(indent2).AppendLine("        }");
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("        throw;");
+        sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
 
         sb.Append(indent).AppendLine("}");
