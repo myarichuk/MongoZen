@@ -7,8 +7,6 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 
-// ReSharper disable ComplexConditionExpression
-
 namespace MongoZen.SourceGenerator;
 
 /// <summary>
@@ -41,15 +39,28 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
             .Where(static symbol => symbol is not null)!
             .Select(static (symbol, _) => symbol!);
 
-        context.RegisterSourceOutput(dbContextSymbols, static (spc, ctxSymbol) =>
+        var compilationAndClasses = context.CompilationProvider.Combine(dbContextSymbols.Collect());
+
+        context.RegisterSourceOutput(compilationAndClasses, static (spc, source) =>
         {
-            spc.AddSource(
-                $"{ctxSymbol.Name}Session.g.cs",
-                SourceText.From(GenerateSessionClass(ctxSymbol), Encoding.UTF8));
+            var (compilation, classes) = source;
+            var iDbSetSymbol = compilation.GetTypeByMetadataName("MongoZen.IDbSet`1");
+
+            if (iDbSetSymbol == null)
+            {
+                return;
+            }
+
+            foreach (var ctxSymbol in classes)
+            {
+                spc.AddSource(
+                    $"{ctxSymbol.Name}Session.g.cs",
+                    SourceText.From(GenerateSessionClass(ctxSymbol, iDbSetSymbol), Encoding.UTF8));
+            }
         });
     }
 
-    private static string GenerateSessionClass(INamedTypeSymbol ctxSymbol)
+    private static string GenerateSessionClass(INamedTypeSymbol ctxSymbol, INamedTypeSymbol iDbSetSymbol)
     {
         var ns = ctxSymbol.ContainingNamespace.IsGlobalNamespace
             ? null
@@ -74,63 +85,50 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(" : MongoZen.DbContextSession<").Append(ctxSymbol.ToDisplayString()).AppendLine(">");
         sb.Append(indent).AppendLine("{");
 
-        var propBlock = new StringBuilder(); // Add before loop
+        var mutableProps = new List<(string Name, string EntityType)>();
 
-        sb.Append(propBlock); // Then insert just before the constructor
+        foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
+        {
+            if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
+                SymbolEqualityComparer.Default.Equals(namedType.ConstructedFrom, iDbSetSymbol))
+            {
+                 var entityType = namedType.TypeArguments[0].ToDisplayString();
+                 mutableProps.Add((member.Name, entityType));
+            }
+        }
 
         // Constructor
         sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
           .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext) : base(dbContext)");
         sb.Append(indent2).AppendLine("{");
 
-        var mutablePropNames = new List<string>();
-
-        foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
+        foreach (var prop in mutableProps)
         {
-            if (!member.Type.ToDisplayString().Contains("IDbSet<"))
-            {
-                continue;
-            }
-
-            var entityType = ((INamedTypeSymbol)member.Type).TypeArguments[0];
-            var propName = member.Name; // DbSet property names
-            var sessPropName = propName;
-
-            // generate field initialiser later
-            sb.Append(indent2).Append("    ").Append(sessPropName)
+            sb.Append(indent2).Append("    ").Append(prop.Name)
               .Append(" = new MongoZen.MutableDbSet<")
-              .Append(entityType.ToDisplayString()).Append(">(")
-              .Append("_dbContext.").Append(propName).Append(", ")
+              .Append(prop.EntityType).Append(">(")
+              .Append("_dbContext.").Append(prop.Name).Append(", ")
               .Append("_dbContext.Options.Conventions")
               .AppendLine(");");
-
-            mutablePropNames.Add(sessPropName);
         }
 
         sb.Append(indent2).AppendLine("}");
         sb.AppendLine();
-        foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
+
+        foreach (var prop in mutableProps)
         {
-            if (!member.Type.ToDisplayString().Contains("IDbSet<"))
-            {
-                continue;
-            }
-
-            var entityType = ((INamedTypeSymbol)member.Type).TypeArguments[0];
-            var propName = member.Name;
-
             sb.Append(indent2).Append("public MongoZen.IMutableDbSet<")
-              .Append(entityType.ToDisplayString()).Append("> ")
-              .Append(propName).AppendLine(" { get; }");
+              .Append(prop.EntityType).Append("> ")
+              .Append(prop.Name).AppendLine(" { get; }");
         }
 
         // SaveChangesAsync
         sb.AppendLine();
         sb.Append(indent2).AppendLine("public async ValueTask SaveChangesAsync()");
         sb.Append(indent2).AppendLine("{");
-        foreach (var m in mutablePropNames)
+        foreach (var prop in mutableProps)
         {
-            sb.Append(indent2).Append("    await ").Append(m).AppendLine(".CommitAsync();");
+            sb.Append(indent2).Append("    await ").Append(prop.Name).AppendLine(".CommitAsync();");
         }
 
         sb.Append(indent2).AppendLine("}");

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Text;
 using Microsoft.CodeAnalysis;
@@ -53,13 +54,13 @@ public sealed class DbContextExtensionsGenerator : IIncrementalGenerator
 
         foreach (var type in dbContextTypes)
         {
-            var contextName = type.Name;
-            var sessionName = contextName + "Session";
+            var contextFullName = type.ToDisplayString();
+            var sessionFullName = $"{contextFullName}Session";
 
-            sb.Append("    public static ").Append(sessionName)
-              .Append(" StartSession(this ").Append(contextName)
+            sb.Append("    public static ").Append(sessionFullName)
+              .Append(" StartSession(this ").Append(contextFullName)
               .AppendLine(" context)");
-            sb.AppendLine("        => new " + sessionName + "(context);");
+            sb.AppendLine($"        => new {sessionFullName}(context);");
             sb.AppendLine();
         }
 
