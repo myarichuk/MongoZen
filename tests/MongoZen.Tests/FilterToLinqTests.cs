@@ -533,11 +533,11 @@ public class FilterToLinqTests
 
     public class Order
     {
-        public string Id { get; set; }
+        public string Id { get; set; } = null!;
 
-        public object Metadata { get; set; }
+        public object Metadata { get; set; } = null!;
 
-        public List<OrderLine> Lines { get; set; }
+        public List<OrderLine> Lines { get; set; } = null!;
     }
 
     public class OrderLine
@@ -559,7 +559,7 @@ public class FilterToLinqTests
             Price = price;
         }
 
-        public string Product { get; set; }
+        public string Product { get; set; } = null!;
 
         public int Quantity { get; set; }
 
@@ -568,7 +568,7 @@ public class FilterToLinqTests
 
     private class Person
     {
-        public string Name { get; init; }
+        public string Name { get; init; } = null!;
 
         public int Age { get; init; }
 
@@ -577,13 +577,13 @@ public class FilterToLinqTests
 
     private class Address
     {
-        public string City { get; init; }
+        public string City { get; init; } = null!;
     }
 
     private class PersonWithAddress
     {
-        public string Name { get; set; }
+        public string Name { get; set; } = null!;
 
-        public Address Address { get; init; }
+        public Address Address { get; init; } = null!;
     }
 }

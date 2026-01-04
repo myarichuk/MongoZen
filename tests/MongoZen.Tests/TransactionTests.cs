@@ -14,7 +14,7 @@ public class TransactionTests : IntegrationTestBase
 
     private class TestDbContext : DbContext
     {
-        public IDbSet<User> Users { get; set; }
+        public IDbSet<User> Users { get; set; } = null!;
 
         public TestDbContext(DbContextOptions options) : base(options)
         {

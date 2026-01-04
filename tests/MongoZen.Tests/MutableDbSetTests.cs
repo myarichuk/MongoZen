@@ -16,7 +16,7 @@ public class MutableDbSetTests: IntegrationTestBase
 
     private class TestDbContext : DbContext
     {
-        public IDbSet<User> Users { get; set; }
+        public IDbSet<User> Users { get; set; } = null!;
 
         public TestDbContext(DbContextOptions options) : base(options)
         {
@@ -64,7 +64,7 @@ public class MutableDbSetTests: IntegrationTestBase
     [Fact]
     public async Task Can_Add_And_Save_Changes_DB()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database));
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
         var mutableSet = new MutableDbSet<User>(ctx.Users);
 
         mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
@@ -82,7 +82,7 @@ public class MutableDbSetTests: IntegrationTestBase
     [Fact]
     public async Task Can_Add_Update_Remove_DB()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database));
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
         var baseSet = (DbSet<User>)ctx.Users;
 
         await baseSet.Collection.InsertManyAsync(new[]
@@ -130,7 +130,7 @@ public class MutableDbSetTests: IntegrationTestBase
     [Fact]
     public async Task Can_Handle_Multiple_Adds_With_Same_Id_DB()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database));
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
         var baseSet = (DbSet<User>)ctx.Users;
 
         await baseSet.Collection.DeleteManyAsync(FilterDefinition<User>.Empty); // just in case
@@ -169,7 +169,7 @@ public class MutableDbSetTests: IntegrationTestBase
     [Fact]
     public async Task Update_Before_Add_Should_Apply_Add_DB()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database));
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
         var baseSet = (DbSet<User>)ctx.Users;
 
         await baseSet.Collection.DeleteManyAsync(FilterDefinition<User>.Empty);
@@ -247,7 +247,7 @@ public class MutableDbSetTests: IntegrationTestBase
     [Fact]
     public async Task Can_Handle_Mixed_Mutations_DB()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database));
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
         var baseSet = (DbSet<User>)ctx.Users;
 
         await baseSet.Collection.DeleteManyAsync(FilterDefinition<User>.Empty);
