@@ -7,10 +7,10 @@ namespace MongoZen.Tests;
 public class IntegrationTestBase: IAsyncLifetime
 {
     private readonly MongoRunnerOptions _options;
-    private IMongoRunner _runner;
-    private string _databaseName;
+    private IMongoRunner _runner = null!;
+    private string _databaseName = null!;
     protected IMongoDatabase? Database;
-    private MongoClient _mongoClient;
+    private MongoClient _mongoClient = null!;
 
     protected MongoClient Client => _mongoClient;
 

@@ -6,7 +6,7 @@ public class TryGetIdTests
 {
     private class NoIdClass
     {
-        public string Name { get; set; }
+        public string Name { get; set; } = "";
     }
 
     private class IdByName
@@ -17,7 +17,7 @@ public class TryGetIdTests
     private class BsonIdClass
     {
         [BsonId]
-        public string CustomId { get; set; } = "abc123";
+        public string? CustomId { get; set; } = "abc123";
     }
 
     private class BothIdClass
@@ -31,7 +31,7 @@ public class TryGetIdTests
     [Fact]
     public void TryGetId_ShouldReturnFalse_WhenObjectIsNull()
     {
-        object obj = null;
+        object? obj = null;
 
         var result = obj.TryGetId(out var id);
 

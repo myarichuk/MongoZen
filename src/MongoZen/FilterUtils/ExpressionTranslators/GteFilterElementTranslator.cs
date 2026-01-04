@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+
 namespace MongoZen.FilterUtils.ExpressionTranslators;
 
 public class GteFilterElementTranslator : BinaryOperatorFilterElementTranslator

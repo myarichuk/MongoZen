@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Linq.Expressions;
 
 namespace MongoZen.FilterUtils;
 

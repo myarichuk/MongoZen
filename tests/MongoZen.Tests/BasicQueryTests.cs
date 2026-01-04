@@ -9,7 +9,7 @@ public class DbContextQueryTests : IntegrationTestBase
     private class User
     {
         [BsonId]
-        public string Id { get; set; }
+        public string Id { get; set; } = null!;
 
         public string? Name { get; set; }
 
@@ -18,7 +18,7 @@ public class DbContextQueryTests : IntegrationTestBase
 
     private class TestDbContext : DbContext
     {
-        public IDbSet<User> Users { get; set; }
+        public IDbSet<User> Users { get; set; } = null!;
 
         public TestDbContext(DbContextOptions options) : base(options)
         {
@@ -27,7 +27,7 @@ public class DbContextQueryTests : IntegrationTestBase
 
     private async Task InsertTestUsersAsync()
     {
-        var collection = Database.GetCollection<User>("Users");
+        var collection = Database!.GetCollection<User>("Users");
         await collection.DeleteManyAsync(FilterDefinition<User>.Empty); // clean slate
         await collection.InsertManyAsync([
             new User { Id = "1", Name = "Alice", Age = 30 },
@@ -46,7 +46,7 @@ public class DbContextQueryTests : IntegrationTestBase
     {
         await InsertTestUsersAsync();
 
-        using var ctx = new TestDbContext(new DbContextOptions(Database));
+        using var ctx = new TestDbContext(new DbContextOptions(Database!));
 
         var result = await ctx.Users.QueryAsync(u => u.Age > 35);
 
@@ -72,7 +72,7 @@ public class DbContextQueryTests : IntegrationTestBase
     {
         await InsertTestUsersAsync();
 
-        using var ctx = new TestDbContext(new DbContextOptions(Database));
+        using var ctx = new TestDbContext(new DbContextOptions(Database!));
 
         var filter = Builders<User>.Filter.Gt(u => u.Age, 35);
         var result = await ctx.Users.QueryAsync(filter);
@@ -100,7 +100,7 @@ public class DbContextQueryTests : IntegrationTestBase
     {
         await InsertTestUsersAsync();
 
-        using var ctx = new TestDbContext(new DbContextOptions(Database));
+        using var ctx = new TestDbContext(new DbContextOptions(Database!));
 
         var dbSet = (DbSet<User>)ctx.Users;
         await dbSet.RemoveById("1");

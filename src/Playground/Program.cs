@@ -64,9 +64,12 @@ foreach (var p in olderThan30People)
 
 public class MyDbContext : DbContext
 {
-    public IDbSet<Person> People { get; set; }
+    public IDbSet<Person> People { get; set; } = null!;
 
-    public MyDbContext(DbContextOptions options) : base(options) { }
+    public MyDbContext(DbContextOptions options)
+        : base(options)
+    {
+    }
 }
 
 // Define the Person entity with ID handling
@@ -74,9 +77,9 @@ public class MyDbContext : DbContext
 public class Person
 {
     [BsonId]
-    public string Id { get; set; }
+    public string Id { get; set; } = null!;
 
-    public string Name { get; set; }
+    public string Name { get; set; } = null!;
 
     public int Age { get; set; }
 }

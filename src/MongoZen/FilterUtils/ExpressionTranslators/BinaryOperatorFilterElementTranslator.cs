@@ -6,7 +6,7 @@ public abstract class BinaryOperatorFilterElementTranslator : FilterElementTrans
 {
     private readonly Func<Expression, Expression, Expression> _expressionBuilder;
 
-    internal BinaryOperatorFilterElementTranslator(Func<Expression, Expression, Expression> expressionBuilder) => 
+    internal BinaryOperatorFilterElementTranslator(Func<Expression, Expression, Expression> expressionBuilder) =>
         _expressionBuilder = expressionBuilder ?? throw new ArgumentNullException(nameof(expressionBuilder));
 
     public override Expression Handle(string field, BsonValue value, ParameterExpression param)
