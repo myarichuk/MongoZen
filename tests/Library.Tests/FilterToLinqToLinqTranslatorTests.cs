@@ -91,8 +91,7 @@ public class FilterToLinqToLinqTranslatorTests
     {
         var filter = Builders<Person>.Filter.And(
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Gt(p => p.Age, 25)
-        );
+            Builders<Person>.Filter.Gt(p => p.Age, 25));
 
         var expr = _translator.Translate(filter).Compile();
 
@@ -175,8 +174,7 @@ public class FilterToLinqToLinqTranslatorTests
     {
         var filter = Builders<Person>.Filter.Or(
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Lt(p => p.Age, 20)
-        );
+            Builders<Person>.Filter.Lt(p => p.Age, 20));
 
         var expr = _translator.Translate(filter).Compile();
 
@@ -190,8 +188,7 @@ public class FilterToLinqToLinqTranslatorTests
     {
         var filter = Builders<Person>.Filter.And(
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Lt(p => p.Age, 20)
-        );
+            Builders<Person>.Filter.Lt(p => p.Age, 20));
 
         var expr = _translator.Translate(filter).Compile();
 
@@ -220,8 +217,7 @@ public class FilterToLinqToLinqTranslatorTests
     {
         var filter = Builders<Person>.Filter.And(
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Gte(p => p.Age, 25)
-        );
+            Builders<Person>.Filter.Gte(p => p.Age, 25));
         var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 30 }));
@@ -235,8 +231,7 @@ public class FilterToLinqToLinqTranslatorTests
     {
         var filter = Builders<Person>.Filter.Or(
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Lt(p => p.Age, 20)
-        );
+            Builders<Person>.Filter.Lt(p => p.Age, 20));
         var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 50 }));
@@ -273,9 +268,7 @@ public class FilterToLinqToLinqTranslatorTests
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
             Builders<Person>.Filter.Or(
                 Builders<Person>.Filter.Lt(p => p.Age, 20),
-                Builders<Person>.Filter.Eq(p => p.Age, 30)
-            )
-        );
+                Builders<Person>.Filter.Eq(p => p.Age, 30)));
         var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 30 }));
@@ -307,8 +300,7 @@ public class FilterToLinqToLinqTranslatorTests
 
         var filter = Builders<Order>.Filter.ElemMatch(
             o => o.Lines,
-            Builders<OrderLine>.Filter.Eq(l => l.Product, "Apples")
-        );
+            Builders<OrderLine>.Filter.Eq(l => l.Product, "Apples"));
 
         var expr = translator.Translate(filter).Compile();
 
@@ -339,9 +331,7 @@ public class FilterToLinqToLinqTranslatorTests
             o => o.Lines,
             Builders<OrderLine>.Filter.And(
                 Builders<OrderLine>.Filter.Gt(l => l.Quantity, 5),
-                Builders<OrderLine>.Filter.Lt(l => l.Price, 10)
-            )
-        );
+                Builders<OrderLine>.Filter.Lt(l => l.Price, 10)));
 
         var expr = translator.Translate(filter).Compile();
 
@@ -376,9 +366,7 @@ public class FilterToLinqToLinqTranslatorTests
             o => o.Lines,
             Builders<OrderLine>.Filter.Or(
                 Builders<OrderLine>.Filter.Eq(l => l.Product, "Apples"),
-                Builders<OrderLine>.Filter.Gt(l => l.Quantity, 10)
-            )
-        );
+                Builders<OrderLine>.Filter.Gt(l => l.Quantity, 10)));
 
         var expr = translator.Translate(filter).Compile();
 
@@ -409,8 +397,7 @@ public class FilterToLinqToLinqTranslatorTests
 
         var filter = new BsonDocument("Lines", new BsonDocument(
             "$elemMatch",
-            new BsonDocument("Quantity", new BsonDocument("$mod", new BsonArray { 2, 0 }))
-        )).ToFilterDefinition<Order>();
+            new BsonDocument("Quantity", new BsonDocument("$mod", new BsonArray { 2, 0 })))).ToFilterDefinition<Order>();
 
         Assert.Throws<NotSupportedException>(() => translator.Translate(filter));
     }
