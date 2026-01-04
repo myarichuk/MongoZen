@@ -1,56 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Reflection;
 using System.Runtime.CompilerServices;
-using MongoDB.Bson.Serialization.Attributes;
 
 // ReSharper disable ComplexConditionExpression
 namespace MongoZen;
-
-internal sealed class DefaultIdConvention : IIdConvention
-{
-    public PropertyInfo? ResolveIdProperty<TEntity>()
-    {
-        var type = typeof(TEntity);
-        return type.GetProperties(BindingFlags.Instance | BindingFlags.Public)
-                   .FirstOrDefault(p => p.IsDefined(typeof(BsonIdAttribute), true) && p.CanRead)
-            ?? type.GetProperty("Id", BindingFlags.Instance | BindingFlags.Public);
-    }
-}
-
-public interface IIdConvention
-{
-    PropertyInfo? ResolveIdProperty<TEntity>();
-}
-
-internal static class GlobalIdConventionProvider
-{
-    public static IIdConvention Convention { get; private set; } = new DefaultIdConvention();
-}
-
-internal static class EntityIdAccessor<TEntity>
-{
-    internal static Func<TEntity, object?> Get { get; private set; } = Build();
-
-    internal static void SetConvention(IIdConvention convention) => Get = Build(convention);
-
-    private static Func<TEntity, object?> Build(IIdConvention? customResolver = null)
-    {
-        var prop = customResolver != null ?
-            customResolver.ResolveIdProperty<TEntity>() :
-            GlobalIdConventionProvider.Convention.ResolveIdProperty<TEntity>();
-
-        if (prop is null)
-        {
-            return _ => null;
-        }
-
-        var getter = prop.GetGetMethod()!
-            .CreateDelegate(typeof(Func<,>)
-                .MakeGenericType(typeof(TEntity), prop.PropertyType));
-
-        return entity => getter.DynamicInvoke(entity);
-    }
-}
 
 internal static class ReflectionExtensions
 {

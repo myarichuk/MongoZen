@@ -18,23 +18,27 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
     /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using a custom set of filter element translators.
     /// </summary>
     /// <param name="translators">The filter element translators keyed by the operator they handle.</param>
-    public FilterToLinqTranslator(IEnumerable<IFilterElementTranslator> translators) => 
+    public FilterToLinqTranslator(IEnumerable<IFilterElementTranslator> translators) =>
         _elementTranslators = new(
-            translators.ToDictionary(t => t.Operator), 
+            translators.ToDictionary(t => t.Operator),
             StringComparer.InvariantCultureIgnoreCase);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using default translators from the current MongoZen.
     /// </summary>
     public FilterToLinqTranslator()
-        : this(FilterElementTranslatorDiscovery.DiscoverFromMongoZen()) { }
+        : this(FilterElementTranslatorDiscovery.DiscoverFromMongoZen())
+    {
+    }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using translators discovered from the specified assemblies.
     /// </summary>
     /// <param name="assemblies">The assemblies to scan for filter element translators.</param>
     public FilterToLinqTranslator(params Assembly[] assemblies)
-        : this(FilterElementTranslatorDiscovery.DiscoverFrom(assemblies)) { }
+        : this(FilterElementTranslatorDiscovery.DiscoverFrom(assemblies))
+    {
+    }
 
     /// <summary>
     /// Translates a MongoDB filter definition into a LINQ-compatible expression.
@@ -115,7 +119,7 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
                         throw new NotSupportedException($"Operator '$regex' not supported.\nKey: {key}, Value: {value}");
                     }
 
-                    expressions.Add(translator.Handle(key, value, param));                    
+                    expressions.Add(translator.Handle(key, value, param));
                 }
                 else
                 {

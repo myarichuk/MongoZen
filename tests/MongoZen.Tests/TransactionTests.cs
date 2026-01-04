@@ -69,7 +69,7 @@ public class TransactionTests : IntegrationTestBase
     [Fact]
     public async Task Transaction_Commits_Changes_On_SaveChanges()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database));
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
         var session = new TestDbContextSession(ctx);
 
         session.BeginTransaction();
@@ -84,7 +84,7 @@ public class TransactionTests : IntegrationTestBase
     [Fact]
     public async Task Transaction_Abort_Rolls_Back_Writes()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database));
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
         using var clientSession = Client.StartSession();
         clientSession.StartTransaction();
 
@@ -102,7 +102,7 @@ public class TransactionTests : IntegrationTestBase
     [Fact]
     public async Task Transaction_Query_Sees_Uncommitted_Writes()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database));
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
         using var clientSession = Client.StartSession();
         clientSession.StartTransaction();
 
@@ -126,7 +126,7 @@ public class TransactionTests : IntegrationTestBase
     [Fact]
     public async Task SaveChanges_Without_Transaction_Throws()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database));
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
         var session = new TestDbContextSession(ctx);
 
         session.Users.Add(new User { Id = "1", Name = "Alice" });

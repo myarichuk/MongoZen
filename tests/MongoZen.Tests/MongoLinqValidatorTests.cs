@@ -57,7 +57,7 @@ public class MongoLinqValidatorTests
     public void TypeCast_ShouldThrow()
     {
         // ReSharper disable once RedundantCast --> needed for the test, its NOT redundant here!
-        Expression<Func<Person, bool>> expr = p => (object)p.Age == "30";
+        Expression<Func<Person, bool>> expr = p => (object)p.Age == (object)"30";
 
         var ex = Assert.Throws<NotSupportedException>(() =>
             MongoLinqValidator.ValidateAndThrowIfNeeded(expr));

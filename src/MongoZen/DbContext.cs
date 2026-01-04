@@ -1,4 +1,3 @@
-using System.Linq.Expressions;
 using MongoDB.Driver;
 // ReSharper disable ComplexConditionExpression
 // ReSharper disable VirtualMemberCallInConstructor
