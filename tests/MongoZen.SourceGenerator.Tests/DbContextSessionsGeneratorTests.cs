@@ -66,7 +66,7 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
 }
 ";
 
-            var test = new CSharpSourceGeneratorTest<SourceGenerator.DbContextSessionsGenerator, XUnitVerifier>
+            var test = new CSharpSourceGeneratorTest<DbContextSessionsGenerator, XUnitVerifier>
             {
                 TestState =
                 {
@@ -74,7 +74,7 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
                     ReferenceAssemblies = ReferenceAssemblies.Net.Net80,
                     GeneratedSources =
                     {
-                        (typeof(SourceGenerator.DbContextSessionsGenerator), "BloggingContextSession.g.cs",
+                        (typeof(DbContextSessionsGenerator), "BloggingContextSession.g.cs",
                             SourceText.From(expected, Encoding.UTF8)),
                     },
                 },
@@ -146,7 +146,7 @@ namespace MyNamespace
 }
 ";
 
-            var test = new CSharpSourceGeneratorTest<SourceGenerator.DbContextSessionsGenerator, XUnitVerifier>
+            var test = new CSharpSourceGeneratorTest<DbContextSessionsGenerator, XUnitVerifier>
             {
                 TestState =
                 {
@@ -154,7 +154,7 @@ namespace MyNamespace
                     ReferenceAssemblies = ReferenceAssemblies.Net.Net80,
                     GeneratedSources =
                     {
-                        (typeof(SourceGenerator.DbContextSessionsGenerator), "MyContextSession.g.cs",
+                        (typeof(DbContextSessionsGenerator), "MyContextSession.g.cs",
                             SourceText.From(expected, Encoding.UTF8)),
                     },
                 },

@@ -3,24 +3,25 @@ using MongoZen;
 
 namespace MongoZen.Tests;
 
-public class MutableDbSetTests: IntegrationTestBase
+public class MutableDbSetTests : IntegrationTestBase
 {
     private class User
     {
         public string Id { get; set; } = Guid.NewGuid().ToString();
 
-        public string Name { get; set; } = "";
+        public string Name { get; set; } = string.Empty;
 
         public int Age { get; set; }
     }
 
     private class TestDbContext : DbContext
     {
-        public IDbSet<User> Users { get; set; } = null!;
-
-        public TestDbContext(DbContextOptions options) : base(options)
+        public TestDbContext(DbContextOptions options)
+            : base(options)
         {
         }
+
+        public IDbSet<User> Users { get; set; } = null!;
     }
 
     [Fact]
@@ -88,7 +89,7 @@ public class MutableDbSetTests: IntegrationTestBase
         await baseSet.Collection.InsertManyAsync(new[]
         {
             new User { Id = "1", Name = "Alice", Age = 30 },
-            new User { Id = "2", Name = "Bob", Age = 40 }
+            new User { Id = "2", Name = "Bob", Age = 40 },
         });
 
         var mutableSet = new MutableDbSet<User>(ctx.Users);
@@ -255,7 +256,7 @@ public class MutableDbSetTests: IntegrationTestBase
         await baseSet.Collection.InsertManyAsync(new[]
         {
             new User { Id = "1", Name = "A", Age = 10 },
-            new User { Id = "2", Name = "B", Age = 20 }
+            new User { Id = "2", Name = "B", Age = 20 },
         });
 
         var mutableSet = new MutableDbSet<User>(ctx.Users);

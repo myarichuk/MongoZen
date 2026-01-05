@@ -4,7 +4,7 @@ using MongoDB.Driver;
 
 namespace MongoZen.Tests;
 
-public class IntegrationTestBase: IAsyncLifetime
+public class IntegrationTestBase : IAsyncLifetime
 {
     private readonly MongoRunnerOptions _options;
     private IMongoRunner _runner = null!;

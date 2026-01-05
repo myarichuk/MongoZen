@@ -4,7 +4,7 @@ using MongoZen;
 
 namespace MongoZen.Tests;
 
-public class DbContextQueryTests : IntegrationTestBase
+public class BasicQueryTests : IntegrationTestBase
 {
     private class User
     {
@@ -20,7 +20,8 @@ public class DbContextQueryTests : IntegrationTestBase
     {
         public IDbSet<User> Users { get; set; } = null!;
 
-        public TestDbContext(DbContextOptions options) : base(options)
+        public TestDbContext(DbContextOptions options)
+            : base(options)
         {
         }
     }
@@ -29,10 +30,11 @@ public class DbContextQueryTests : IntegrationTestBase
     {
         var collection = Database!.GetCollection<User>("Users");
         await collection.DeleteManyAsync(FilterDefinition<User>.Empty); // clean slate
-        await collection.InsertManyAsync([
+        await collection.InsertManyAsync(new[]
+        {
             new User { Id = "1", Name = "Alice", Age = 30 },
-            new User { Id = "2", Name = "Bob", Age = 40 }
-        ]);
+            new User { Id = "2", Name = "Bob", Age = 40 },
+        });
     }
 
     private static void InsertInMemoryTestUsers(TestDbContext ctx)

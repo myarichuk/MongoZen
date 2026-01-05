@@ -1,7 +1,7 @@
 ﻿using EphemeralMongo;
-using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 using MongoZen;
+using Playground;
 
 var options = new MongoRunnerOptions
 {
@@ -60,26 +60,4 @@ Console.WriteLine("Queried in 'People' collection for people older than 30:");
 foreach (var p in olderThan30People)
 {
     Console.WriteLine($"Id: {p.Id}, Name: {p.Name}, Age: {p.Age}");
-}
-
-public class MyDbContext : DbContext
-{
-    public IDbSet<Person> People { get; set; } = null!;
-
-    public MyDbContext(DbContextOptions options)
-        : base(options)
-    {
-    }
-}
-
-// Define the Person entity with ID handling
-[BsonIgnoreExtraElements]
-public class Person
-{
-    [BsonId]
-    public string Id { get; set; } = null!;
-
-    public string Name { get; set; } = null!;
-
-    public int Age { get; set; }
 }

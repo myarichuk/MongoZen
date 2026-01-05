@@ -9,21 +9,25 @@ public class TransactionTests : IntegrationTestBase
     {
         public string? Id { get; set; }
 
-        public string Name { get; set; } = "";
+        public string Name { get; set; } = string.Empty;
     }
+
+
 
     private class TestDbContext : DbContext
     {
         public IDbSet<User> Users { get; set; } = null!;
 
-        public TestDbContext(DbContextOptions options) : base(options)
+        public TestDbContext(DbContextOptions options)
+            : base(options)
         {
         }
     }
 
     private sealed class TestDbContextSession : DbContextSession<TestDbContext>
     {
-        public TestDbContextSession(TestDbContext dbContext) : base(dbContext)
+        public TestDbContextSession(TestDbContext dbContext)
+            : base(dbContext)
         {
             Users = new MutableDbSet<User>(_dbContext.Users, _dbContext.Options.Conventions);
         }
