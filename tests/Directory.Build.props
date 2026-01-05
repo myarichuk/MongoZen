@@ -1,6 +1,6 @@
 <Project>
   <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory)../, Directory.Build.props))\Directory.Build.props" Condition=" '$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory)../, Directory.Build.props))' != '' " />
   <PropertyGroup>
-    <NoWarn>$(NoWarn);CS8002;SA1636;SA1507</NoWarn>
+    <NoWarn>$(NoWarn);CS8002;SA1636;SA1507;SA1306;SA1201;SA1202;SA1204;SA1401;SA1402</NoWarn>
   </PropertyGroup>
 </Project>
