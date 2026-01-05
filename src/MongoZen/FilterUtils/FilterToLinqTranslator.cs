@@ -56,6 +56,8 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
         return lambda;
     }
 
+    public Expression Translate(BsonDocument filter, ParameterExpression parameter) => ParseDocument(filter, parameter);
+
     /// <summary>
     /// Parses a BSON document into an expression tree using the registered filter element translators.
     /// </summary>
@@ -139,6 +141,4 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
             Expression.Constant(true) :
             expressions.Aggregate(Expression.AndAlso);
     }
-
-    public Expression Translate(BsonDocument filter, ParameterExpression parameter) => ParseDocument(filter, parameter);
 }

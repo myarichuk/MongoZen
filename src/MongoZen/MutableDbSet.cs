@@ -75,6 +75,27 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         _updated.Clear();
     }
 
+    // IQueryable passthrough
+    public IEnumerator<TEntity> GetEnumerator() => _baseSet.GetEnumerator();
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+    public Type ElementType => _baseSet.ElementType;
+
+    public Expression Expression => _baseSet.Expression;
+
+    public IQueryProvider Provider => _baseSet.Provider;
+
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter) => _baseSet.QueryAsync(filter);
+
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter) => _baseSet.QueryAsync(filter);
+
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session)
+        => _baseSet.QueryAsync(filter, session);
+
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session)
+        => _baseSet.QueryAsync(filter, session);
+
     private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle session)
     {
         var collection = mongoSet.Collection;
@@ -92,7 +113,10 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
             // this means we are missing this document, so we mimic MongoDB driver and add it
             if (result.MatchedCount != 1 || result.ModifiedCount != 1)
             {
-                var existing = _added.FirstOrDefault(addItem => addItem != null && addItem.GetId().Equals(entity.GetId()));
+                var existing = _added.FirstOrDefault(addItem =>
+                    addItem is not null
+                    && addItem.TryGetId(out var addId)
+                    && addId!.Equals(id));
 
                 // so we "override" the added item with updated item
                 if (existing != null)
@@ -106,7 +130,14 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
         if (_added.Count > 0)
         {
-            var addedWithUniqueIds = _added.GroupBy(doc => doc!.GetId());
+            var addedWithUniqueIds = _added
+                .Where(doc => doc is not null)
+                .Select(doc => doc!)
+                .GroupBy(doc =>
+                {
+                    ArgumentNullException.ThrowIfNull(doc);
+                    return doc.GetId();
+                });
             var uniqueDocs = addedWithUniqueIds
                 .Select(x => x.FirstOrDefault())
                 .Where(x => x != null)
@@ -124,7 +155,8 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         if (_removed.Count > 0)
         {
             var ids = _removed
-                .Select(e => e.GetId())
+                .Where(e => e is not null)
+                .Select(e => e!.GetId())
                 .Where(id => id != null)
                 .ToList();
 
@@ -174,36 +206,18 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         {
             if (!entity.TryGetId(out var id))
             {
-                throw new InvalidOperationException($"Cannot fetch entity Id without known Id property.");
+                throw new InvalidOperationException("Cannot fetch entity Id without known Id property.");
             }
 
             var existing = memSet
                 .Collection
-                .FirstOrDefault(x => x.GetId() != null && x.GetId()!.Equals(id));
+                .FirstOrDefault(x =>
+                    x is not null
+                    && x.TryGetId(out var existingId)
+                    && existingId!.Equals(id));
             return existing;
         }
 
         return Task.CompletedTask;
     }
-
-    // IQueryable passthrough
-    public IEnumerator<TEntity> GetEnumerator() => _baseSet.GetEnumerator();
-
-    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
-
-    public Type ElementType => _baseSet.ElementType;
-
-    public Expression Expression => _baseSet.Expression;
-
-    public IQueryProvider Provider => _baseSet.Provider;
-
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter) => _baseSet.QueryAsync(filter);
-
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter) => _baseSet.QueryAsync(filter);
-
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session)
-        => _baseSet.QueryAsync(filter, session);
-
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session)
-        => _baseSet.QueryAsync(filter, session);
 }

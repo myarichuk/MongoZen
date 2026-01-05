@@ -8,7 +8,7 @@ namespace MongoZen.FilterUtils.ExpressionTranslators;
 public class ElemMatchFilterElementTranslator: FilterElementTranslatorBase
 {
     public override string Operator => "$elemMatch";
-    
+
     public override Expression Handle(string field, BsonValue value, ParameterExpression param)
     {
         var member = BuildSafeMemberAccess(param, field, out var nullCheck);

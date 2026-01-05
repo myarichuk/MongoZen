@@ -8,7 +8,10 @@ public abstract class DbContext: IDisposable
 {
     public DbContextOptions Options { get; }
 
-    public void Dispose() => Options.Mongo?.Client.Dispose();
+    public void Dispose()
+    {
+        Options.Mongo?.Client.Dispose();
+    }
 
     protected DbContext(DbContextOptions options)
     {
@@ -17,7 +20,9 @@ public abstract class DbContext: IDisposable
         OnModelCreating();
     }
 
-    protected virtual void OnModelCreating() { }
+    protected virtual void OnModelCreating()
+    {
+    }
 
     /// <summary>
     /// Override this partial method in a partial class to initialize DbSet properties.

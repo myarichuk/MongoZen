@@ -12,7 +12,7 @@ public class DbContextOptions
         Mongo = mongo;
         Conventions = conventions ?? new Conventions();
     }
-    
+
     public bool UseInMemory { get; set; }
 
     public Conventions Conventions { get; set; }
@@ -64,8 +64,7 @@ public class DbContextOptions
             settings.Credential = MongoCredential.CreateCredential(
                 authDatabase ?? databaseName,
                 username,
-                password
-            );
+                password);
         }
 
         if (useTls)
