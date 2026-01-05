@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Reflection;
 
 namespace MongoZen;
@@ -19,10 +20,10 @@ internal static class EntityIdAccessor<TEntity>
             return _ => null;
         }
 
-        var getter = prop.GetGetMethod()!
-            .CreateDelegate(typeof(Func<,>)
-                .MakeGenericType(typeof(TEntity), prop.PropertyType));
+        var parameter = Expression.Parameter(typeof(TEntity), "entity");
+        var propertyAccess = Expression.Property(parameter, prop);
+        var convertToObject = Expression.Convert(propertyAccess, typeof(object));
 
-        return entity => getter.DynamicInvoke(entity);
+        return Expression.Lambda<Func<TEntity, object?>>(convertToObject, parameter).Compile();
     }
 }
