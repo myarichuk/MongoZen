@@ -2,7 +2,6 @@ using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
-using Microsoft.CodeAnalysis.Testing.Verifiers;
 using Microsoft.CodeAnalysis.Text;
 
 namespace MongoFlow.SourceGenerator.Tests;
@@ -59,7 +58,7 @@ public static class DbContextSessionExtensions
 }
 ";
 
-        var test = new CSharpSourceGeneratorTest<DbContextExtensionsGenerator, XUnitVerifier>
+        var test = new CSharpSourceGeneratorTest<DbContextExtensionsGenerator, DefaultVerifier>
         {
             TestState =
             {

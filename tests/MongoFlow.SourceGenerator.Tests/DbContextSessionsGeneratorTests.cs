@@ -2,7 +2,6 @@ using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
-using Microsoft.CodeAnalysis.Testing.Verifiers;
 using Microsoft.CodeAnalysis.Text;
 
 namespace MongoFlow.SourceGenerator.Tests
@@ -51,7 +50,7 @@ public sealed class BloggingContextSession : MongoFlow.DbContextSession<Blogging
 }
 ";
 
-            var test = new CSharpSourceGeneratorTest<SourceGenerator.DbContextSessionsGenerator, XUnitVerifier>
+            var test = new CSharpSourceGeneratorTest<SourceGenerator.DbContextSessionsGenerator, DefaultVerifier>
             {
                 TestState =
                 {

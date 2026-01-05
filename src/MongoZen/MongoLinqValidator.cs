@@ -8,7 +8,7 @@ public static class MongoLinqValidator
 {
     private static readonly Visitor ValidationVisitor = new();
 
-    public static void ValidateAndThrowIfNeeded(Expression expression) => 
+    public static void ValidateAndThrowIfNeeded(Expression expression) =>
         ValidationVisitor.Visit(expression);
 
     private class Visitor : ExpressionVisitor

@@ -14,7 +14,7 @@ public class InMemoryDbSet<T> : IDbSet<T>
         FilterToLinqTranslatorFactory.Create<T>();
 
     internal IList<T> Collection => _items;
-    
+
     /// <summary>
     /// Initializes a new instance of the <see cref="InMemoryDbSet{T}"/> class.
     /// </summary>
@@ -27,12 +27,6 @@ public class InMemoryDbSet<T> : IDbSet<T>
     public InMemoryDbSet()
         : this([])
     {
-    }
-
-    private static T Clone(T source)
-    {
-        var json = JsonSerializer.Serialize(source);
-        return JsonSerializer.Deserialize<T>(json)!;
     }
 
     public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter)
@@ -68,4 +62,10 @@ public class InMemoryDbSet<T> : IDbSet<T>
     public Expression Expression => _items.AsQueryable().Expression;
 
     public IQueryProvider Provider => _items.AsQueryable().Provider;
+
+    private static T Clone(T source)
+    {
+        var json = JsonSerializer.Serialize(source);
+        return JsonSerializer.Deserialize<T>(json)!;
+    }
 }

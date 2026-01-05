@@ -2,7 +2,6 @@ using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
-using Microsoft.CodeAnalysis.Testing.Verifiers;
 using Microsoft.CodeAnalysis.Text;
 
 namespace MongoZen.SourceGenerator.Tests
@@ -66,7 +65,7 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
 }
 ";
 
-            var test = new CSharpSourceGeneratorTest<DbContextSessionsGenerator, XUnitVerifier>
+            var test = new CSharpSourceGeneratorTest<DbContextSessionsGenerator, DefaultVerifier>
             {
                 TestState =
                 {
@@ -146,7 +145,7 @@ namespace MyNamespace
 }
 ";
 
-            var test = new CSharpSourceGeneratorTest<DbContextSessionsGenerator, XUnitVerifier>
+            var test = new CSharpSourceGeneratorTest<DbContextSessionsGenerator, DefaultVerifier>
             {
                 TestState =
                 {
