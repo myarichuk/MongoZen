@@ -51,6 +51,7 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
             await Posts.CommitAsync(Transaction);
 
             await CommitTransactionAsync();
+            await DisposeAsync();
         }
         catch
         {
@@ -59,6 +60,7 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
                 await AbortTransactionAsync();
             }
 
+            await DisposeAsync();
             throw;
         }
     }
@@ -130,6 +132,7 @@ namespace MyNamespace
                 await Users.CommitAsync(Transaction);
 
                 await CommitTransactionAsync();
+                await DisposeAsync();
             }
             catch
             {
@@ -138,6 +141,7 @@ namespace MyNamespace
                     await AbortTransactionAsync();
                 }
 
+                await DisposeAsync();
                 throw;
             }
         }

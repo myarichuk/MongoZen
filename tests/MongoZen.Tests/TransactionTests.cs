@@ -42,6 +42,7 @@ public class TransactionTests : IntegrationTestBase
                 await Users.CommitAsync(Transaction);
 
                 await CommitTransactionAsync();
+                await DisposeAsync();
             }
             catch
             {
@@ -50,18 +51,18 @@ public class TransactionTests : IntegrationTestBase
                     await AbortTransactionAsync();
                 }
 
+                await DisposeAsync();
                 throw;
             }
         }
     }
 
     [Fact]
-    public async Task BeginTransaction_InMemory_Allows_SaveChanges()
+    public async Task SaveChanges_ImplicitTransaction_InMemory()
     {
         var ctx = new TestDbContext(new DbContextOptions());
-        var session = new TestDbContextSession(ctx);
+        using var session = new TestDbContextSession(ctx);
 
-        session.BeginTransaction();
         session.Users.Add(new User { Id = "1", Name = "Alice" });
 
         await session.SaveChangesAsync();
@@ -74,9 +75,8 @@ public class TransactionTests : IntegrationTestBase
     public async Task Transaction_Commits_Changes_On_SaveChanges()
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
-        var session = new TestDbContextSession(ctx);
+        using var session = new TestDbContextSession(ctx);
 
-        session.BeginTransaction();
         session.Users.Add(new User { Id = "1", Name = "Alice" });
 
         await session.SaveChangesAsync();
@@ -128,15 +128,17 @@ public class TransactionTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task SaveChanges_Without_Transaction_Throws()
+    public async Task Dispose_Without_SaveChanges_Rolls_Back_Transaction()
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
-        var session = new TestDbContextSession(ctx);
 
-        session.Users.Add(new User { Id = "1", Name = "Alice" });
+        await using (var session = new TestDbContextSession(ctx))
+        {
+            session.Users.Add(new User { Id = "1", Name = "Alice" });
+            await session.Users.CommitAsync(session.Transaction);
+        }
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => session.SaveChangesAsync().AsTask());
-
-        Assert.Equal("A transaction is required to save changes. Call BeginTransaction() first.", ex.Message);
+        var saved = await ctx.Users.QueryAsync(u => u.Id == "1");
+        Assert.Empty(saved);
     }
 }

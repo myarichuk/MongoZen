@@ -40,7 +40,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     {
         if (!transaction.IsActive)
         {
-            throw new InvalidOperationException("A transaction is required to commit changes. Call BeginTransaction() on the session and pass the transaction to CommitAsync().");
+            throw new InvalidOperationException("A transaction is required to commit changes. Start a session with StartSession() and pass the transaction to CommitAsync().");
         }
 
         switch (_baseSet)

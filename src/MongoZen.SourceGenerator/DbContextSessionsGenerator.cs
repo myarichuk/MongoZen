@@ -136,6 +136,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         sb.AppendLine();
         sb.Append(indent2).AppendLine("        await CommitTransactionAsync();");
+        sb.Append(indent2).AppendLine("        await DisposeAsync();");
         sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("    catch");
         sb.Append(indent2).AppendLine("    {");
@@ -144,6 +145,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("            await AbortTransactionAsync();");
         sb.Append(indent2).AppendLine("        }");
         sb.AppendLine();
+        sb.Append(indent2).AppendLine("        await DisposeAsync();");
         sb.Append(indent2).AppendLine("        throw;");
         sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
