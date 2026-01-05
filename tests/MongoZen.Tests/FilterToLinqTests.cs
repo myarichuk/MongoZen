@@ -1,9 +1,11 @@
+// Copyright (c) 2024-present, Shuai Wang. All rights reserved.
+// Use of this source code is governed by an MIT-style license that can be
+// found in the LICENSE file.
+
 using MongoZen.FilterUtils;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
-// ReSharper disable TooManyDeclarations
-// ReSharper disable ClassTooBig
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 namespace MongoZen.Tests;
@@ -31,7 +33,7 @@ public class FilterToLinqTests
         Assert.True(expr(new Person { Name = "Alice" }));
         Assert.False(expr(new Person { Name = "Bob" }));
     }
-    
+
     [Fact]
     public void GtFilter_ShouldMatchCorrectly()
     {
@@ -72,10 +74,10 @@ public class FilterToLinqTests
         var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Age = 30 }));
-        Assert.True(expr(new Person { Age = 40 }));        
+        Assert.True(expr(new Person { Age = 40 }));
         Assert.False(expr(new Person { Age = 45 }));
     }
-    
+
     [Fact]
     public void RawEqFilterWithoutSubDocument_ShouldMatchCorrectly()
     {
@@ -91,8 +93,7 @@ public class FilterToLinqTests
     {
         var filter = Builders<Person>.Filter.And(
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Gt(p => p.Age, 25)
-        );
+            Builders<Person>.Filter.Gt(p => p.Age, 25));
 
         var expr = _translator.Translate(filter).Compile();
 
@@ -114,7 +115,7 @@ public class FilterToLinqTests
     [Fact]
     public void InFilter_ShouldMatchCorrectly()
     {
-        var filter = Builders<Person>.Filter.In(p => p.Name, ["Alice", "Bob"]);
+        var filter = Builders<Person>.Filter.In(p => p.Name, new[] { "Alice", "Bob" });
         var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice" }));
@@ -125,7 +126,7 @@ public class FilterToLinqTests
     [Fact]
     public void NinFilter_ShouldMatchCorrectly()
     {
-        var filter = Builders<Person>.Filter.Nin(p => p.Name, ["Alice", "Bob"]);
+        var filter = Builders<Person>.Filter.Nin(p => p.Name, new[] { "Alice", "Bob" });
         var expr = _translator.Translate(filter).Compile();
 
         Assert.False(expr(new Person { Name = "Alice" }));
@@ -146,7 +147,7 @@ public class FilterToLinqTests
     public void ExistsFilter_ShouldThrowNotSupported()
     {
         var filter = new BsonDocument("Name", new BsonDocument("$exists", true)).ToFilterDefinition<Person>();
-        Assert.Throws<NotSupportedException>(() =>  _translator.Translate(filter).Compile());
+        Assert.Throws<NotSupportedException>(() => _translator.Translate(filter).Compile());
     }
 
     [Fact]
@@ -169,14 +170,13 @@ public class FilterToLinqTests
         Assert.False(expr(new Order { Metadata = "New-York City" }));
         Assert.False(expr(new Order { Metadata = new Person { Age = 30 } }));
     }
-    
+
     [Fact]
     public void OrFilter_ShouldMatchCorrectly()
     {
         var filter = Builders<Person>.Filter.Or(
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Lt(p => p.Age, 20)
-        );
+            Builders<Person>.Filter.Lt(p => p.Age, 20));
 
         var expr = _translator.Translate(filter).Compile();
 
@@ -190,8 +190,7 @@ public class FilterToLinqTests
     {
         var filter = Builders<Person>.Filter.And(
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Lt(p => p.Age, 20)
-        );
+            Builders<Person>.Filter.Lt(p => p.Age, 20));
 
         var expr = _translator.Translate(filter).Compile();
 
@@ -200,7 +199,7 @@ public class FilterToLinqTests
         Assert.False(expr(new Person { Name = "Charlie", Age = 10 }));
         Assert.False(expr(new Person { Name = "Charlie", Age = 30 }));
     }
-    
+
     [Fact]
     public void UnknownOperator_ShouldThrow()
     {
@@ -220,8 +219,7 @@ public class FilterToLinqTests
     {
         var filter = Builders<Person>.Filter.And(
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Gte(p => p.Age, 25)
-        );
+            Builders<Person>.Filter.Gte(p => p.Age, 25));
         var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 30 }));
@@ -235,8 +233,7 @@ public class FilterToLinqTests
     {
         var filter = Builders<Person>.Filter.Or(
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Lt(p => p.Age, 20)
-        );
+            Builders<Person>.Filter.Lt(p => p.Age, 20));
         var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 50 }));
@@ -252,7 +249,7 @@ public class FilterToLinqTests
         var expr = translator.Translate(filter).Compile();
 
         Assert.True(expr(new PersonWithAddress { Name = "Alice", Address = new Address { City = "London" } }));
-        Assert.False(expr(new PersonWithAddress { Name = "Bob", Address = new Address { City = "Paris" } }));        
+        Assert.False(expr(new PersonWithAddress { Name = "Bob", Address = new Address { City = "Paris" } }));
     }
 
     [Fact]
@@ -273,9 +270,7 @@ public class FilterToLinqTests
             Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
             Builders<Person>.Filter.Or(
                 Builders<Person>.Filter.Lt(p => p.Age, 20),
-                Builders<Person>.Filter.Eq(p => p.Age, 30)
-            )
-        );
+                Builders<Person>.Filter.Eq(p => p.Age, 30)));
         var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Name = "Alice", Age = 30 }));
@@ -290,8 +285,8 @@ public class FilterToLinqTests
         // this will yield { "$nor" : [{ "Name" : "Alice" }, { "Age" : { "$lt" : 20 } }] }
         var filter = Builders<Person>.Filter.Not(
             Builders<Person>.Filter.Or(
-            Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
-            Builders<Person>.Filter.Lt(p => p.Age, 20)));
+                Builders<Person>.Filter.Eq(p => p.Name, "Alice"),
+                Builders<Person>.Filter.Lt(p => p.Age, 20)));
 
         var expr = _translator.Translate(filter).Compile();
 
@@ -299,7 +294,7 @@ public class FilterToLinqTests
         Assert.False(expr(new Person { Name = "Charlie", Age = 15 }));
         Assert.True(expr(new Person { Name = "Charlie", Age = 30 }));
     }
-    
+
     [Fact]
     public void ElemMatch_SimpleEquality_ShouldMatchCorrectly()
     {
@@ -307,8 +302,7 @@ public class FilterToLinqTests
 
         var filter = Builders<Order>.Filter.ElemMatch(
             o => o.Lines,
-            Builders<OrderLine>.Filter.Eq(l => l.Product, "Apples")
-        );
+            Builders<OrderLine>.Filter.Eq(l => l.Product, "Apples"));
 
         var expr = translator.Translate(filter).Compile();
 
@@ -317,7 +311,7 @@ public class FilterToLinqTests
             Lines =
             [
                 new OrderLine(product: "Apples", quantity: 2),
-                new OrderLine(product: "Bananas", quantity: 3)
+                new OrderLine(product: "Bananas", quantity: 3),
             ],
         };
 
@@ -339,9 +333,7 @@ public class FilterToLinqTests
             o => o.Lines,
             Builders<OrderLine>.Filter.And(
                 Builders<OrderLine>.Filter.Gt(l => l.Quantity, 5),
-                Builders<OrderLine>.Filter.Lt(l => l.Price, 10)
-            )
-        );
+                Builders<OrderLine>.Filter.Lt(l => l.Price, 10)));
 
         var expr = translator.Translate(filter).Compile();
 
@@ -350,7 +342,7 @@ public class FilterToLinqTests
             Lines =
             [
                 new OrderLine(product: "Apples", quantity: 6, price: 9.99m),
-                new OrderLine(product: "Bananas", quantity: 3, price: 5.00m)
+                new OrderLine(product: "Bananas", quantity: 3, price: 5.00m),
             ],
         };
 
@@ -359,7 +351,7 @@ public class FilterToLinqTests
             Lines =
             [
                 new OrderLine(product: "Apples", quantity: 4, price: 9.99m),
-                new OrderLine(product: "Bananas", quantity: 6, price: 11.00m)
+                new OrderLine(product: "Bananas", quantity: 6, price: 11.00m),
             ],
         };
 
@@ -376,9 +368,7 @@ public class FilterToLinqTests
             o => o.Lines,
             Builders<OrderLine>.Filter.Or(
                 Builders<OrderLine>.Filter.Eq(l => l.Product, "Apples"),
-                Builders<OrderLine>.Filter.Gt(l => l.Quantity, 10)
-            )
-        );
+                Builders<OrderLine>.Filter.Gt(l => l.Quantity, 10)));
 
         var expr = translator.Translate(filter).Compile();
 
@@ -409,12 +399,11 @@ public class FilterToLinqTests
 
         var filter = new BsonDocument("Lines", new BsonDocument(
             "$elemMatch",
-            new BsonDocument("Quantity", new BsonDocument("$mod", new BsonArray { 2, 0 }))
-        )).ToFilterDefinition<Order>();
+            new BsonDocument("Quantity", new BsonDocument("$mod", new BsonArray { 2, 0 })))).ToFilterDefinition<Order>();
 
         Assert.Throws<NotSupportedException>(() => translator.Translate(filter));
     }
-    
+
     [Fact]
     public void RegexFilter_SimpleMatch_ShouldWorkCorrectly()
     {
@@ -426,7 +415,7 @@ public class FilterToLinqTests
         Assert.True(expr(new Person { Name = "Alfred" }));
         Assert.False(expr(new Person { Name = "Bob" }));
     }
-    
+
     [Fact]
     public void RegexFilter_CaseSensitive_ShouldRespectCase()
     {
@@ -458,11 +447,11 @@ public class FilterToLinqTests
 
         Assert.Throws<NotSupportedException>(() => _translator.Translate(filter));
     }
-    
+
     [Fact]
     public void AllFilter_WithSingleElement_ShouldMatchCorrectly()
     {
-        var filter = Builders<Person>.Filter.All(p => p.Tags, ["blogger"]);
+        var filter = Builders<Person>.Filter.All(p => p.Tags, new[] { "blogger" });
         var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Tags = [null!, "blogger"] }));
@@ -473,11 +462,11 @@ public class FilterToLinqTests
         Assert.False(expr(new Person { Tags = [] }));
         Assert.False(expr(new Person { Tags = ["dev"] }));
     }
-    
+
     [Fact]
     public void AllFilter_WithMultiElement_ShouldMatchCorrectly()
     {
-        var filter = Builders<Person>.Filter.All(p => p.Tags, ["dev", "blogger"]);
+        var filter = Builders<Person>.Filter.All(p => p.Tags, new[] { "dev", "blogger" });
         var expr = _translator.Translate(filter).Compile();
 
         Assert.True(expr(new Person { Tags = [null!, "blogger", null, "dev"] }));
@@ -488,11 +477,11 @@ public class FilterToLinqTests
         Assert.False(expr(new Person { Tags = [] }));
         Assert.False(expr(new Person { Tags = ["dev"] }));
     }
-    
+
     [Fact]
     public void AllFilter_OnNullProperty_ShouldNotMatch()
     {
-        var filter = Builders<Person>.Filter.All(p => p.Tags, ["dev"]);
+        var filter = Builders<Person>.Filter.All(p => p.Tags, new[] { "dev" });
         var expr = _translator.Translate(filter).Compile();
 
         Assert.False(expr(new Person { Tags = null }));
@@ -505,11 +494,11 @@ public class FilterToLinqTests
         var filter = new BsonDocument("Age", new BsonDocument("$all", new BsonArray { 30 })).ToFilterDefinition<Person>();
         Assert.Throws<InvalidOperationException>(() => _translator.Translate(filter));
     }
-    
+
     [Fact]
     public void AllFilter_ShouldMatch_WhenAllItemsExist()
     {
-        var filter = Builders<Person>.Filter.All(p => p.Tags, ["dev", "blogger"]);
+        var filter = Builders<Person>.Filter.All(p => p.Tags, new[] { "dev", "blogger" });
 
         var expr = _translator.Translate(filter).Compile();
 
@@ -520,7 +509,7 @@ public class FilterToLinqTests
         Assert.False(expr(new Person { Tags = ["blogger"] }));
         Assert.False(expr(new Person { Tags = ["writer", "reader"] }));
     }
-    
+
     [Fact]
     public void AllFilter_WithEmptyArray_ShouldAlwaysMatch()
     {
@@ -552,7 +541,8 @@ public class FilterToLinqTests
             Quantity = quantity;
         }
 
-        public OrderLine(string product, int quantity, decimal price) : this()
+        public OrderLine(string product, int quantity, decimal price)
+            : this()
         {
             Product = product;
             Quantity = quantity;

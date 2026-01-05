@@ -7,8 +7,6 @@ namespace MongoZen.Tests;
 
 public class MongoLinqValidatorTests
 {
-    private record Person(string Name, int Age);
-
     [Fact]
     public void ValidExpression_ShouldNotThrow()
     {
@@ -111,3 +109,5 @@ public class MongoLinqValidatorTests
         Assert.Null(ex);
     }
 }
+
+file record Person(string Name, int Age);
