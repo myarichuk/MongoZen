@@ -33,7 +33,11 @@ using MongoZen;
 
 public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingContext>
 {
-    public BloggingContextSession(BloggingContext dbContext) : base(dbContext)
+    public BloggingContextSession(BloggingContext dbContext) : this(dbContext, startTransaction: true)
+    {
+    }
+
+    public BloggingContextSession(BloggingContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
     {
         Blogs = new MongoZen.MutableDbSet<Blog>(_dbContext.Blogs, _dbContext.Options.Conventions);
         Posts = new MongoZen.MutableDbSet<Post>(_dbContext.Posts, _dbContext.Options.Conventions);
@@ -117,7 +121,11 @@ namespace MyNamespace
 {
     public sealed class MyContextSession : MongoZen.DbContextSession<MyNamespace.MyContext>
     {
-        public MyContextSession(MyNamespace.MyContext dbContext) : base(dbContext)
+        public MyContextSession(MyNamespace.MyContext dbContext) : this(dbContext, startTransaction: true)
+        {
+        }
+
+        public MyContextSession(MyNamespace.MyContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
         {
             Users = new MongoZen.MutableDbSet<MyNamespace.User>(_dbContext.Users, _dbContext.Options.Conventions);
         }

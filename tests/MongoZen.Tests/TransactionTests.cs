@@ -27,7 +27,12 @@ public class TransactionTests : IntegrationTestBase
     private sealed class TestDbContextSession : DbContextSession<TestDbContext>
     {
         public TestDbContextSession(TestDbContext dbContext)
-            : base(dbContext)
+            : this(dbContext, startTransaction: true)
+        {
+        }
+
+        public TestDbContextSession(TestDbContext dbContext, bool startTransaction)
+            : base(dbContext, startTransaction)
         {
             Users = new MutableDbSet<User>(_dbContext.Users, _dbContext.Options.Conventions);
         }
@@ -82,6 +87,24 @@ public class TransactionTests : IntegrationTestBase
         await session.SaveChangesAsync();
 
         var saved = await ctx.Users.QueryAsync(u => u.Id == "1");
+        Assert.Single(saved);
+    }
+
+    [Fact]
+    public async Task UseSession_WithExternalTransaction_Commits()
+    {
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
+        using var clientSession = Client.StartSession();
+        clientSession.StartTransaction();
+
+        await using var session = new TestDbContextSession(ctx, startTransaction: false);
+        session.UseSession(clientSession);
+
+        session.Users.Add(new User { Id = "2", Name = "Bob" });
+
+        await session.SaveChangesAsync();
+
+        var saved = await ctx.Users.QueryAsync(u => u.Id == "2");
         Assert.Single(saved);
     }
 

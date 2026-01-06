@@ -62,6 +62,11 @@ public sealed class DbContextExtensionsGenerator : IIncrementalGenerator
               .AppendLine(" context)");
             sb.AppendLine($"        => new {sessionFullName}(context);");
             sb.AppendLine();
+            sb.Append("    public static ").Append(sessionFullName)
+              .Append(" StartSession(this ").Append(contextFullName)
+              .AppendLine(" context, bool startTransaction)");
+            sb.AppendLine($"        => new {sessionFullName}(context, startTransaction);");
+            sb.AppendLine();
         }
 
         sb.AppendLine("}");
