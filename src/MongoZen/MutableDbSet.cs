@@ -40,7 +40,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     {
         if (!transaction.IsActive)
         {
-            throw new InvalidOperationException("A transaction is required to commit changes. Call BeginTransaction() on the session and pass the transaction to CommitAsync().");
+            throw new InvalidOperationException("A transaction is required to commit changes. Start a session with StartSession() and pass the transaction to CommitAsync().");
         }
 
         switch (_baseSet)
@@ -54,6 +54,20 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 await InternalCommitAsync(memSet);
                 break;
             case DbSet<TEntity> mongoSet:
+                if (transaction.IsInMemoryTransaction)
+                {
+                    if (transaction.Session != null)
+                    {
+                        await InternalCommitAsync(mongoSet, transaction.Session);
+                    }
+                    else
+                    {
+                        await InternalCommitAsync(mongoSet);
+                    }
+
+                    break;
+                }
+
                 if (transaction.Session == null)
                 {
                     throw new InvalidOperationException("MongoDB commits require a session-bound transaction.");
@@ -95,6 +109,75 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
     public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session)
         => _baseSet.QueryAsync(filter, session);
+
+    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet)
+    {
+        var collection = mongoSet.Collection;
+
+        foreach (var entity in _updated)
+        {
+            if (!entity.TryGetId(out var id))
+            {
+                continue;
+            }
+
+            var filter = Builders<TEntity>.Filter.Eq("_id", id);
+            var result = await collection.ReplaceOneAsync(filter, entity);
+
+            // this means we are missing this document, so we mimic MongoDB driver and add it
+            if (result.MatchedCount != 1 || result.ModifiedCount != 1)
+            {
+                var existing = _added.FirstOrDefault(addItem =>
+                    addItem is not null
+                    && addItem.TryGetId(out var addId)
+                    && addId!.Equals(id));
+
+                // so we "override" the added item with updated item
+                if (existing != null)
+                {
+                    _added.Remove(existing);
+                }
+
+                _added.Add(entity);
+            }
+        }
+
+        if (_added.Count > 0)
+        {
+            var addedWithUniqueIds = _added
+                .Where(doc => doc is not null)
+                .Select(doc => doc!)
+                .GroupBy(doc =>
+                {
+                    ArgumentNullException.ThrowIfNull(doc);
+                    return doc.GetId();
+                });
+            var uniqueDocs = addedWithUniqueIds
+                .Select(x => x.FirstOrDefault())
+                .Where(x => x != null)
+                .Cast<TEntity>();
+
+            await collection.InsertManyAsync(uniqueDocs);
+
+            foreach (var docGroup in addedWithUniqueIds.Where(group => group.Count() > 1))
+            {
+                var replacementDoc = docGroup.Last();
+                await collection.ReplaceOneAsync(Builders<TEntity>.Filter.Eq("_id", docGroup.Key), replacementDoc);
+            }
+        }
+
+        if (_removed.Count > 0)
+        {
+            var ids = _removed
+                .Where(e => e is not null)
+                .Select(e => e!.GetId())
+                .Where(id => id != null)
+                .ToList();
+
+            var filter = Builders<TEntity>.Filter.In("_id", ids);
+            await collection.DeleteManyAsync(filter);
+        }
+    }
 
     private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle session)
     {
