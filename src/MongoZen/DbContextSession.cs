@@ -1,4 +1,6 @@
+using MongoDB.Bson;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Clusters;
 
 namespace MongoZen;
 
@@ -10,6 +12,7 @@ public abstract class DbContextSession<TDbContext> : IDisposable, IAsyncDisposab
     private bool _ownsSession;
     private bool _inMemoryTransaction;
     private bool _disposed;
+    private bool? _transactionsSupported;
 
     protected DbContextSession(TDbContext dbContext, bool startTransaction = true)
     {
@@ -42,6 +45,12 @@ public abstract class DbContextSession<TDbContext> : IDisposable, IAsyncDisposab
             if (_dbContext.Options.Mongo == null)
             {
                 throw new InvalidOperationException("Mongo database not configured. This is not supposed to happen and is likely a bug.");
+            }
+
+            if (!TransactionsSupported())
+            {
+                HandleUnsupportedTransactions();
+                return;
             }
 
             _session.StartTransaction();
@@ -147,6 +156,12 @@ public abstract class DbContextSession<TDbContext> : IDisposable, IAsyncDisposab
 
         if (_session != null && !_session.IsInTransaction)
         {
+            if (_dbContext.Options.Conventions.TransactionSupportBehavior == TransactionSupportBehavior.Simulate)
+            {
+                _inMemoryTransaction = true;
+                return;
+            }
+
             throw new InvalidOperationException("MongoDB commits require an active transaction.");
         }
     }
@@ -164,6 +179,12 @@ public abstract class DbContextSession<TDbContext> : IDisposable, IAsyncDisposab
             throw new InvalidOperationException("Mongo database not configured. This is not supposed to happen and is likely a bug.");
         }
 
+        if (!TransactionsSupported())
+        {
+            HandleUnsupportedTransactions();
+            return;
+        }
+
         if (_session == null)
         {
             _session = _dbContext.Options.Mongo.Client.StartSession();
@@ -174,5 +195,43 @@ public abstract class DbContextSession<TDbContext> : IDisposable, IAsyncDisposab
         {
             _session.StartTransaction();
         }
+    }
+
+    private bool TransactionsSupported()
+    {
+        if (_transactionsSupported.HasValue)
+        {
+            return _transactionsSupported.Value;
+        }
+
+        var database = _dbContext.Options.Mongo ?? throw new InvalidOperationException("Mongo database not configured. This is not supposed to happen and is likely a bug.");
+
+        if (database.Client is MongoClient mongoClient)
+        {
+            var clusterType = mongoClient.Cluster.Description.Type;
+            if (clusterType == ClusterType.ReplicaSet || clusterType == ClusterType.Sharded)
+            {
+                _transactionsSupported = true;
+                return true;
+            }
+        }
+
+        var hello = database.RunCommand<BsonDocument>(new BsonDocument("hello", 1));
+        var isSharded = hello.TryGetValue("msg", out var msg) && msg == "isdbgrid";
+        var isReplicaSet = hello.TryGetValue("setName", out _);
+        _transactionsSupported = isReplicaSet || isSharded;
+        return _transactionsSupported.Value;
+    }
+
+    private void HandleUnsupportedTransactions()
+    {
+        if (_dbContext.Options.Conventions.TransactionSupportBehavior == TransactionSupportBehavior.Simulate)
+        {
+            _inMemoryTransaction = true;
+            return;
+        }
+
+        throw new InvalidOperationException(
+            "MongoDB transactions require a replica set or sharded cluster. Configure Conventions.TransactionSupportBehavior to Simulate to fall back to a non-transactional unit of work.");
     }
 }
