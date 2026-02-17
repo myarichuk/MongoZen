@@ -164,4 +164,21 @@ public class TransactionTests : IntegrationTestBase
         var saved = await ctx.Users.QueryAsync(u => u.Id == "1");
         Assert.Empty(saved);
     }
+
+    [Fact]
+    public async Task Dispose_Does_Not_Abort_External_Transaction()
+    {
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
+        using var clientSession = Client.StartSession();
+        clientSession.StartTransaction();
+
+        await using (var session = new TestDbContextSession(ctx, startTransaction: false))
+        {
+            session.UseSession(clientSession);
+            session.Users.Add(new User { Id = "2", Name = "Bob" });
+        }
+
+        Assert.True(clientSession.IsInTransaction);
+        await clientSession.AbortTransactionAsync();
+    }
 }

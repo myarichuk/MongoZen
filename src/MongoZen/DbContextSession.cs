@@ -139,7 +139,7 @@ public abstract class DbContextSession<TDbContext> : IDisposable, IAsyncDisposab
 
         _disposed = true;
 
-        if (Transaction.IsActive)
+        if (Transaction.IsActive && (_ownsSession || _inMemoryTransaction))
         {
             await AbortTransactionAsync();
         }
