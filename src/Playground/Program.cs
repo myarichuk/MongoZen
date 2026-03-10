@@ -39,7 +39,7 @@ var person3 = new Person
     Age = 25,
 };
 
-var session = dbContext.StartSession();
+await using var session = dbContext.StartSession();
 session.People.Add(person);
 session.People.Add(person2);
 session.People.Add(person3);
