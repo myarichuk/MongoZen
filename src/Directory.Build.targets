@@ -2,13 +2,16 @@
   <PropertyGroup>
     <ChangelogFile>$(MSBuildThisFileDirectory)/../CHANGELOG.md</ChangelogFile>
   </PropertyGroup>
-  <ItemGroup>
+  <ItemGroup Condition="!$([System.String]::Copy('$(MSBuildProjectName)').EndsWith('.SourceGenerator'))">
       <PackageReference Include="SIL.ReleaseTasks" Version="*" PrivateAssets="all" />
   </ItemGroup>
 
-  <UsingTask TaskName="SetReleaseNotesProperty" AssemblyFile="SIL.ReleaseTasks.dll" />
+  <UsingTask
+      Condition="!$([System.String]::Copy('$(MSBuildProjectName)').EndsWith('.SourceGenerator'))"
+      TaskName="SetReleaseNotesProperty"
+      AssemblyFile="SIL.ReleaseTasks.dll" />
 
-  <Target Name="ReleaseNotes" AfterTargets="Pack">
+  <Target Name="ReleaseNotes" AfterTargets="Pack" Condition="!$([System.String]::Copy('$(MSBuildProjectName)').EndsWith('.SourceGenerator'))">
     <PropertyGroup>
       <FilterEntries>true</FilterEntries>
     </PropertyGroup>
