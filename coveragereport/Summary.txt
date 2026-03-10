@@ -1,0 +1,54 @@
+Summary
+  Generated on: 03/10/2026 - 10:40:31
+  Coverage date: 03/10/2026 - 10:40:01
+  Parser: Cobertura
+  Assemblies: 1
+  Classes: 32
+  Files: 32
+  Line coverage: 74.1%
+  Covered lines: 582
+  Uncovered lines: 203
+  Coverable lines: 785
+  Total lines: 1547
+  Branch coverage: 59.5% (205 of 344)
+  Covered branches: 205
+  Total branches: 344
+  Method coverage: 75.3% (101 of 134)
+  Full method coverage: 62.6% (84 of 134)
+  Covered methods: 101
+  Fully covered methods: 84
+  Total methods: 134
+
+MongoZen                                                                             74.1%
+  MongoZen.Conventions                                                                100%
+  MongoZen.DbContext                                                                 86.2%
+  MongoZen.DbContextOptions                                                            40%
+  MongoZen.DbContextSession<T>                                                       36.4%
+  MongoZen.DbSet<T>                                                                    68%
+  MongoZen.DefaultIdConvention                                                        100%
+  MongoZen.EntityIdAccessor<T>                                                        100%
+  MongoZen.FilterUtils.BsonExtensions                                                 100%
+  MongoZen.FilterUtils.ExpressionTranslators.AllOperatorFilterElementTranslator        92%
+  MongoZen.FilterUtils.ExpressionTranslators.BinaryOperatorFilterElementTranslator    100%
+  MongoZen.FilterUtils.ExpressionTranslators.ElemMatchFilterElementTranslator        90.4%
+  MongoZen.FilterUtils.ExpressionTranslators.EqFilterElementTranslator                100%
+  MongoZen.FilterUtils.ExpressionTranslators.ExistsFilterElementTranslator            100%
+  MongoZen.FilterUtils.ExpressionTranslators.FilterElementTranslatorBase             94.8%
+  MongoZen.FilterUtils.ExpressionTranslators.FilterRegexElementTranslator              71%
+  MongoZen.FilterUtils.ExpressionTranslators.GteFilterElementTranslator               100%
+  MongoZen.FilterUtils.ExpressionTranslators.GtFilterElementTranslator                100%
+  MongoZen.FilterUtils.ExpressionTranslators.InFilterElementTranslator               77.7%
+  MongoZen.FilterUtils.ExpressionTranslators.LteFilterElementTranslator               100%
+  MongoZen.FilterUtils.ExpressionTranslators.LtFilterElementTranslator                100%
+  MongoZen.FilterUtils.ExpressionTranslators.NEqFilterElementTranslator               100%
+  MongoZen.FilterUtils.ExpressionTranslators.NInFilterElementTranslator              77.7%
+  MongoZen.FilterUtils.ExpressionTranslators.TypeFilterElementTranslator             58.6%
+  MongoZen.FilterUtils.FilterElementTranslatorDiscovery                              29.4%
+  MongoZen.FilterUtils.FilterToLinqTranslator<T>                                     84.8%
+  MongoZen.FilterUtils.FilterToLinqTranslatorFactory                                  100%
+  MongoZen.GlobalIdConventionProvider                                                 100%
+  MongoZen.InMemoryDbSet<T>                                                          77.4%
+  MongoZen.MongoLinqValidator                                                         100%
+  MongoZen.MutableDbSet<T>                                                           80.2%
+  MongoZen.ReflectionExtensions                                                      57.1%
+  MongoZen.TransactionContext                                                         100%
