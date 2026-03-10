@@ -11,6 +11,10 @@ namespace MongoZen.SourceGenerator;
 [Generator]
 public sealed class DbContextExtensionsGenerator : IIncrementalGenerator
 {
+    /// <summary>
+    /// Initializes the incremental generation pipeline for DbContext session extension methods.
+    /// </summary>
+    /// <param name="context">The generator initialization context.</param>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var dbContextSymbols = context.SyntaxProvider
@@ -33,7 +37,7 @@ public sealed class DbContextExtensionsGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(dbContextSymbols, static (spc, ctxSymbols) =>
         {
-            if(ctxSymbols.Length > 0)
+            if (ctxSymbols.Length > 0)
             {
                 var output = GenerateSessionExtensions(ctxSymbols);
                 spc.AddSource("DbContextSessionExtensions.g.cs", SourceText.From(output, Encoding.UTF8));
