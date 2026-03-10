@@ -1,4 +1,5 @@
 using MongoDB.Driver;
+using MongoFlow;
 
 namespace MongoFlow.Tests;
 

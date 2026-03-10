@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Linq.Expressions;
 using MongoDB.Driver;
 
 // ReSharper disable ComplexConditionExpression
@@ -11,6 +10,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 {
     private readonly Conventions _conventions;
     private readonly IDbSet<TEntity> _baseSet;
+    private readonly Func<TEntity, object?> _idAccessor;
 
     private readonly List<TEntity> _added = [];
     private readonly List<TEntity> _removed = [];
@@ -20,8 +20,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     {
         _baseSet = baseSet;
         _conventions = conventions ?? new();
-
-        EntityIdAccessor<TEntity>.SetConvention(_conventions.IdConvention);
+        _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
     }
 
     public void Add(TEntity entity) => _added.Add(entity);
@@ -69,7 +68,14 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
             default:
                 throw new NotSupportedException($"The type {_baseSet.GetType()} is not supported.");
         }
+    }
 
+    /// <summary>
+    /// Clears all tracked adds, removes, and updates.
+    /// Called by the generated SaveChangesAsync after a successful transaction commit.
+    /// </summary>
+    public void ClearTracking()
+    {
         _added.Clear();
         _removed.Clear();
         _updated.Clear();
@@ -102,7 +108,8 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
         foreach (var entity in _updated)
         {
-            if (!entity.TryGetId(out var id))
+            var id = _idAccessor(entity);
+            if (id is null)
             {
                 continue;
             }
@@ -110,13 +117,13 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
             var filter = Builders<TEntity>.Filter.Eq("_id", id);
             var result = await collection.ReplaceOneAsync(session, filter, entity);
 
-            // this means we are missing this document, so we mimic MongoDB driver and add it
-            if (result.MatchedCount != 1 || result.ModifiedCount != 1)
+            // document not found — queue it for insert
+            if (result.MatchedCount == 0)
             {
                 var existing = _added.FirstOrDefault(addItem =>
                     addItem is not null
-                    && addItem.TryGetId(out var addId)
-                    && addId!.Equals(id));
+                    && _idAccessor(addItem) is { } addId
+                    && addId.Equals(id));
 
                 // so we "override" the added item with updated item
                 if (existing != null)
@@ -136,7 +143,8 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 .GroupBy(doc =>
                 {
                     ArgumentNullException.ThrowIfNull(doc);
-                    return doc.GetId();
+                    return _idAccessor(doc) ?? throw new InvalidOperationException(
+                        $"Object of type {typeof(TEntity).Name} doesn't expose an Id.");
                 });
             var uniqueDocs = addedWithUniqueIds
                 .Select(x => x.FirstOrDefault())
@@ -156,8 +164,8 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         {
             var ids = _removed
                 .Where(e => e is not null)
-                .Select(e => e!.GetId())
-                .Where(id => id != null)
+                .Select(e => _idAccessor(e!) ?? throw new InvalidOperationException(
+                    $"Object of type {typeof(TEntity).Name} doesn't expose an Id."))
                 .ToList();
 
             var filter = Builders<TEntity>.Filter.In("_id", ids);
@@ -204,17 +212,15 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
         TEntity? GetExistingFromInMemory(TEntity entity)
         {
-            if (!entity.TryGetId(out var id))
-            {
-                throw new InvalidOperationException("Cannot fetch entity Id without known Id property.");
-            }
+            var id = _idAccessor(entity)
+                ?? throw new InvalidOperationException("Cannot fetch entity Id without known Id property.");
 
             var existing = memSet
                 .Collection
                 .FirstOrDefault(x =>
                     x is not null
-                    && x.TryGetId(out var existingId)
-                    && existingId!.Equals(id));
+                    && _idAccessor(x) is { } existingId
+                    && existingId.Equals(id));
             return existing;
         }
 

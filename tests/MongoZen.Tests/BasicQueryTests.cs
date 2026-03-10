@@ -26,15 +26,18 @@ public class BasicQueryTests : IntegrationTestBase
         }
     }
 
-    private async Task InsertTestUsersAsync()
+    private async Task<IEnumerable<User>> InsertTestUsersAsync()
     {
-        var collection = Database!.GetCollection<User>("Users");
-        await collection.DeleteManyAsync(FilterDefinition<User>.Empty); // clean slate
-        await collection.InsertManyAsync(new[]
-        {
+        User[] data =
+        [
             new User { Id = "1", Name = "Alice", Age = 30 },
             new User { Id = "2", Name = "Bob", Age = 40 },
-        });
+        ];
+
+        var collection = Database!.GetCollection<User>("Users");
+        await collection.DeleteManyAsync(FilterDefinition<User>.Empty); // clean slate
+        await collection.InsertManyAsync(data);
+        return data;
     }
 
     private static void InsertInMemoryTestUsers(TestDbContext ctx)
@@ -100,12 +103,12 @@ public class BasicQueryTests : IntegrationTestBase
     [Fact]
     public async Task Can_Remove_DB_ById()
     {
-        await InsertTestUsersAsync();
+        var data = (await InsertTestUsersAsync()).ToArray();
 
         using var ctx = new TestDbContext(new DbContextOptions(Database!));
 
         var dbSet = (DbSet<User>)ctx.Users;
-        await dbSet.RemoveById("1");
+        await dbSet.Remove(data[0]);
 
         var result = await ctx.Users.QueryAsync(u => true);
 

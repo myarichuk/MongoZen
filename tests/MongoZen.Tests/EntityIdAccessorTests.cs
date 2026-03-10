@@ -51,21 +51,19 @@ public class EntityIdAccessorTests
     [Fact]
     public void CustomConvention_OverridesDefault()
     {
-        try
-        {
-            var custom = new FakeConvention();
-            EntityIdAccessor<WithBsonId>.SetConvention(custom);
+        var custom = new FakeConvention();
+        var accessor = EntityIdAccessor<WithBsonId>.GetAccessor(custom);
 
-            var entity = new WithBsonId { CustomId = 42 };
-            var id = EntityIdAccessor<WithBsonId>.Get(entity);
+        var entity = new WithBsonId { CustomId = 42 };
+        var id = accessor(entity);
 
-            Assert.Null(id);
-        }
-        finally
-        {
-            // Reset to default convention
-            EntityIdAccessor<WithBsonId>.SetConvention(GlobalIdConventionProvider.Convention);
-        }
+        // FakeConvention returns null for ResolveIdProperty, so no Id is resolved
+        Assert.Null(id);
+
+        // Default convention should still resolve the Id via [BsonId]
+        var defaultAccessor = EntityIdAccessor<WithBsonId>.GetAccessor(GlobalIdConventionProvider.Convention);
+        var defaultId = defaultAccessor(entity);
+        Assert.Equal(42, defaultId);
     }
 
     private class WithBsonId

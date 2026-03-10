@@ -1,19 +1,31 @@
+using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
+#nullable enable
 
 namespace MongoZen;
 
+/// <summary>
+/// Caches compiled Id‑accessor delegates per (TEntity, IIdConvention‑type) pair.
+/// Thread‑safe: <see cref="ConcurrentDictionary{TKey,TValue}"/> handles concurrent reads/writes,
+/// and <see cref="Lazy{T}"/> ensures each delegate is compiled exactly once.
+/// </summary>
 internal static class EntityIdAccessor<TEntity>
 {
-    internal static Func<TEntity, object?> Get { get; private set; } = Build();
+    private static readonly ConcurrentDictionary<Type, Lazy<Func<TEntity, object?>>> Cache = new();
 
-    internal static void SetConvention(IIdConvention convention) => Get = Build(convention);
+    /// <summary>
+    /// Returns the compiled Id‑accessor for the given convention, building it once and caching it.
+    /// </summary>
+    /// <returns>The accessor, or null if no Id‑property was found.</returns>
+    internal static Func<TEntity, object?> GetAccessor(IIdConvention convention) =>
+        Cache.GetOrAdd(
+            convention.GetType(),
+            _ => new Lazy<Func<TEntity, object?>>(() => Build(convention))).Value;
 
-    private static Func<TEntity, object?> Build(IIdConvention? customResolver = null)
+    private static Func<TEntity, object?> Build(IIdConvention convention)
     {
-        var prop = customResolver != null ?
-            customResolver.ResolveIdProperty<TEntity>() :
-            GlobalIdConventionProvider.Convention.ResolveIdProperty<TEntity>();
+        var prop = convention.ResolveIdProperty<TEntity>();
 
         if (prop is null)
         {
