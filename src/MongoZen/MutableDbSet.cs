@@ -184,7 +184,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 .ToList();
 
             var filter = Builders<TEntity>.Filter.In(_idFieldName, ids);
-            await collection.DeleteManyAsync(filter, cancellationToken);
+            await collection.DeleteManyAsync(filter, cancellationToken: cancellationToken);
         }
     }
 
@@ -255,7 +255,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 .ToList();
 
             var filter = Builders<TEntity>.Filter.In(_idFieldName, ids);
-            await collection.DeleteManyAsync(session, filter, cancellationToken);
+            await collection.DeleteManyAsync(session, filter, cancellationToken: cancellationToken);
         }
     }
 
