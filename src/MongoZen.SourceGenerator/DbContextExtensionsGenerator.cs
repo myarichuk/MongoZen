@@ -25,7 +25,7 @@ public sealed class DbContextExtensionsGenerator : IIncrementalGenerator
                     }
 
                     var compilation = ctx.SemanticModel.Compilation;
-                    return !Utils.InheritsFrom(symbol, "MongoZen.DbContext", compilation) ? null :
+                    return !Utils.InheritsFrom(symbol, "DbContext") ? null :
                         symbol.IsAbstract ? null : symbol;
                 })
             .Where(static symbol => symbol is not null)!

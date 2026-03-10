@@ -1,15 +1,47 @@
 using System.Text;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Testing;
-using Microsoft.CodeAnalysis.Testing;
-using Microsoft.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace MongoZen.SourceGenerator.Tests;
 
 public class DbContextExtensionsGeneratorTests
 {
+    private static CSharpCompilation CreateCompilation(params string[] sources)
+    {
+        var references = new List<MetadataReference>();
+
+        // Add .NET runtime assemblies
+        var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
+        foreach (var dll in new[]
+                 {
+                     "System.Runtime.dll",
+                     "System.Collections.dll",
+                     "System.Threading.Tasks.dll",
+                     "netstandard.dll",
+                 })
+        {
+            var path = Path.Combine(runtimeDir, dll);
+            if (File.Exists(path))
+            {
+                references.Add(MetadataReference.CreateFromFile(path));
+            }
+        }
+
+        references.Add(MetadataReference.CreateFromFile(typeof(object).Assembly.Location));
+
+        // MongoZen reference (brings DbContext, IDbSet<T>, etc.)
+        references.Add(MetadataReference.CreateFromFile(typeof(DbContext).Assembly.Location));
+
+        var trees = sources.Select(s => CSharpSyntaxTree.ParseText(s)).ToArray();
+        return CSharpCompilation.Create(
+            "TestAssembly",
+            trees,
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+    }
+
     [Fact]
-    public async Task GeneratesStartSessionExtensionForMultipleDbContexts()
+    public void GeneratesStartSessionExtensionForMultipleDbContexts()
     {
         var source = @"
 using MongoZen;
@@ -66,28 +98,28 @@ public static class DbContextSessionExtensions
 }
 ";
 
-        var test = new CSharpSourceGeneratorTest<DbContextExtensionsGenerator, DefaultVerifier>
-        {
-            TestState =
-            {
-                Sources = { source, sessionStubs },
-                ReferenceAssemblies = ReferenceAssemblies.Net.Net80,
-                GeneratedSources =
-                {
-                    (typeof(DbContextExtensionsGenerator), "DbContextSessionExtensions.g.cs",
-                        SourceText.From(expected, Encoding.UTF8)),
-                },
-            },
-        };
+        var compilation = CreateCompilation(source, sessionStubs);
+        var generator = new DbContextExtensionsGenerator();
+        var driver = CSharpGeneratorDriver.Create(generator);
+        driver = (CSharpGeneratorDriver)driver.RunGeneratorsAndUpdateCompilation(
+            compilation, out var outputCompilation, out var diagnostics);
 
-        test.TestState.AdditionalReferences.Add(
-            MetadataReference.CreateFromFile(typeof(DbContext).Assembly.Location));
+        var result = driver.GetRunResult();
+        Assert.Single(result.Results);
 
-        await test.RunAsync();
+        var generatorResult = result.Results[0];
+        Assert.Empty(generatorResult.Diagnostics);
+        Assert.Single(generatorResult.GeneratedSources);
+
+        var generatedSource = generatorResult.GeneratedSources[0];
+        Assert.Equal("DbContextSessionExtensions.g.cs", generatedSource.HintName);
+
+        var actualText = generatedSource.SourceText.ToString();
+        Assert.Equal(Normalize(expected), Normalize(actualText));
     }
 
     [Fact]
-    public async Task GeneratesStartSessionExtensionForDbContextInNamespace()
+    public void GeneratesStartSessionExtensionForDbContextInNamespace()
     {
         var source = @"
 using MongoZen;
@@ -129,23 +161,25 @@ public static class DbContextSessionExtensions
 }
 ";
 
-        var test = new CSharpSourceGeneratorTest<DbContextExtensionsGenerator, DefaultVerifier>
-        {
-            TestState =
-            {
-                Sources = { source, sessionStubs },
-                ReferenceAssemblies = ReferenceAssemblies.Net.Net80,
-                GeneratedSources =
-                {
-                    (typeof(DbContextExtensionsGenerator), "DbContextSessionExtensions.g.cs",
-                        SourceText.From(expected, Encoding.UTF8)),
-                },
-            },
-        };
+        var compilation = CreateCompilation(source, sessionStubs);
+        var generator = new DbContextExtensionsGenerator();
+        var driver = CSharpGeneratorDriver.Create(generator);
+        driver = (CSharpGeneratorDriver)driver.RunGeneratorsAndUpdateCompilation(
+            compilation, out var outputCompilation, out var diagnostics);
 
-        test.TestState.AdditionalReferences.Add(
-            MetadataReference.CreateFromFile(typeof(DbContext).Assembly.Location));
+        var result = driver.GetRunResult();
+        Assert.Single(result.Results);
 
-        await test.RunAsync();
+        var generatorResult = result.Results[0];
+        Assert.Empty(generatorResult.Diagnostics);
+        Assert.Single(generatorResult.GeneratedSources);
+
+        var generatedSource = generatorResult.GeneratedSources[0];
+        Assert.Equal("DbContextSessionExtensions.g.cs", generatedSource.HintName);
+
+        var actualText = generatedSource.SourceText.ToString();
+        Assert.Equal(Normalize(expected), Normalize(actualText));
     }
+
+    private static string Normalize(string s) => s.Replace("\r\n", "\n");
 }

@@ -17,8 +17,9 @@ public class TryGetIdTests
     public void TryGetId_ShouldReturnFalse_WhenObjectIsNull()
     {
         object? obj = null;
+        var accessor = EntityIdAccessor<object>.GetAccessor(new DefaultIdConvention());
 
-        var result = obj.TryGetId(out var id);
+        var result = obj.TryGetId(accessor, out var id);
 
         Assert.False(result);
         Assert.Null(id);
@@ -31,8 +32,9 @@ public class TryGetIdTests
     public void TryGetId_ShouldReturnFalse_WhenNoIdPropertyExists()
     {
         var obj = new NoIdClass { Name = "Test" };
+        var accessor = EntityIdAccessor<NoIdClass>.GetAccessor(new DefaultIdConvention());
 
-        var result = obj.TryGetId(out var id);
+        var result = obj.TryGetId(accessor, out var id);
 
         Assert.False(result);
         Assert.Null(id);
@@ -46,8 +48,9 @@ public class TryGetIdTests
     {
         var obj = new IdByName();
         var expectedId = obj.Id;
+        var accessor = EntityIdAccessor<IdByName>.GetAccessor(new DefaultIdConvention());
 
-        var result = obj.TryGetId(out var id);
+        var result = obj.TryGetId(accessor, out var id);
 
         Assert.True(result);
         Assert.Equal(expectedId, id);
@@ -60,8 +63,9 @@ public class TryGetIdTests
     public void TryGetId_ShouldReturnTrue_WhenBsonIdAttributeExists()
     {
         var obj = new BsonIdClass { CustomId = "xyz789" };
+        var accessor = EntityIdAccessor<BsonIdClass>.GetAccessor(new DefaultIdConvention());
 
-        var result = obj.TryGetId(out var id);
+        var result = obj.TryGetId(accessor, out var id);
 
         Assert.True(result);
         Assert.Equal("xyz789", id);
@@ -78,8 +82,9 @@ public class TryGetIdTests
             Id = "nope",
             CustomId = "yes!",
         };
+        var accessor = EntityIdAccessor<BothIdClass>.GetAccessor(new DefaultIdConvention());
 
-        var result = obj.TryGetId(out var id);
+        var result = obj.TryGetId(accessor, out var id);
 
         Assert.True(result);
         Assert.Equal("yes!", id); // BsonId takes precedence
@@ -92,8 +97,9 @@ public class TryGetIdTests
     public void TryGetId_ShouldReturnFalse_WhenIdValueIsNull()
     {
         var obj = new BsonIdClass { CustomId = null };
+        var accessor = EntityIdAccessor<BsonIdClass>.GetAccessor(new DefaultIdConvention());
 
-        var result = obj.TryGetId(out var id);
+        var result = obj.TryGetId(accessor, out var id);
 
         Assert.False(result); // property found, but value is null
         Assert.Null(id);
@@ -107,9 +113,10 @@ public class TryGetIdTests
     {
         var obj1 = new IdByName();
         var obj2 = new IdByName();
+        var accessor = EntityIdAccessor<IdByName>.GetAccessor(new DefaultIdConvention());
 
-        var result1 = obj1.TryGetId(out var id1);
-        var result2 = obj2.TryGetId(out var id2);
+        var result1 = obj1.TryGetId(accessor, out var id1);
+        var result2 = obj2.TryGetId(accessor, out var id2);
 
         Assert.True(result1);
         Assert.True(result2);

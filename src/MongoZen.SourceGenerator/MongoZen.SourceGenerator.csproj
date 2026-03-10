@@ -9,7 +9,7 @@
         <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
         <IsRoslynComponent>true</IsRoslynComponent>
         <PackageId>MongoZen.SourceGenerator</PackageId>
-        <RootNamespace>MongoFlow.SourceGenerator</RootNamespace>
+        <RootNamespace>MongoZen.SourceGenerator</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>
@@ -18,7 +18,7 @@
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
         <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" PrivateAssets="all"/>
-        <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.3.0"/>
+        <PackageReference Include="System.Collections.Immutable" Version="9.0.0" PrivateAssets="all"/>
     </ItemGroup>
 
     <ItemGroup>

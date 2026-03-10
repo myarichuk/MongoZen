@@ -33,7 +33,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
                     }
 
                     var compilation = ctx.SemanticModel.Compilation;
-                    return !Utils.InheritsFrom(symbol, "MongoZen.DbContext", compilation) ? null :
+                    return !Utils.InheritsFrom(symbol, "DbContext") ? null :
                         symbol.IsAbstract ? null : symbol;
                 })
             .Where(static symbol => symbol is not null)!
@@ -43,24 +43,18 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(compilationAndClasses, static (spc, source) =>
         {
-            var (compilation, classes) = source;
-            var iDbSetSymbol = compilation.GetTypeByMetadataName("MongoZen.IDbSet`1");
-
-            if (iDbSetSymbol == null)
-            {
-                return;
-            }
+            var (_, classes) = source;
 
             foreach (var ctxSymbol in classes)
             {
                 spc.AddSource(
                     $"{ctxSymbol.Name}Session.g.cs",
-                    SourceText.From(GenerateSessionClass(ctxSymbol, iDbSetSymbol), Encoding.UTF8));
+                    SourceText.From(GenerateSessionClass(ctxSymbol), Encoding.UTF8));
             }
         });
     }
 
-    private static string GenerateSessionClass(INamedTypeSymbol ctxSymbol, INamedTypeSymbol iDbSetSymbol)
+    private static string GenerateSessionClass(INamedTypeSymbol ctxSymbol)
     {
         var ns = ctxSymbol.ContainingNamespace.IsGlobalNamespace
             ? null
@@ -90,7 +84,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
         {
             if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
-                SymbolEqualityComparer.Default.Equals(namedType.ConstructedFrom, iDbSetSymbol))
+                namedType.Name == "IDbSet")
             {
                  var entityType = namedType.TypeArguments[0].ToDisplayString();
                  mutableProps.Add((member.Name, entityType));
@@ -99,12 +93,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         // Constructor
         sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
-          .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext) : this(dbContext, startTransaction: true)");
-        sb.Append(indent2).AppendLine("{");
-        sb.Append(indent2).AppendLine("}");
-        sb.AppendLine();
-        sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
-          .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext, bool startTransaction) : base(dbContext, startTransaction)");
+          .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext) : base(dbContext)");
         sb.Append(indent2).AppendLine("{");
 
         foreach (var prop in mutableProps)
@@ -141,7 +130,14 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         sb.AppendLine();
         sb.Append(indent2).AppendLine("        await CommitTransactionAsync();");
-        sb.Append(indent2).AppendLine("        await DisposeAsync();");
+        sb.AppendLine();
+
+        // Clear tracking only after successful commit
+        foreach (var prop in mutableProps)
+        {
+            sb.Append(indent2).Append("        ").Append(prop.Name).AppendLine(".ClearTracking();");
+        }
+
         sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("    catch");
         sb.Append(indent2).AppendLine("    {");
@@ -150,7 +146,6 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("            await AbortTransactionAsync();");
         sb.Append(indent2).AppendLine("        }");
         sb.AppendLine();
-        sb.Append(indent2).AppendLine("        await DisposeAsync();");
         sb.Append(indent2).AppendLine("        throw;");
         sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
