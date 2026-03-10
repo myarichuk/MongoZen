@@ -67,11 +67,13 @@ public class ForumContext : DbContext
 public class BloggingContextSession
 {
     public BloggingContextSession(BloggingContext context) {}
+    public BloggingContextSession(BloggingContext context, bool startTransaction) {}
 }
 
 public class ForumContextSession
 {
     public ForumContextSession(ForumContext context) {}
+    public ForumContextSession(ForumContext context, bool startTransaction) {}
 }
 ";
 
@@ -84,8 +86,14 @@ public static class DbContextSessionExtensions
     public static BloggingContextSession StartSession(this BloggingContext context)
         => new BloggingContextSession(context);
 
+    public static BloggingContextSession StartSession(this BloggingContext context, bool startTransaction)
+        => new BloggingContextSession(context, startTransaction);
+
     public static ForumContextSession StartSession(this ForumContext context)
         => new ForumContextSession(context);
+
+    public static ForumContextSession StartSession(this ForumContext context, bool startTransaction)
+        => new ForumContextSession(context, startTransaction);
 
 }
 ";
@@ -133,6 +141,7 @@ namespace MyNamespace
     public class BloggingContextSession
     {
         public BloggingContextSession(BloggingContext context) {}
+        public BloggingContextSession(BloggingContext context, bool startTransaction) {}
     }
 }
 ";
@@ -145,6 +154,9 @@ public static class DbContextSessionExtensions
 {
     public static MyNamespace.BloggingContextSession StartSession(this MyNamespace.BloggingContext context)
         => new MyNamespace.BloggingContextSession(context);
+
+    public static MyNamespace.BloggingContextSession StartSession(this MyNamespace.BloggingContext context, bool startTransaction)
+        => new MyNamespace.BloggingContextSession(context, startTransaction);
 
 }
 ";
