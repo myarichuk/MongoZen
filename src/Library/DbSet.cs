@@ -14,7 +14,7 @@ public class DbSet<T> : IDbSet<T>
     private readonly IQueryable<T> _collectionAsQueryable;
     private readonly IMongoCollection<T> _collection;
 
-    public DbSet(IMongoCollection<T> collection)
+    public DbSet(IMongoCollection<T> collection, Conventions conventions)
     {
         _collection = collection;
         _collectionAsQueryable = collection.AsQueryable();

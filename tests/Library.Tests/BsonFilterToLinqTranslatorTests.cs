@@ -1,4 +1,4 @@
-using Library.FilterUtils;
+using MongoFlow.FilterUtils;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -146,9 +146,8 @@ public class BsonFilterToLinqTranslatorTests
     public void ExistsFilter_ShouldThrowNotSupported()
     {
         var filter = new BsonDocument("Name", new BsonDocument("$exists", true)).ToFilterDefinition<Person>();
-        var expr = _toLinqTranslator.Translate(filter).Compile();
 
-        Assert.Throws<NotSupportedException>(() => expr(new Person { Name = "Alice" }));
+        Assert.Throws<NotSupportedException>(() => _toLinqTranslator.Translate(filter).Compile());
         //will only work correctly when handling null or missing fields explicitly
     }
 

@@ -1,5 +1,6 @@
 using MongoDB.Bson.Serialization.Attributes;
 using System.Reflection;
+using MongoFlow;
 
 namespace MongoFlow.Tests;
 

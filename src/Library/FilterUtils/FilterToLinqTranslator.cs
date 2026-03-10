@@ -27,7 +27,7 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
     /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using default translators from the current MongoFlow.
     /// </summary>
     public FilterToLinqTranslator()
-        : this(FilterElementTranslatorDiscovery.DiscoverFromMongoFlow()) { }
+        : this(FilterElementTranslatorDiscovery.DiscoverFromLibrary()) { }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using translators discovered from the specified assemblies.

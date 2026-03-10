@@ -77,7 +77,7 @@ public abstract class DbContext: IDisposable
                 var collection = genericGetCollection.Invoke(Options.Mongo, [prop.Name, null])!;
 
                 var constructed = typeof(DbSet<>).MakeGenericType(entityType);
-                instance = Activator.CreateInstance(constructed, collection)!;
+                instance = Activator.CreateInstance(constructed, collection, Options.Conventions)!;
             }
 
             prop.SetValue(this, instance);

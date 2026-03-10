@@ -5,7 +5,7 @@ using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 // ReSharper disable MemberCanBePrivate.Global
-namespace Library.FilterUtils;
+namespace MongoFlow.FilterUtils;
 
 public class FilterToLinqToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLinqTranslator
 {

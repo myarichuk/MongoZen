@@ -1,6 +1,6 @@
 using MongoDB.Driver;
 
-namespace Library.FilterUtils;
+namespace MongoFlow.FilterUtils;
 
 public interface IFilterTranslator<T>
 {
