@@ -93,7 +93,12 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         // Constructor
         sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
-          .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext) : base(dbContext)");
+          .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext) : this(dbContext, startTransaction: true)");
+        sb.Append(indent2).AppendLine("{");
+        sb.Append(indent2).AppendLine("}");
+        sb.AppendLine();
+        sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
+          .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext, bool startTransaction) : base(dbContext, startTransaction)");
         sb.Append(indent2).AppendLine("{");
 
         foreach (var prop in mutableProps)
@@ -146,6 +151,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("            await AbortTransactionAsync();");
         sb.Append(indent2).AppendLine("        }");
         sb.AppendLine();
+        sb.Append(indent2).AppendLine("        await DisposeAsync();");
         sb.Append(indent2).AppendLine("        throw;");
         sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
