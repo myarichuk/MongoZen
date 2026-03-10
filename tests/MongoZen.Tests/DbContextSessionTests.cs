@@ -1,0 +1,119 @@
+using MongoDB.Driver;
+using MongoZen;
+
+namespace MongoZen.Tests;
+
+public class DbContextSessionTests : IntegrationTestBase
+{
+    private class User
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString();
+
+        public string Name { get; set; } = string.Empty;
+    }
+
+    private class TestDbContext : DbContext
+    {
+        public TestDbContext(DbContextOptions options)
+            : base(options)
+        {
+        }
+
+        public IDbSet<User> Users { get; set; } = null!;
+    }
+
+    private sealed class TestDbContextSession : DbContextSession<TestDbContext>
+    {
+        public TestDbContextSession(TestDbContext dbContext, bool startTransaction = true)
+            : base(dbContext, startTransaction)
+        {
+        }
+
+        public void ExposeEnsureTransactionActive() => EnsureTransactionActive();
+    }
+
+    [Fact]
+    public async Task Constructor_StartsTransaction()
+    {
+        var ctx = new TestDbContext(new DbContextOptions());
+        await using var session = new TestDbContextSession(ctx);
+
+        Assert.True(session.Transaction.IsActive);
+        Assert.True(session.Transaction.IsInMemoryTransaction);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_ClearsSession()
+    {
+        var ctx = new TestDbContext(new DbContextOptions());
+        var session = new TestDbContextSession(ctx);
+
+        await session.DisposeAsync();
+
+        Assert.Null(session.ClientSession);
+        Assert.False(session.Transaction.IsActive);
+    }
+
+    [Fact]
+    public async Task AbortTransactionAsync_SetsIsActiveToFalse_ForInMemory()
+    {
+        var ctx = new TestDbContext(new DbContextOptions());
+        await using var session = new TestDbContextSession(ctx);
+
+        Assert.True(session.Transaction.IsActive);
+        await session.AbortTransactionAsync();
+
+        Assert.False(session.Transaction.IsActive);
+    }
+
+    [Fact]
+    public async Task CommitTransactionAsync_SetsIsActiveToFalse_ForInMemory()
+    {
+        var ctx = new TestDbContext(new DbContextOptions());
+        await using var session = new TestDbContextSession(ctx);
+
+        Assert.True(session.Transaction.IsActive);
+        await session.CommitTransactionAsync();
+
+        Assert.False(session.Transaction.IsActive);
+    }
+
+    [Fact]
+    public async Task UseSession_WithActiveTransaction_Succeeds()
+    {
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
+        await using var session = new TestDbContextSession(ctx, startTransaction: false);
+
+        using var clientSession = await Client.StartSessionAsync();
+        clientSession.StartTransaction();
+
+        session.UseSession(clientSession);
+
+        Assert.True(session.Transaction.IsActive);
+        Assert.NotNull(session.ClientSession);
+
+        await session.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task UseSession_WithoutActiveTransaction_Throws()
+    {
+        var ctx = new TestDbContext(new DbContextOptions(Database!));
+        await using var session = new TestDbContextSession(ctx, startTransaction: false);
+
+        using var clientSession = await Client.StartSessionAsync();
+
+        Assert.Throws<InvalidOperationException>(() => session.UseSession(clientSession));
+    }
+
+    [Fact]
+    public async Task EnsureTransactionActive_ThrowsAfterCommit()
+    {
+        var ctx = new TestDbContext(new DbContextOptions());
+        await using var session = new TestDbContextSession(ctx);
+
+        await session.CommitTransactionAsync();
+
+        Assert.Throws<InvalidOperationException>(() => session.ExposeEnsureTransactionActive());
+    }
+}

@@ -43,9 +43,31 @@ public class FilterRegexElementTranslator: FilterElementTranslatorBase
         }
 
         var regexOptions = RegexOptions.None;
-        if (options?.Contains('i') ?? false)
+        if (options != null)
         {
-            regexOptions |= RegexOptions.IgnoreCase;
+            foreach (var ch in options)
+            {
+                if (ch == 'i')
+                {
+                    regexOptions |= RegexOptions.IgnoreCase;
+                }
+                else if (ch == 'm')
+                {
+                    regexOptions |= RegexOptions.Multiline;
+                }
+                else if (ch == 's')
+                {
+                    regexOptions |= RegexOptions.Singleline;
+                }
+                else if (ch == 'x')
+                {
+                    regexOptions |= RegexOptions.IgnorePatternWhitespace;
+                }
+                else
+                {
+                    throw new NotSupportedException($"Regex option '{ch}' is not supported.");
+                }
+            }
         }
 
         var member = Expression.PropertyOrField(param, field);

@@ -23,19 +23,19 @@ public class DbSet<TEntity> : IDbSet<TEntity>
         _collectionAsQueryable = _collection.AsQueryable();
     }
 
-    public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter) =>
-        await (await _collection.FindAsync(filter)).ToListAsync();
+    public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default) =>
+        await (await _collection.FindAsync(filter, cancellationToken: cancellationToken)).ToListAsync(cancellationToken);
 
-    public async ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter) =>
-        await (await _collection.FindAsync(Builders<TEntity>.Filter.Where(filter))).ToListAsync();
+    public async ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, CancellationToken cancellationToken = default) =>
+        await (await _collection.FindAsync(Builders<TEntity>.Filter.Where(filter), cancellationToken: cancellationToken)).ToListAsync(cancellationToken);
 
-    public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session) =>
-        await (await _collection.FindAsync(session, filter)).ToListAsync();
+    public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session, CancellationToken cancellationToken = default) =>
+        await (await _collection.FindAsync(session, filter, cancellationToken: cancellationToken)).ToListAsync(cancellationToken);
 
-    public async ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session) =>
-        await (await _collection.FindAsync(session, Builders<TEntity>.Filter.Where(filter))).ToListAsync();
+    public async ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default) =>
+        await (await _collection.FindAsync(session, Builders<TEntity>.Filter.Where(filter), cancellationToken: cancellationToken)).ToListAsync(cancellationToken);
 
-    public IEnumerator<TEntity> GetEnumerator() => _collectionAsQueryable.GetEnumerator();
+    public IEnumerator<TEntity> GetEnumerator() => throw new NotSupportedException("Use QueryAsync for asynchronous execution instead of synchronous LINQ evaluation.");
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 

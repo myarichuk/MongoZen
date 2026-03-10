@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Text.Json;
 using MongoDB.Driver;
 
 // ReSharper disable ComplexConditionExpression
@@ -11,6 +12,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     private readonly Conventions _conventions;
     private readonly IDbSet<TEntity> _baseSet;
     private readonly Func<TEntity, object?> _idAccessor;
+    private readonly string _idFieldName;
 
     private readonly List<TEntity> _added = [];
     private readonly List<TEntity> _removed = [];
@@ -21,6 +23,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         _baseSet = baseSet;
         _conventions = conventions ?? new();
         _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
+        _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
     }
 
     public void Add(TEntity entity) => _added.Add(entity);
@@ -35,7 +38,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
     public IEnumerable<TEntity> GetUpdated() => _updated;
 
-    public async Task CommitAsync(TransactionContext transaction)
+    public async Task CommitAsync(TransactionContext transaction, CancellationToken cancellationToken = default)
     {
         if (!transaction.IsActive)
         {
@@ -50,18 +53,18 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                     throw new InvalidOperationException("In-memory commits require an in-memory transaction.");
                 }
 
-                await InternalCommitAsync(memSet);
+                await InternalCommitAsync(memSet, cancellationToken);
                 break;
             case DbSet<TEntity> mongoSet:
                 if (transaction.IsInMemoryTransaction)
                 {
                     if (transaction.Session != null)
                     {
-                        await InternalCommitAsync(mongoSet, transaction.Session);
+                        await InternalCommitAsync(mongoSet, transaction.Session, cancellationToken);
                     }
                     else
                     {
-                        await InternalCommitAsync(mongoSet);
+                        await InternalCommitAsync(mongoSet, cancellationToken);
                     }
 
                     break;
@@ -77,7 +80,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                     throw new InvalidOperationException("MongoDB commits require an active transaction.");
                 }
 
-                await InternalCommitAsync(mongoSet, transaction.Session);
+                await InternalCommitAsync(mongoSet, transaction.Session, cancellationToken);
                 break;
             default:
                 throw new NotSupportedException($"The type {_baseSet.GetType()} is not supported.");
@@ -96,7 +99,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     }
 
     // IQueryable passthrough
-    public IEnumerator<TEntity> GetEnumerator() => _baseSet.GetEnumerator();
+    public IEnumerator<TEntity> GetEnumerator() => throw new NotSupportedException("Use QueryAsync for asynchronous execution instead of synchronous LINQ evaluation.");
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
@@ -106,36 +109,36 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
     public IQueryProvider Provider => _baseSet.Provider;
 
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter) => _baseSet.QueryAsync(filter);
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default) => _baseSet.QueryAsync(filter, cancellationToken);
 
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter) => _baseSet.QueryAsync(filter);
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, CancellationToken cancellationToken = default) => _baseSet.QueryAsync(filter, cancellationToken);
 
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session)
-        => _baseSet.QueryAsync(filter, session);
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
+        => _baseSet.QueryAsync(filter, session, cancellationToken);
 
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session)
-        => _baseSet.QueryAsync(filter, session);
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
+        => _baseSet.QueryAsync(filter, session, cancellationToken);
 
-    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet)
+    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, CancellationToken cancellationToken = default)
     {
         var collection = mongoSet.Collection;
 
         foreach (var entity in _updated)
         {
-            if (!entity.TryGetId(out var id))
+            if (!entity.TryGetId(_idAccessor, out var id))
             {
                 continue;
             }
 
-            var filter = Builders<TEntity>.Filter.Eq("_id", id);
-            var result = await collection.ReplaceOneAsync(filter, entity);
+            var filter = Builders<TEntity>.Filter.Eq(_idFieldName, id);
+            var result = await collection.ReplaceOneAsync(filter, entity, cancellationToken: cancellationToken);
 
             // this means we are missing this document, so we mimic MongoDB driver and add it
             if (result.MatchedCount != 1 || result.ModifiedCount != 1)
             {
                 var existing = _added.FirstOrDefault(addItem =>
                     addItem is not null
-                    && addItem.TryGetId(out var addId)
+                    && addItem.TryGetId(_idAccessor, out var addId)
                     && addId!.Equals(id));
 
                 // so we "override" the added item with updated item
@@ -156,19 +159,19 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 .GroupBy(doc =>
                 {
                     ArgumentNullException.ThrowIfNull(doc);
-                    return doc.GetId();
+                    return doc.GetId(_idAccessor);
                 });
             var uniqueDocs = addedWithUniqueIds
                 .Select(x => x.FirstOrDefault())
                 .Where(x => x != null)
                 .Cast<TEntity>();
 
-            await collection.InsertManyAsync(uniqueDocs);
+            await collection.InsertManyAsync(uniqueDocs, cancellationToken: cancellationToken);
 
             foreach (var docGroup in addedWithUniqueIds.Where(group => group.Count() > 1))
             {
                 var replacementDoc = docGroup.Last();
-                await collection.ReplaceOneAsync(Builders<TEntity>.Filter.Eq("_id", docGroup.Key), replacementDoc);
+                await collection.ReplaceOneAsync(Builders<TEntity>.Filter.Eq(_idFieldName, docGroup.Key), replacementDoc, cancellationToken: cancellationToken);
             }
         }
 
@@ -176,16 +179,16 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         {
             var ids = _removed
                 .Where(e => e is not null)
-                .Select(e => e!.GetId())
+                .Select(e => e!.GetId(_idAccessor))
                 .Where(id => id != null)
                 .ToList();
 
-            var filter = Builders<TEntity>.Filter.In("_id", ids);
-            await collection.DeleteManyAsync(filter);
+            var filter = Builders<TEntity>.Filter.In(_idFieldName, ids);
+            await collection.DeleteManyAsync(filter, cancellationToken: cancellationToken);
         }
     }
 
-    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle session)
+    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle session, CancellationToken cancellationToken = default)
     {
         var collection = mongoSet.Collection;
 
@@ -197,8 +200,8 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 continue;
             }
 
-            var filter = Builders<TEntity>.Filter.Eq("_id", id);
-            var result = await collection.ReplaceOneAsync(session, filter, entity);
+            var filter = Builders<TEntity>.Filter.Eq(_idFieldName, id);
+            var result = await collection.ReplaceOneAsync(session, filter, entity, cancellationToken: cancellationToken);
 
             // document not found — queue it for insert
             if (result.MatchedCount == 0)
@@ -234,12 +237,12 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 .Where(x => x != null)
                 .Cast<TEntity>();
 
-            await collection.InsertManyAsync(session, uniqueDocs);
+            await collection.InsertManyAsync(session, uniqueDocs, cancellationToken: cancellationToken);
 
             foreach (var docGroup in addedWithUniqueIds.Where(group => group.Count() > 1))
             {
                 var replacementDoc = docGroup.Last();
-                await collection.ReplaceOneAsync(session, Builders<TEntity>.Filter.Eq("_id", docGroup.Key), replacementDoc);
+                await collection.ReplaceOneAsync(session, Builders<TEntity>.Filter.Eq(_idFieldName, docGroup.Key), replacementDoc, cancellationToken: cancellationToken);
             }
         }
 
@@ -251,12 +254,12 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                     $"Object of type {typeof(TEntity).Name} doesn't expose an Id."))
                 .ToList();
 
-            var filter = Builders<TEntity>.Filter.In("_id", ids);
-            await collection.DeleteManyAsync(session, filter);
+            var filter = Builders<TEntity>.Filter.In(_idFieldName, ids);
+            await collection.DeleteManyAsync(session, filter, cancellationToken: cancellationToken);
         }
     }
 
-    private Task InternalCommitAsync(InMemoryDbSet<TEntity> memSet)
+    private Task InternalCommitAsync(InMemoryDbSet<TEntity> memSet, CancellationToken cancellationToken = default)
     {
         foreach (var entity in _added)
         {
@@ -266,7 +269,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 memSet.Collection.Remove(existing);
             }
 
-            memSet.Collection.Add(entity);
+            memSet.Collection.Add(Clone(entity));
         }
 
         foreach (var entity in _removed)
@@ -289,7 +292,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
             if (existing != null)
             {
                 memSet.Collection.Remove(existing);
-                memSet.Collection.Add(entity);
+                memSet.Collection.Add(Clone(entity));
             }
         }
 
@@ -308,5 +311,11 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         }
 
         return Task.CompletedTask;
+    }
+
+    private static TEntity Clone(TEntity source)
+    {
+        var json = JsonSerializer.Serialize(source);
+        return JsonSerializer.Deserialize<TEntity>(json)!;
     }
 }
