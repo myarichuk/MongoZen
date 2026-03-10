@@ -23,7 +23,6 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
     private IClientSessionHandle? _session;
     private bool _ownsSession;
     private bool _inMemoryTransaction;
-    private bool _disposed;
     private bool? _transactionsSupported;
     private bool _committed;
 
@@ -37,6 +36,9 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Gets the active MongoDB client session handle, if one is attached.
+    /// </summary>
     public IClientSessionHandle? ClientSession => _session;
 
     /// <summary>
@@ -45,6 +47,9 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
     /// </summary>
     public TransactionContext Transaction => new(_session, _inMemoryTransaction);
 
+    /// <summary>
+    /// Begins a transaction for this session.
+    /// </summary>
     public void BeginTransaction()
     {
         if (_inMemoryTransaction)
@@ -78,6 +83,12 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
             }
 
             _session.StartTransaction();
+            return;
+        }
+
+        if (_dbContext.Options.Mongo == null)
+        {
+            HandleUnsupportedTransactions();
             return;
         }
 
@@ -115,6 +126,10 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
         _committed = false;
     }
 
+    /// <summary>
+    /// Commits the active transaction.
+    /// </summary>
+    /// <returns>A task that completes when the commit operation has finished.</returns>
     public async Task CommitTransactionAsync()
     {
         if (_inMemoryTransaction)
@@ -143,6 +158,10 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Aborts the active transaction.
+    /// </summary>
+    /// <returns>A task that completes when the abort operation has finished.</returns>
     public async Task AbortTransactionAsync()
     {
         if (_inMemoryTransaction)
@@ -245,7 +264,13 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
 
         if (_session == null)
         {
-            _session = _dbContext.Options.Mongo.Client.StartSession();
+            if (_dbContext.Options.Mongo == null)
+        {
+            HandleUnsupportedTransactions();
+            return;
+        }
+
+        _session = _dbContext.Options.Mongo.Client.StartSession();
             _ownsSession = true;
         }
 

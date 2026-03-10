@@ -19,6 +19,10 @@ namespace MongoZen.SourceGenerator;
 [Generator]
 public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 {
+    /// <summary>
+    /// Initializes the incremental generation pipeline for DbContext session wrapper classes.
+    /// </summary>
+    /// <param name="context">The generator initialization context.</param>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var dbContextSymbols = context.SyntaxProvider
@@ -86,8 +90,8 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
             if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
                 namedType.Name == "IDbSet")
             {
-                 var entityType = namedType.TypeArguments[0].ToDisplayString();
-                 mutableProps.Add((member.Name, entityType));
+                var entityType = namedType.TypeArguments[0].ToDisplayString();
+                mutableProps.Add((member.Name, entityType));
             }
         }
 
