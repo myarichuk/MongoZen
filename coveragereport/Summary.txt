@@ -1,25 +1,25 @@
 Summary
-  Generated on: 03/10/2026 - 10:40:31
-  Coverage date: 03/10/2026 - 10:40:01
-  Parser: Cobertura
+  Generated on: 03/10/2026 - 17:10:59
+  Coverage date: 03/10/2026 - 10:40:01 - 03/10/2026 - 17:10:35
+  Parser: MultiReport (2x Cobertura)
   Assemblies: 1
   Classes: 32
   Files: 32
-  Line coverage: 74.1%
-  Covered lines: 582
-  Uncovered lines: 203
-  Coverable lines: 785
-  Total lines: 1547
-  Branch coverage: 59.5% (205 of 344)
-  Covered branches: 205
-  Total branches: 344
-  Method coverage: 75.3% (101 of 134)
-  Full method coverage: 62.6% (84 of 134)
-  Covered methods: 101
-  Fully covered methods: 84
-  Total methods: 134
+  Line coverage: 75.2%
+  Covered lines: 608
+  Uncovered lines: 200
+  Coverable lines: 808
+  Total lines: 1545
+  Branch coverage: 62.1% (236 of 380)
+  Covered branches: 236
+  Total branches: 380
+  Method coverage: 75.7% (103 of 136)
+  Full method coverage: 63.2% (86 of 136)
+  Covered methods: 103
+  Fully covered methods: 86
+  Total methods: 136
 
-MongoZen                                                                             74.1%
+MongoZen                                                                             75.2%
   MongoZen.Conventions                                                                100%
   MongoZen.DbContext                                                                 86.2%
   MongoZen.DbContextOptions                                                            40%
@@ -49,6 +49,6 @@ MongoZen                                                                        
   MongoZen.GlobalIdConventionProvider                                                 100%
   MongoZen.InMemoryDbSet<T>                                                          77.4%
   MongoZen.MongoLinqValidator                                                         100%
-  MongoZen.MutableDbSet<T>                                                           80.2%
+  MongoZen.MutableDbSet<T>                                                           84.7%
   MongoZen.ReflectionExtensions                                                      57.1%
   MongoZen.TransactionContext                                                         100%

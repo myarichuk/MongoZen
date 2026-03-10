@@ -105,9 +105,61 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle session)
     {
         var collection = mongoSet.Collection;
-        var writes = new List<WriteModel<TEntity>>();
 
-        // Handle removals
+        foreach (var entity in _updated)
+        {
+            var id = _idAccessor(entity);
+            if (id is null)
+            {
+                continue;
+            }
+
+            var filter = Builders<TEntity>.Filter.Eq("_id", id);
+            var result = await collection.ReplaceOneAsync(session, filter, entity);
+
+            // document not found — queue it for insert
+            if (result.MatchedCount == 0)
+            {
+                var existing = _added.FirstOrDefault(addItem =>
+                    addItem is not null
+                    && _idAccessor(addItem) is { } addId
+                    && addId.Equals(id));
+
+                // so we "override" the added item with updated item
+                if (existing != null)
+                {
+                    _added.Remove(existing);
+                }
+
+                _added.Add(entity);
+            }
+        }
+
+        if (_added.Count > 0)
+        {
+            var addedWithUniqueIds = _added
+                .Where(doc => doc is not null)
+                .Select(doc => doc!)
+                .GroupBy(doc =>
+                {
+                    ArgumentNullException.ThrowIfNull(doc);
+                    return _idAccessor(doc) ?? throw new InvalidOperationException(
+                        $"Object of type {typeof(TEntity).Name} doesn't expose an Id.");
+                });
+            var uniqueDocs = addedWithUniqueIds
+                .Select(x => x.FirstOrDefault())
+                .Where(x => x != null)
+                .Cast<TEntity>();
+
+            await collection.InsertManyAsync(session, uniqueDocs);
+
+            foreach (var docGroup in addedWithUniqueIds.Where(group => group.Count() > 1))
+            {
+                var replacementDoc = docGroup.Last();
+                await collection.ReplaceOneAsync(session, Builders<TEntity>.Filter.Eq("_id", docGroup.Key), replacementDoc);
+            }
+        }
+
         if (_removed.Count > 0)
         {
             var ids = _removed
@@ -117,57 +169,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 .ToList();
 
             var filter = Builders<TEntity>.Filter.In("_id", ids);
-            writes.Add(new DeleteManyModel<TEntity>(filter));
-        }
-
-        // Handle updates and adds together by determining the final state per ID
-        var finalState = new Dictionary<object, TEntity>();
-
-        // Adds come first
-        foreach (var entity in _added)
-        {
-            if (entity is null)
-            {
-                continue;
-            }
-
-            var id = _idAccessor(entity) ?? throw new InvalidOperationException(
-                $"Object of type {typeof(TEntity).Name} doesn't expose an Id.");
-
-            finalState[id] = entity;
-        }
-
-        // Updates override adds, and also apply on top of existing DB documents
-        foreach (var entity in _updated)
-        {
-            if (entity is null)
-            {
-                continue;
-            }
-
-            var id = _idAccessor(entity);
-            if (id is null)
-            {
-                continue;
-            }
-
-            finalState[id] = entity;
-        }
-
-        foreach (var kvp in finalState)
-        {
-            var filter = Builders<TEntity>.Filter.Eq("_id", kvp.Key);
-            // ReplaceOneModel with IsUpsert = true handles both Add (Insert) and Update (Replace)
-            var replaceModel = new ReplaceOneModel<TEntity>(filter, kvp.Value)
-            {
-                IsUpsert = true,
-            };
-            writes.Add(replaceModel);
-        }
-
-        if (writes.Count > 0)
-        {
-            await collection.BulkWriteAsync(session, writes);
+            await collection.DeleteManyAsync(session, filter);
         }
     }
 
