@@ -29,14 +29,14 @@ public class InMemoryDbSet<T> : IDbSet<T>
     {
     }
 
-    public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter)
+    public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, CancellationToken cancellationToken = default)
     {
         var expr = _translator.Translate(filter);
         var result = _items.AsQueryable().Where(expr).Select(Clone).ToList();
         return ValueTask.FromResult((IEnumerable<T>)result);
     }
 
-    public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter)
+    public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, CancellationToken cancellationToken = default)
     {
         var result = _items.AsQueryable()
             .Where(filter)
@@ -47,13 +47,13 @@ public class InMemoryDbSet<T> : IDbSet<T>
         return ValueTask.FromResult<IEnumerable<T>>(result);
     }
 
-    public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, IClientSessionHandle session)
-        => QueryAsync(filter);
+    public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
+        => QueryAsync(filter, cancellationToken);
 
-    public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, IClientSessionHandle session)
-        => QueryAsync(filter);
+    public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
+        => QueryAsync(filter, cancellationToken);
 
-    public IEnumerator<T> GetEnumerator() => _items.AsQueryable().GetEnumerator();
+    public IEnumerator<T> GetEnumerator() => throw new NotSupportedException("Use QueryAsync for asynchronous execution instead of synchronous LINQ evaluation.");
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 

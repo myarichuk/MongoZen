@@ -73,7 +73,7 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
     {
         var conventions = new Conventions { TransactionSupportBehavior = TransactionSupportBehavior.Simulate };
         var ctx = new TestDbContext(new DbContextOptions(Database!, conventions));
-        using var session = new TestDbContextSession(ctx);
+        await using var session = new TestDbContextSession(ctx);
 
         session.Users.Add(new User { Id = "2", Name = "Bob" });
 

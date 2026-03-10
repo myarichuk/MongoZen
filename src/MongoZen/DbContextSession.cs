@@ -176,7 +176,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
     {
         if (_session != null)
         {
-            if (_session.IsInTransaction)
+            if (_session.IsInTransaction && _ownsSession)
             {
                 try
                 {
@@ -215,13 +215,12 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
 
         if (_session != null && !_session.IsInTransaction)
         {
-            if (_dbContext.Options.Conventions.TransactionSupportBehavior == TransactionSupportBehavior.Simulate)
+            if (_dbContext.Options.Conventions.TransactionSupportBehavior == TransactionSupportBehavior.Throw)
             {
-                _inMemoryTransaction = true;
-                return;
+                throw new InvalidOperationException("MongoDB commits require an active transaction.");
             }
 
-            throw new InvalidOperationException("MongoDB commits require an active transaction.");
+            _inMemoryTransaction = true;
         }
     }
 
@@ -284,13 +283,12 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
 
     private void HandleUnsupportedTransactions()
     {
-        if (_dbContext.Options.Conventions.TransactionSupportBehavior == TransactionSupportBehavior.Simulate)
+        if (_dbContext.Options.Conventions.TransactionSupportBehavior == TransactionSupportBehavior.Throw)
         {
-            _inMemoryTransaction = true;
-            return;
+            throw new InvalidOperationException(
+                "MongoDB transactions require a replica set or sharded cluster. Configure Conventions.TransactionSupportBehavior to Simulate to fall back to a non-transactional unit of work.");
         }
 
-        throw new InvalidOperationException(
-            "MongoDB transactions require a replica set or sharded cluster. Configure Conventions.TransactionSupportBehavior to Simulate to fall back to a non-transactional unit of work.");
+        _inMemoryTransaction = true;
     }
 }

@@ -14,7 +14,7 @@ public interface IMutableDbSet<T> : IDbSet<T>
 
     IEnumerable<T> GetUpdated();
 
-    Task CommitAsync(TransactionContext transaction); // eventually used in SaveChanges()
+    Task CommitAsync(TransactionContext transaction, CancellationToken cancellationToken = default); // eventually used in SaveChanges()
 
     /// <summary>
     /// Clears all tracked adds, removes, and updates.

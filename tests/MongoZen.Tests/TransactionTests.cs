@@ -66,7 +66,7 @@ public class TransactionTests : IntegrationTestBase
     public async Task SaveChanges_ImplicitTransaction_InMemory()
     {
         var ctx = new TestDbContext(new DbContextOptions());
-        using var session = new TestDbContextSession(ctx);
+        await using var session = new TestDbContextSession(ctx);
 
         session.Users.Add(new User { Id = "1", Name = "Alice" });
 
@@ -80,7 +80,7 @@ public class TransactionTests : IntegrationTestBase
     public async Task Transaction_Commits_Changes_On_SaveChanges()
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
-        using var session = new TestDbContextSession(ctx);
+        await using var session = new TestDbContextSession(ctx);
 
         session.Users.Add(new User { Id = "1", Name = "Alice" });
 
