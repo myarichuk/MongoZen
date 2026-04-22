@@ -2,7 +2,7 @@ using MongoZen;
 
 namespace Playground;
 
-public class MyDbContext : DbContext
+public partial class MyDbContext : DbContext
 {
     public IDbSet<Person> People { get; set; } = null!;
 
