@@ -107,15 +107,15 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         foreach (var prop in mutableProps)
         {
-            sb.Append(indent2).Append("    ").Append(prop.Name)
-              .Append(" = new MongoZen.MutableDbSet<")
-              .Append(prop.EntityType).Append(">(")
-              .Append("_dbContext.").Append(prop.Name).Append(", ")
-              .Append("() => Transaction, ")
-              .Append("_dbContext.Options.Conventions")
-              .AppendLine(");");
+        sb.Append(indent2).Append("    ").Append(prop.Name)
+        .Append(" = new MongoZen.MutableDbSet<")
+        .Append(prop.EntityType).Append(">(")
+        .Append("_dbContext.").Append(prop.Name).Append(", ")
+        .Append("() => Transaction, ")
+        .Append("this, ") // Pass the session as ISessionTracker
+        .Append("_dbContext.Options.Conventions")
+        .AppendLine(");");
         }
-
         sb.Append(indent2).AppendLine("}");
         sb.AppendLine();
 
