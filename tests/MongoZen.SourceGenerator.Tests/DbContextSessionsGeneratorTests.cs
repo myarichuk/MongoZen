@@ -71,8 +71,8 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
 
     public BloggingContextSession(BloggingContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
     {
-        Blogs = new MongoZen.MutableDbSet<Blog>(_dbContext.Blogs, _dbContext.Options.Conventions);
-        Posts = new MongoZen.MutableDbSet<Post>(_dbContext.Posts, _dbContext.Options.Conventions);
+        Blogs = new MongoZen.MutableDbSet<Blog>(_dbContext.Blogs, () => Transaction, _dbContext.Options.Conventions);
+        Posts = new MongoZen.MutableDbSet<Post>(_dbContext.Posts, () => Transaction, _dbContext.Options.Conventions);
     }
 
     public MongoZen.IMutableDbSet<Blog> Blogs { get; }
@@ -160,7 +160,7 @@ namespace MyNamespace
 
         public MyContextSession(MyNamespace.MyContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
         {
-            Users = new MongoZen.MutableDbSet<MyNamespace.User>(_dbContext.Users, _dbContext.Options.Conventions);
+            Users = new MongoZen.MutableDbSet<MyNamespace.User>(_dbContext.Users, () => Transaction, _dbContext.Options.Conventions);
         }
 
         public MongoZen.IMutableDbSet<MyNamespace.User> Users { get; }
