@@ -7,23 +7,29 @@ namespace MongoZen;
 
 /// <summary>
 /// Caches compiled Id‑accessor delegates per (TEntity, IIdConvention‑type) pair.
-/// Thread‑safe: <see cref="ConcurrentDictionary{TKey,TValue}"/> handles concurrent reads/writes,
-/// and <see cref="Lazy{T}"/> ensures each delegate is compiled exactly once.
 /// </summary>
 internal static class EntityIdAccessor<TEntity>
 {
-    private static readonly ConcurrentDictionary<Type, Lazy<Func<TEntity, object?>>> Cache = new();
+    private static readonly ConcurrentDictionary<Type, Lazy<Func<TEntity, object?>>> GetterCache = new();
+    private static readonly ConcurrentDictionary<Type, Lazy<Action<TEntity, object?>>> SetterCache = new();
 
     /// <summary>
-    /// Returns the compiled Id‑accessor for the given convention, building it once and caching it.
+    /// Returns the compiled Id‑accessor for the given convention.
     /// </summary>
-    /// <returns>The accessor, or null if no Id‑property was found.</returns>
     internal static Func<TEntity, object?> GetAccessor(IIdConvention convention) =>
-        Cache.GetOrAdd(
+        GetterCache.GetOrAdd(
             convention.GetType(),
-            _ => new Lazy<Func<TEntity, object?>>(() => Build(convention))).Value;
+            _ => new Lazy<Func<TEntity, object?>>(() => BuildGetter(convention))).Value;
 
-    private static Func<TEntity, object?> Build(IIdConvention convention)
+    /// <summary>
+    /// Returns the compiled Id‑setter for the given convention.
+    /// </summary>
+    internal static Action<TEntity, object?> GetSetter(IIdConvention convention) =>
+        SetterCache.GetOrAdd(
+            convention.GetType(),
+            _ => new Lazy<Action<TEntity, object?>>(() => BuildSetter(convention))).Value;
+
+    private static Func<TEntity, object?> BuildGetter(IIdConvention convention)
     {
         var prop = convention.ResolveIdProperty<TEntity>();
 
@@ -37,5 +43,25 @@ internal static class EntityIdAccessor<TEntity>
         var convertToObject = Expression.Convert(propertyAccess, typeof(object));
 
         return Expression.Lambda<Func<TEntity, object?>>(convertToObject, parameter).Compile();
+    }
+
+    private static Action<TEntity, object?> BuildSetter(IIdConvention convention)
+    {
+        var prop = convention.ResolveIdProperty<TEntity>();
+
+        if (prop is null || !prop.CanWrite)
+        {
+            return (e, v) => { };
+        }
+
+        var entityParameter = Expression.Parameter(typeof(TEntity), "entity");
+        var valueParameter = Expression.Parameter(typeof(object), "value");
+        
+        var propertyAccess = Expression.Property(entityParameter, prop);
+        var convertToPropertyType = Expression.Convert(valueParameter, prop.PropertyType);
+        
+        var assign = Expression.Assign(propertyAccess, convertToPropertyType);
+
+        return Expression.Lambda<Action<TEntity, object?>>(assign, entityParameter, valueParameter).Compile();
     }
 }

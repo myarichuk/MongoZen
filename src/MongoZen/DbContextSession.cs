@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Clusters;
+using SharpArena.Allocators;
 
 namespace MongoZen;
 
@@ -17,7 +18,7 @@ namespace MongoZen;
 /// scenarios — treat in-memory commits as immediately durable.
 /// </remarks>
 /// <typeparam name="TDbContext">The concrete DbContext type.</typeparam>
-public abstract class DbContextSession<TDbContext> : IAsyncDisposable
+public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionTracker
     where TDbContext : DbContext
 {
     private static readonly ConcurrentDictionary<IMongoClient, bool> TopologyCache = new();
@@ -27,6 +28,11 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
     private bool _ownsSession;
     private bool _inMemoryTransaction;
     private bool _committed;
+
+    private readonly ArenaAllocator _arena = new();
+
+    // Identity Map and Snapshot storage
+    private readonly Dictionary<string, (object Entity, IntPtr SnapshotPtr, int Length)> _trackedEntities = new();
 
     protected DbContextSession(TDbContext dbContext, bool startTransaction = true)
     {
@@ -56,14 +62,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
     {
         if (_inMemoryTransaction)
         {
-            if (_inMemoryTransaction)
-            {
-                throw new InvalidOperationException("A transaction is already active for this session.");
-            }
-
-            _inMemoryTransaction = true;
-            _committed = false;
-            return;
+            throw new InvalidOperationException("A transaction is already active for this session.");
         }
 
         if (_session != null)
@@ -126,6 +125,87 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
         _session = session;
         _ownsSession = false;
         _committed = false;
+    }
+
+    /// <summary>
+    /// Tracks an entity in the session-wide identity map.
+    /// If an entity with the same ID already exists, the existing instance is returned.
+    /// </summary>
+    /// <typeparam name="TEntity">The type of the entity.</typeparam>
+    /// <param name="entity">The entity instance to track.</param>
+    /// <param name="id">The ID of the entity.</param>
+    /// <returns>The tracked entity instance.</returns>
+    public TEntity Track<TEntity>(TEntity entity, object id) where TEntity : class
+    {
+        var key = GetEntityKey<TEntity>(id);
+        if (_trackedEntities.TryGetValue(key, out var state))
+        {
+            return (TEntity)state.Entity;
+        }
+
+        var bson = entity.ToBson();
+        unsafe
+        {
+            var ptr = _arena.Alloc((nuint)bson.Length);
+            var dest = new Span<byte>(ptr, bson.Length);
+            bson.CopyTo(dest);
+            _trackedEntities[key] = (entity, (IntPtr)ptr, bson.Length);
+        }
+
+        return entity;
+    }
+
+    /// <summary>
+    /// Gets all tracked entities that have changed since they were last tracked.
+    /// </summary>
+    /// <typeparam name="TEntity">The type of the entities to check.</typeparam>
+    /// <returns>A collection of changed entities.</returns>
+    public IEnumerable<TEntity> GetDirtyEntities<TEntity>() where TEntity : class
+    {
+        var typeName = typeof(TEntity).Name;
+        foreach (var state in _trackedEntities)
+        {
+            if (state.Key.StartsWith(typeName + "/") && state.Value.Entity is TEntity entity)
+            {
+                bool isDirty;
+                var currentBson = entity.ToBson();
+                unsafe
+                {
+                    var snapshotSpan = new ReadOnlySpan<byte>((void*)state.Value.SnapshotPtr, state.Value.Length);
+                    isDirty = !snapshotSpan.SequenceEqual(currentBson);
+                }
+
+                if (isDirty)
+                {
+                    yield return entity;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Clears tracking for a specific entity.
+    /// </summary>
+    /// <typeparam name="TEntity">The type of the entity.</typeparam>
+    /// <param name="id">The ID of the entity.</param>
+    public void Untrack<TEntity>(object id)
+    {
+        var key = GetEntityKey<TEntity>(id);
+        _trackedEntities.Remove(key);
+    }
+
+    /// <summary>
+    /// Clears all tracking in the session.
+    /// </summary>
+    public void ClearTracking()
+    {
+        _trackedEntities.Clear();
+        _arena.Reset();
+    }
+
+    private string GetEntityKey<TEntity>(object id)
+    {
+        return $"{typeof(TEntity).Name}/{id}";
     }
 
     /// <summary>
@@ -218,6 +298,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
         }
 
         _inMemoryTransaction = false;
+        _arena.Dispose();
         GC.SuppressFinalize(this);
     }
 
@@ -267,12 +348,12 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
         if (_session == null)
         {
             if (_dbContext.Options.Mongo == null)
-        {
-            HandleUnsupportedTransactions();
-            return;
-        }
+            {
+                HandleUnsupportedTransactions();
+                return;
+            }
 
-        _session = _dbContext.Options.Mongo.Client.StartSession();
+            _session = _dbContext.Options.Mongo.Client.StartSession();
             _ownsSession = true;
         }
 
@@ -305,7 +386,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
         var hello = database.RunCommand<BsonDocument>(new BsonDocument("hello", 1));
         var isSharded = hello.TryGetValue("msg", out var msg) && msg == "isdbgrid";
         var isReplicaSet = hello.TryGetValue("setName", out _);
-        
+
         supported = isReplicaSet || isSharded;
         TopologyCache.TryAdd(client, supported);
         return supported;
