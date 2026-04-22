@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Text.Json;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 // ReSharper disable ComplexConditionExpression
@@ -7,36 +8,66 @@ using MongoDB.Driver;
 
 namespace MongoZen;
 
-public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
+public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : class
 {
     private readonly IDbSet<TEntity> _baseSet;
     private readonly Func<TransactionContext>? _transactionProvider;
+    private readonly ISessionTracker? _tracker;
     private readonly Func<TEntity, object?> _idAccessor;
     private readonly string _idFieldName;
+    private readonly Conventions _conventions;
 
     private readonly List<TEntity> _added = [];
     private readonly List<TEntity> _removed = [];
     private readonly List<TEntity> _updated = [];
 
+    public string CollectionName => _baseSet.CollectionName;
+
     public MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
     {
         _baseSet = baseSet;
-        var properConventions = conventions ?? new();
-        _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(properConventions.IdConvention);
-        _idFieldName = properConventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
+        _conventions = conventions ?? new();
+        _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
+        _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
     }
 
-    public MutableDbSet(IDbSet<TEntity> baseSet, Func<TransactionContext> transactionProvider, Conventions? conventions = null)
+    public MutableDbSet(IDbSet<TEntity> baseSet, Func<TransactionContext> transactionProvider, ISessionTracker tracker, Conventions? conventions = null)
         : this(baseSet, conventions)
     {
         _transactionProvider = transactionProvider;
+        _tracker = tracker;
     }
 
-    public void Add(TEntity entity) => _added.Add(entity);
+    public void Add(TEntity entity)
+    {
+        _conventions.IdGenerator.AssignId(entity, _baseSet.CollectionName, _conventions.IdConvention);
+        _added.Add(entity);
+        var id = _idAccessor(entity);
+        if (id != null)
+        {
+            _tracker?.Track(entity, id);
+        }
+    }
 
-    public void Remove(TEntity entity) => _removed.Add(entity);
+    public void Remove(TEntity entity)
+    {
+        _removed.Add(entity);
+        var id = _idAccessor(entity);
+        if (id != null)
+        {
+            _tracker?.Untrack<TEntity>(id);
+        }
+    }
 
-    public void Update(TEntity entity) => _updated.Add(entity);
+    public void Update(TEntity entity)
+    {
+        _updated.Add(entity);
+        var id = _idAccessor(entity);
+        if (id != null)
+        {
+            _tracker?.Track(entity, id);
+        }
+    }
 
     public IEnumerable<TEntity> GetAdded() => _added;
 
@@ -51,6 +82,10 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
             throw new InvalidOperationException("A transaction is required to commit changes. Start a session with StartSession() and pass the transaction to CommitAsync().");
         }
 
+        // Include dirty entities from tracker that aren't explicitly in _updated or _added
+        var dirty = _tracker?.GetDirtyEntities<TEntity>() ?? Enumerable.Empty<TEntity>();
+        var allUpdated = _updated.Concat(dirty.Where(d => !_updated.Contains(d) && !_added.Contains(d))).ToList();
+
         switch (_baseSet)
         {
             case InMemoryDbSet<TEntity> memSet:
@@ -59,25 +94,22 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                     throw new InvalidOperationException("In-memory commits require an in-memory transaction.");
                 }
 
-                await InternalCommitAsync(memSet, cancellationToken);
+                await InternalCommitAsync(memSet, allUpdated, cancellationToken);
                 break;
             case DbSet<TEntity> mongoSet:
-                await InternalCommitAsync(mongoSet, transaction.Session, cancellationToken);
+                await InternalCommitAsync(mongoSet, transaction.Session, allUpdated, cancellationToken);
                 break;
             default:
                 throw new NotSupportedException($"The type {_baseSet.GetType()} is not supported.");
         }
     }
 
-    /// <summary>
-    /// Clears all tracked adds, removes, and updates.
-    /// Called by the generated SaveChangesAsync after a successful transaction commit.
-    /// </summary>
     public void ClearTracking()
     {
         _added.Clear();
         _removed.Clear();
         _updated.Clear();
+        _tracker?.ClearTracking();
     }
 
     // IQueryable passthrough
@@ -91,72 +123,81 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
     public IQueryProvider Provider => _baseSet.Provider;
 
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default)
+    public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default)
     {
         var session = _transactionProvider?.Invoke().Session;
-        return session != null
-            ? _baseSet.QueryAsync(filter, session, cancellationToken)
-            : _baseSet.QueryAsync(filter, cancellationToken);
+        var results = session != null
+            ? await _baseSet.QueryAsync(filter, session, cancellationToken)
+            : await _baseSet.QueryAsync(filter, cancellationToken);
+
+        return TrackResults(results);
     }
 
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, CancellationToken cancellationToken = default)
+    public async ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, CancellationToken cancellationToken = default)
     {
         var session = _transactionProvider?.Invoke().Session;
-        return session != null
-            ? _baseSet.QueryAsync(filter, session, cancellationToken)
-            : _baseSet.QueryAsync(filter, cancellationToken);
+        var results = session != null
+            ? await _baseSet.QueryAsync(filter, session, cancellationToken)
+            : await _baseSet.QueryAsync(filter, cancellationToken);
+
+        return TrackResults(results);
     }
 
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
-        => _baseSet.QueryAsync(filter, session, cancellationToken);
+    public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
+    {
+        var results = await _baseSet.QueryAsync(filter, session, cancellationToken);
+        return TrackResults(results);
+    }
 
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
-        => _baseSet.QueryAsync(filter, session, cancellationToken);
+    public async ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
+    {
+        var results = await _baseSet.QueryAsync(filter, session, cancellationToken);
+        return TrackResults(results);
+    }
 
-    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle? session, CancellationToken cancellationToken = default)
+    private IEnumerable<TEntity> TrackResults(IEnumerable<TEntity> entities)
+    {
+        if (_tracker == null) return entities;
+
+        return entities.Select(e =>
+        {
+            var id = _idAccessor(e);
+            return id != null ? _tracker.Track(e, id) : e;
+        }).ToList();
+    }
+
+    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle? session, List<TEntity> updated, CancellationToken cancellationToken = default)
     {
         var collection = mongoSet.Collection;
         var models = new List<WriteModel<TEntity>>();
 
-        // Deduplicate added items (last one wins)
         var addedByUniqueId = _added
             .Where(doc => doc is not null)
             .GroupBy(doc => doc!.GetId(_idAccessor))
             .ToDictionary(g => g.Key, g => g.Last());
 
-        // Deduplicate removed items
         var removedIds = _removed
             .Where(e => e is not null)
             .Select(e => e!.GetId(_idAccessor))
             .Distinct()
             .ToList();
 
-        // Deduplicate updated items (last one wins)
-        var updatedByUniqueId = _updated
+        var updatedByUniqueId = updated
             .Where(e => e is not null)
             .GroupBy(e => e!.GetId(_idAccessor))
             .ToDictionary(g => g.Key, g => g.Last());
 
-        // Process removals
         foreach (var id in removedIds)
         {
             models.Add(new DeleteOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, id)));
         }
 
-        // Process updates and adds
-        // We use ReplaceOne with IsUpsert = true to handle both updates and inserts safely in one round-trip.
-        // We deduplicate between added and updated - if an ID is in both, we take the last state.
         var upserts = new Dictionary<object, TEntity>();
         foreach (var entry in addedByUniqueId) upserts[entry.Key] = entry.Value!;
         foreach (var entry in updatedByUniqueId) upserts[entry.Key] = entry.Value!;
 
         foreach (var entry in upserts)
         {
-            // If it was also marked for removal, the order matters. 
-            // In a true Unit of Work, if you Add then Remove, it's a no-op.
-            // If you Remove then Add, it's an overwrite.
-            // To match current behavior (Remove last), we added deletes first, so they will execute before replacements if ordered.
-            // But usually we want to deduplicate here too.
             if (!removedIds.Contains(entry.Key))
             {
                 models.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, entry.Key), entry.Value) { IsUpsert = true });
@@ -176,11 +217,11 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
         }
     }
 
-    private Task InternalCommitAsync(InMemoryDbSet<TEntity> memSet, CancellationToken cancellationToken = default)
+    private Task InternalCommitAsync(InMemoryDbSet<TEntity> memSet, List<TEntity> updated, CancellationToken cancellationToken = default)
     {
         foreach (var entity in _added)
         {
-            var existing = GetExistingFromInMemory(entity);
+            var existing = GetExistingFromInMemory(memSet, entity);
             if (existing != null)
             {
                 memSet.Collection.Remove(existing);
@@ -191,21 +232,16 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
         foreach (var entity in _removed)
         {
-            var existing = GetExistingFromInMemory(entity);
+            var existing = GetExistingFromInMemory(memSet, entity);
             if (existing != null)
             {
-                if (!memSet.Collection.Remove(existing))
-                {
-                    throw new InvalidOperationException($"Expected to delete {existing} but didn't... this is not supposed to happen.");
-                }
+                memSet.Collection.Remove(existing);
             }
         }
 
-        // updates -> remove + add for simplicity
-        foreach (var entity in _updated)
+        foreach (var entity in updated)
         {
-            var existing = GetExistingFromInMemory(entity);
-
+            var existing = GetExistingFromInMemory(memSet, entity);
             if (existing != null)
             {
                 memSet.Collection.Remove(existing);
@@ -213,26 +249,23 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
             }
         }
 
-        TEntity? GetExistingFromInMemory(TEntity entity)
-        {
-            var id = _idAccessor(entity)
-                ?? throw new InvalidOperationException("Cannot fetch entity Id without known Id property.");
-
-            var existing = memSet
-                .Collection
-                .FirstOrDefault(x =>
-                    x is not null
-                    && _idAccessor(x) is { } existingId
-                    && existingId.Equals(id));
-            return existing;
-        }
-
         return Task.CompletedTask;
+    }
+
+    private TEntity? GetExistingFromInMemory(InMemoryDbSet<TEntity> memSet, TEntity entity)
+    {
+        var id = _idAccessor(entity)
+            ?? throw new InvalidOperationException("Cannot fetch entity Id without known Id property.");
+
+        return memSet.Collection.FirstOrDefault(x =>
+            x is not null
+            && _idAccessor(x) is { } existingId
+            && existingId.Equals(id));
     }
 
     private static TEntity Clone(TEntity source)
     {
-        var json = JsonSerializer.Serialize(source);
-        return JsonSerializer.Deserialize<TEntity>(json)!;
+        var bson = source.ToBson();
+        return MongoDB.Bson.Serialization.BsonSerializer.Deserialize<TEntity>(bson);
     }
 }

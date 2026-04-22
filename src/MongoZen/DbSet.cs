@@ -8,12 +8,14 @@ using MongoDB.Driver;
 
 namespace MongoZen;
 
-public class DbSet<TEntity> : IDbSet<TEntity>
+public class DbSet<TEntity> : IDbSet<TEntity> where TEntity : class
 {
     private readonly IQueryable<TEntity> _collectionAsQueryable;
     private readonly Func<TEntity, object?> _idAccessor;
     private readonly Conventions _conventions;
     private readonly IMongoCollection<TEntity> _collection;
+
+    public string CollectionName => _collection.CollectionNamespace.CollectionName;
 
     public DbSet(IMongoCollection<TEntity> collection, Conventions conventions)
     {

@@ -3,10 +3,12 @@ MongoZen is a lightweight, high-performance library that provides an **Entity Fr
 
 ## Key Features
 - **Unit of Work & Bulk Commits**:
-    - Aggregates all additions, updates, and removals into a **single atomic bulk operation** per collection, minimizing network round-trips.
+    - Aggregates all additions, updates, and removals into a **single bulk operation** per collection, minimizing network round-trips.
+    - **Atomic by Default**: Operations are atomic when a transaction is active (default for Replica Sets/Sharded Clusters).
     - Automatic ID deduplication (last operation wins).
 - **Seamless Transactions**:
-    - Transactions are implicit. Queries issued within a session automatically participate in the active transaction, providing a consistent "Read Your Own Writes" experience without manual session passing.
+    - Transactions are implicit. Queries and commands issued within a session automatically participate in the active transaction, providing a consistent "Read Your Own Writes" experience.
+    - **Smart Fallback**: Automatically detects cluster topology. If transactions aren't supported (e.g., standalone Mongo), it can fall back to non-transactional bulk writes if configured via `TransactionSupportBehavior.Simulate`.
 - **Source-Generated Efficiency**:
     - Uses Roslyn Source Generators to wire up `DbSet` properties and sessions at compile-time, **eliminating reflection** from the hot path.
 - **In-Memory Database for Testing**:

@@ -1,14 +1,17 @@
 using System.Collections;
 using System.Linq.Expressions;
 using System.Text.Json;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoZen.FilterUtils;
 
 namespace MongoZen;
 
-public class InMemoryDbSet<T> : IDbSet<T>
+public class InMemoryDbSet<T> : IDbSet<T> where T : class
 {
     private readonly List<T> _items;
+
+    public string CollectionName { get; }
 
     private readonly FilterToLinqTranslator<T> _translator =
         FilterToLinqTranslatorFactory.Create<T>();
@@ -19,13 +22,18 @@ public class InMemoryDbSet<T> : IDbSet<T>
     /// Initializes a new instance of the <see cref="InMemoryDbSet{T}"/> class.
     /// </summary>
     /// <param name="items">Initial items for the in-memory collection</param>
-    public InMemoryDbSet(IEnumerable<T> items) => _items = [..items];
+    /// <param name="collectionName">Optional name for the collection</param>
+    public InMemoryDbSet(IEnumerable<T> items, string? collectionName = null)
+    {
+        _items = [..items];
+        CollectionName = collectionName ?? typeof(T).Name;
+    }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="InMemoryDbSet{T}"/> class.
     /// </summary>
     public InMemoryDbSet()
-        : this([])
+        : this([], null)
     {
     }
 
@@ -65,7 +73,7 @@ public class InMemoryDbSet<T> : IDbSet<T>
 
     private static T Clone(T source)
     {
-        var json = JsonSerializer.Serialize(source);
-        return JsonSerializer.Deserialize<T>(json)!;
+        var bson = source.ToBson();
+        return MongoDB.Bson.Serialization.BsonSerializer.Deserialize<T>(bson);
     }
 }
