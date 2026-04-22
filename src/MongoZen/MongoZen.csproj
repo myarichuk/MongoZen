@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
 
@@ -17,15 +18,10 @@
     <RootNamespace>MongoZen</RootNamespace>
   </PropertyGroup>
 
-  <Target Name="CopySourceGenerator" BeforeTargets="CoreCompile">
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\bin\MongoZen.SourceGenerator\$(Configuration)\netstandard2.0\MongoZen.SourceGenerator.dll"
-          DestinationFolder="$(OutputPath)"
-          SkipUnchangedFiles="true" />
-  </Target>
-
   <ItemGroup>
     <!-- Reference MongoDB Driver -->
     <PackageReference Include="MongoDB.Driver" Version="3.3.0" />
+    <PackageReference Include="SharpArena" Version="0.7.20" />
 
     <!-- Include the source generator as an Analyzer -->
     <ProjectReference Include="..\MongoZen.SourceGenerator\MongoZen.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
