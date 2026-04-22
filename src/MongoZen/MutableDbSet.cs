@@ -9,8 +9,8 @@ namespace MongoZen;
 
 public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 {
-    private readonly Conventions _conventions;
     private readonly IDbSet<TEntity> _baseSet;
+    private readonly Func<TransactionContext>? _transactionProvider;
     private readonly Func<TEntity, object?> _idAccessor;
     private readonly string _idFieldName;
 
@@ -21,9 +21,15 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     public MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
     {
         _baseSet = baseSet;
-        _conventions = conventions ?? new();
-        _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
-        _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
+        var properConventions = conventions ?? new();
+        _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(properConventions.IdConvention);
+        _idFieldName = properConventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
+    }
+
+    public MutableDbSet(IDbSet<TEntity> baseSet, Func<TransactionContext> transactionProvider, Conventions? conventions = null)
+        : this(baseSet, conventions)
+    {
+        _transactionProvider = transactionProvider;
     }
 
     public void Add(TEntity entity) => _added.Add(entity);
@@ -56,30 +62,6 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
                 await InternalCommitAsync(memSet, cancellationToken);
                 break;
             case DbSet<TEntity> mongoSet:
-                if (transaction.IsInMemoryTransaction)
-                {
-                    if (transaction.Session != null)
-                    {
-                        await InternalCommitAsync(mongoSet, transaction.Session, cancellationToken);
-                    }
-                    else
-                    {
-                        await InternalCommitAsync(mongoSet, cancellationToken);
-                    }
-
-                    break;
-                }
-
-                if (transaction.Session == null)
-                {
-                    throw new InvalidOperationException("MongoDB commits require a session-bound transaction.");
-                }
-
-                if (!transaction.Session.IsInTransaction)
-                {
-                    throw new InvalidOperationException("MongoDB commits require an active transaction.");
-                }
-
                 await InternalCommitAsync(mongoSet, transaction.Session, cancellationToken);
                 break;
             default:
@@ -109,9 +91,21 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
 
     public IQueryProvider Provider => _baseSet.Provider;
 
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default) => _baseSet.QueryAsync(filter, cancellationToken);
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default)
+    {
+        var session = _transactionProvider?.Invoke().Session;
+        return session != null
+            ? _baseSet.QueryAsync(filter, session, cancellationToken)
+            : _baseSet.QueryAsync(filter, cancellationToken);
+    }
 
-    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, CancellationToken cancellationToken = default) => _baseSet.QueryAsync(filter, cancellationToken);
+    public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, CancellationToken cancellationToken = default)
+    {
+        var session = _transactionProvider?.Invoke().Session;
+        return session != null
+            ? _baseSet.QueryAsync(filter, session, cancellationToken)
+            : _baseSet.QueryAsync(filter, cancellationToken);
+    }
 
     public ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
         => _baseSet.QueryAsync(filter, session, cancellationToken);
@@ -119,143 +113,66 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>
     public ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
         => _baseSet.QueryAsync(filter, session, cancellationToken);
 
-    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, CancellationToken cancellationToken = default)
+    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle? session, CancellationToken cancellationToken = default)
     {
         var collection = mongoSet.Collection;
+        var models = new List<WriteModel<TEntity>>();
 
-        foreach (var entity in _updated)
+        // Deduplicate added items (last one wins)
+        var addedByUniqueId = _added
+            .Where(doc => doc is not null)
+            .GroupBy(doc => doc!.GetId(_idAccessor))
+            .ToDictionary(g => g.Key, g => g.Last());
+
+        // Deduplicate removed items
+        var removedIds = _removed
+            .Where(e => e is not null)
+            .Select(e => e!.GetId(_idAccessor))
+            .Distinct()
+            .ToList();
+
+        // Deduplicate updated items (last one wins)
+        var updatedByUniqueId = _updated
+            .Where(e => e is not null)
+            .GroupBy(e => e!.GetId(_idAccessor))
+            .ToDictionary(g => g.Key, g => g.Last());
+
+        // Process removals
+        foreach (var id in removedIds)
         {
-            if (!entity.TryGetId(_idAccessor, out var id))
+            models.Add(new DeleteOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, id)));
+        }
+
+        // Process updates and adds
+        // We use ReplaceOne with IsUpsert = true to handle both updates and inserts safely in one round-trip.
+        // We deduplicate between added and updated - if an ID is in both, we take the last state.
+        var upserts = new Dictionary<object, TEntity>();
+        foreach (var entry in addedByUniqueId) upserts[entry.Key] = entry.Value!;
+        foreach (var entry in updatedByUniqueId) upserts[entry.Key] = entry.Value!;
+
+        foreach (var entry in upserts)
+        {
+            // If it was also marked for removal, the order matters. 
+            // In a true Unit of Work, if you Add then Remove, it's a no-op.
+            // If you Remove then Add, it's an overwrite.
+            // To match current behavior (Remove last), we added deletes first, so they will execute before replacements if ordered.
+            // But usually we want to deduplicate here too.
+            if (!removedIds.Contains(entry.Key))
             {
-                continue;
-            }
-
-            var filter = Builders<TEntity>.Filter.Eq(_idFieldName, id);
-            var result = await collection.ReplaceOneAsync(filter, entity, cancellationToken: cancellationToken);
-
-            // this means we are missing this document, so we mimic MongoDB driver and add it
-            if (result.MatchedCount != 1 || result.ModifiedCount != 1)
-            {
-                var existing = _added.FirstOrDefault(addItem =>
-                    addItem is not null
-                    && addItem.TryGetId(_idAccessor, out var addId)
-                    && addId!.Equals(id));
-
-                // so we "override" the added item with updated item
-                if (existing != null)
-                {
-                    _added.Remove(existing);
-                }
-
-                _added.Add(entity);
+                models.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, entry.Key), entry.Value) { IsUpsert = true });
             }
         }
 
-        if (_added.Count > 0)
+        if (models.Count > 0)
         {
-            var addedWithUniqueIds = _added
-                .Where(doc => doc is not null)
-                .Select(doc => doc!)
-                .GroupBy(doc =>
-                {
-                    ArgumentNullException.ThrowIfNull(doc);
-                    return doc.GetId(_idAccessor);
-                });
-            var uniqueDocs = addedWithUniqueIds
-                .Select(x => x.FirstOrDefault())
-                .Where(x => x != null)
-                .Cast<TEntity>();
-
-            await collection.InsertManyAsync(uniqueDocs, cancellationToken: cancellationToken);
-
-            foreach (var docGroup in addedWithUniqueIds.Where(group => group.Count() > 1))
+            if (session != null)
             {
-                var replacementDoc = docGroup.Last();
-                await collection.ReplaceOneAsync(Builders<TEntity>.Filter.Eq(_idFieldName, docGroup.Key), replacementDoc, cancellationToken: cancellationToken);
+                await collection.BulkWriteAsync(session, models, cancellationToken: cancellationToken);
             }
-        }
-
-        if (_removed.Count > 0)
-        {
-            var ids = _removed
-                .Where(e => e is not null)
-                .Select(e => e!.GetId(_idAccessor))
-                .Where(id => id != null)
-                .ToList();
-
-            var filter = Builders<TEntity>.Filter.In(_idFieldName, ids);
-            await collection.DeleteManyAsync(filter, cancellationToken: cancellationToken);
-        }
-    }
-
-    private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle session, CancellationToken cancellationToken = default)
-    {
-        var collection = mongoSet.Collection;
-
-        foreach (var entity in _updated)
-        {
-            var id = _idAccessor(entity);
-            if (id is null)
+            else
             {
-                continue;
+                await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
             }
-
-            var filter = Builders<TEntity>.Filter.Eq(_idFieldName, id);
-            var result = await collection.ReplaceOneAsync(session, filter, entity, cancellationToken: cancellationToken);
-
-            // document not found — queue it for insert
-            if (result.MatchedCount == 0)
-            {
-                var existing = _added.FirstOrDefault(addItem =>
-                    addItem is not null
-                    && _idAccessor(addItem) is { } addId
-                    && addId.Equals(id));
-
-                // so we "override" the added item with updated item
-                if (existing != null)
-                {
-                    _added.Remove(existing);
-                }
-
-                _added.Add(entity);
-            }
-        }
-
-        if (_added.Count > 0)
-        {
-            var addedWithUniqueIds = _added
-                .Where(doc => doc is not null)
-                .Select(doc => doc!)
-                .GroupBy(doc =>
-                {
-                    ArgumentNullException.ThrowIfNull(doc);
-                    return _idAccessor(doc) ?? throw new InvalidOperationException(
-                        $"Object of type {typeof(TEntity).Name} doesn't expose an Id.");
-                });
-            var uniqueDocs = addedWithUniqueIds
-                .Select(x => x.FirstOrDefault())
-                .Where(x => x != null)
-                .Cast<TEntity>();
-
-            await collection.InsertManyAsync(session, uniqueDocs, cancellationToken: cancellationToken);
-
-            foreach (var docGroup in addedWithUniqueIds.Where(group => group.Count() > 1))
-            {
-                var replacementDoc = docGroup.Last();
-                await collection.ReplaceOneAsync(session, Builders<TEntity>.Filter.Eq(_idFieldName, docGroup.Key), replacementDoc, cancellationToken: cancellationToken);
-            }
-        }
-
-        if (_removed.Count > 0)
-        {
-            var ids = _removed
-                .Where(e => e is not null)
-                .Select(e => _idAccessor(e!) ?? throw new InvalidOperationException(
-                    $"Object of type {typeof(TEntity).Name} doesn't expose an Id."))
-                .ToList();
-
-            var filter = Builders<TEntity>.Filter.In(_idFieldName, ids);
-            await collection.DeleteManyAsync(session, filter, cancellationToken: cancellationToken);
         }
     }
 

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Clusters;
@@ -19,11 +20,12 @@ namespace MongoZen;
 public abstract class DbContextSession<TDbContext> : IAsyncDisposable
     where TDbContext : DbContext
 {
+    private static readonly ConcurrentDictionary<IMongoClient, bool> TopologyCache = new();
+
     protected readonly TDbContext _dbContext;
     private IClientSessionHandle? _session;
     private bool _ownsSession;
     private bool _inMemoryTransaction;
-    private bool? _transactionsSupported;
     private bool _committed;
 
     protected DbContextSession(TDbContext dbContext, bool startTransaction = true)
@@ -282,19 +284,20 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
 
     private bool TransactionsSupported()
     {
-        if (_transactionsSupported.HasValue)
+        var database = _dbContext.Options.Mongo ?? throw new InvalidOperationException("Mongo database not configured. This is not supposed to happen and is likely a bug.");
+        var client = database.Client;
+
+        if (TopologyCache.TryGetValue(client, out var supported))
         {
-            return _transactionsSupported.Value;
+            return supported;
         }
 
-        var database = _dbContext.Options.Mongo ?? throw new InvalidOperationException("Mongo database not configured. This is not supposed to happen and is likely a bug.");
-
-        if (database.Client is MongoClient mongoClient)
+        if (client is MongoClient mongoClient)
         {
             var clusterType = mongoClient.Cluster.Description.Type;
             if (clusterType == ClusterType.ReplicaSet || clusterType == ClusterType.Sharded)
             {
-                _transactionsSupported = true;
+                TopologyCache.TryAdd(client, true);
                 return true;
             }
         }
@@ -302,8 +305,10 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable
         var hello = database.RunCommand<BsonDocument>(new BsonDocument("hello", 1));
         var isSharded = hello.TryGetValue("msg", out var msg) && msg == "isdbgrid";
         var isReplicaSet = hello.TryGetValue("setName", out _);
-        _transactionsSupported = isReplicaSet || isSharded;
-        return _transactionsSupported.Value;
+        
+        supported = isReplicaSet || isSharded;
+        TopologyCache.TryAdd(client, supported);
+        return supported;
     }
 
     private void HandleUnsupportedTransactions()

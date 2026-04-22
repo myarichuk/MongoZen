@@ -111,6 +111,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
               .Append(" = new MongoZen.MutableDbSet<")
               .Append(prop.EntityType).Append(">(")
               .Append("_dbContext.").Append(prop.Name).Append(", ")
+              .Append("() => Transaction, ")
               .Append("_dbContext.Options.Conventions")
               .AppendLine(");");
         }

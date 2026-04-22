@@ -1,97 +1,82 @@
 # MongoZen
-MongoZen is a lightweight, developer-friendly library that provides an **Entity Framework Core-like experience** for MongoDB. It bridges the gap between the flexibility of MongoDB and the structure of an ORM, making it easier to query, manage, and interact with your MongoDB collections using object-oriented patterns.
-## Features
-- **EF-Core-Like Abstractions**:
-    - for centralizing database access logic and managing collections (). `DbContext``IDbSet`
-    - LINQ support, including server-side filtering and querying.
+MongoZen is a lightweight, high-performance library that provides an **Entity Framework Core-like and RavenDB-like experience** for MongoDB. It bridges the gap between the flexibility of MongoDB and the structure of an ORM, providing a clean Unit of Work abstraction while maximizing database performance.
 
+## Key Features
+- **Unit of Work & Bulk Commits**:
+    - Aggregates all additions, updates, and removals into a **single atomic bulk operation** per collection, minimizing network round-trips.
+    - Automatic ID deduplication (last operation wins).
+- **Seamless Transactions**:
+    - Transactions are implicit. Queries issued within a session automatically participate in the active transaction, providing a consistent "Read Your Own Writes" experience without manual session passing.
+- **Source-Generated Efficiency**:
+    - Uses Roslyn Source Generators to wire up `DbSet` properties and sessions at compile-time, **eliminating reflection** from the hot path.
 - **In-Memory Database for Testing**:
-    - Seamlessly switch between MongoDB collections and in-memory collections for unit testing.
-
-- **BSON and MongoDB Integration**:
-    - Supports MongoDB specifics like for custom ID handling. `[BsonId]`
-    - Handles default and custom ID conventions with flexibility.
-
-- **Source Generators**:
-    - Simplifies repetitive tasks such as entity mapping.
-
-- **CI/CD and Precommit Hook Integration**:
-    - StyleCop for consistent code formatting.
-    - GitHub Actions for automated builds and releases.
+    - Seamlessly switch between MongoDB and a fast, reliable in-memory provider for unit testing.
+- **LINQ Support**:
+    - Full LINQ to MongoDB integration for server-side filtering and querying.
 
 ## Installation
 To get started, install the NuGet package:
 ``` bash
 dotnet add package MongoZen
 ```
+
 ## Getting Started
+
 ### 1. Define Your `DbContext`
-Create a class that inherits from `MongoZen.DbContext`:
-> Note that ``IDbSet<TEntity>`` properties with public get and set are required
+Create a **partial** class that inherits from `MongoZen.DbContext`. The `partial` keyword is required for source generators to provide optimized initialization logic.
 ``` csharp
-public class MyDbContext : MongoZen.DbContext
+public partial class MyDbContext : MongoZen.DbContext
 {
-    public MongoZen.IDbSet<MyEntity> MyEntities { get; set; }
+    public IDbSet<Person> People { get; set; } = null!;
 
     public MyDbContext(DbContextOptions options) : base(options) { }
 }
 ```
-### 2. Define Your DAL Entities
 
-Define DAL-specific entities with required ID properties and MongoDB attributes:
+### 2. Configure `DbContextOptions`
+Configure connection settings using `DbContextOptions.CreateForMongo`:
 ``` csharp
-[BsonIgnoreExtraElements]
-public class MyEntity
-{
-    [BsonId]
-    public string Id { get; set; }
-    public string Name { get; set; }
-    public int Age { get; set; }
-}
-```
-### 3. Configure `DbContextOptions`
-Configure connection settings using : `DbContextOptions`
-``` csharp
-var options = new DbContextOptions
-{
-    Mongo = new MongoDbOptions
-    {
-        ConnectionString = "mongodb://localhost:27017",
-        DatabaseName = "MyDatabase"
-    }
-};
+var options = DbContextOptions.CreateForMongo(
+    "mongodb://localhost:27017", 
+    "MyDatabase"
+);
 
 var context = new MyDbContext(options);
 ```
-### 4. Query with LINQ
-Use LINQ or MongoDB filters to query data:
+
+### 3. High-Performance Unit of Work
+Use the generated session to track changes and persist them atomically using MongoDB's `BulkWriteAsync`:
 ``` csharp
-var results = await context.MyEntities.QueryAsync(e => e.Age > 30);
+await using var session = context.StartSession();
+
+// Operations are tracked locally
+session.People.Add(new Person { Name = "Alice", Age = 30 });
+session.People.Update(existingPerson);
+session.People.Remove(oldPerson);
+
+// All changes are flushed in a single atomic bulk operation
+await session.SaveChangesAsync();
 ```
+
+### 4. Implicit Transaction Flow
+Queries issued via the session automatically use the active transaction. You don't need to pass a session handle manually.
+``` csharp
+await using var session = context.StartSession();
+
+session.People.Add(new Person { Name = "Bob" });
+
+// This query automatically sees "Bob" because it implicitly uses the transaction
+var results = await session.People.QueryAsync(p => p.Name == "Bob");
+```
+
 ### 5. In-Memory Testing
-Switch to the in-memory mode for safe unit testing:
+Switch to the in-memory mode for fast, isolated unit testing:
 ``` csharp
-var inMemoryOptions = new DbContextOptions(); // In-memory mode enabled
-var testContext = new MyDbContext(inMemoryOptions);
+var options = new DbContextOptions(); // Defaults to UseInMemory = true
+var testContext = new MyDbContext(options);
 ```
-### 6. Transactions (required for SaveChanges)
-Use the generated session to scope a transaction and persist changes atomically:
-``` csharp
-await using var session = context.StartSession();
 
-session.MyEntities.Add(new MyEntity { Id = "1", Name = "Alice", Age = 42 });
-await session.SaveChangesAsync();
-```
-> Note: MongoDB transactions require a replica set or sharded cluster. In-memory contexts support transactions automatically. Disposing a session without calling `SaveChangesAsync()` rolls back the transaction. Queries can be issued with or without a session; pass the session to read your own uncommitted writes inside a transaction. To join an existing `IClientSessionHandle`, call `StartSession(startTransaction: false)`, start a transaction on the client session, then call `UseSession(...)`. For standalone MongoDB instances, set `new Conventions { TransactionSupportBehavior = TransactionSupportBehavior.Simulate }` to fall back to a non-transactional unit of work (default is to throw).
-
-### 7. Generated sessions and SaveChangesAsync
-Session types and `SaveChangesAsync()` are generated by `DbContextSessionsGenerator` (see `src/MongoZen.SourceGenerator/DbContextSessionsGenerator.cs`), which emits types like `DbContextSession<TDbContext>`. The generator is included via an analyzer reference in `MongoZen.csproj`, so the session API appears automatically when you build.
-``` csharp
-await using var session = context.StartSession();
-
-session.MyEntities.Add(new MyEntity { Id = "1", Name = "Alice", Age = 42 });
-await session.SaveChangesAsync();
-```
+> **Note on Cluster Topology:** MongoZen automatically detects if your cluster supports transactions (Replica Sets or Sharded Clusters) and caches this globally to prevent redundant server round-trips. For standalone instances, configure `TransactionSupportBehavior.Simulate` in your conventions to fall back to non-transactional commits.
 ## Documentation
 Further documentation and details can be found on the [project's GitHub page](https://github.com/your-repo-url).
 ## Contributing
