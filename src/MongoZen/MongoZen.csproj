@@ -22,6 +22,7 @@
     <!-- Reference MongoDB Driver -->
     <PackageReference Include="MongoDB.Driver" Version="3.3.0" />
     <PackageReference Include="SharpArena" Version="0.7.20" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.0" />
 
     <!-- Include the source generator as an Analyzer -->
     <ProjectReference Include="..\MongoZen.SourceGenerator\MongoZen.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
