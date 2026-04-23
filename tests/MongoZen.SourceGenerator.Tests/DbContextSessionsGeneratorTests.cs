@@ -81,6 +81,153 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
     public MongoZen.IMutableDbSet<Blog> Blogs { get; }
     public MongoZen.IMutableDbSet<Post> Posts { get; }
 
+    public override void Store<TEntity>(TEntity entity) where TEntity : class
+    {
+        if (entity is Blog e)
+        {
+            Blogs.Store(e);
+        }
+        else if (entity is Post e)
+        {
+            Posts.Store(e);
+        }
+        else
+        {
+            throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+        }
+    }
+
+    public override void Delete<TEntity>(TEntity entity) where TEntity : class
+    {
+        if (entity is Blog e)
+        {
+            Blogs.Delete(e);
+        }
+        else if (entity is Post e)
+        {
+            Posts.Delete(e);
+        }
+        else
+        {
+            throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+        }
+    }
+
+    public override void Delete<TEntity>(object id) where TEntity : class
+    {
+        if (typeof(TEntity) == typeof(Blog))
+        {
+            Blogs.Delete(id);
+        }
+        else if (typeof(TEntity) == typeof(Post))
+        {
+            Posts.Delete(id);
+        }
+        else
+        {
+            throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+        }
+    }
+
+    public MongoZen.IMutableDbSet<TEntity> Query<TEntity>() where TEntity : class
+    {
+        if (typeof(TEntity) == typeof(Blog))
+        {
+            return (MongoZen.IMutableDbSet<TEntity>)(object)Blogs;
+        }
+        else if (typeof(TEntity) == typeof(Post))
+        {
+            return (MongoZen.IMutableDbSet<TEntity>)(object)Posts;
+        }
+        else
+        {
+            throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+        }
+    }
+
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public void Add<TEntity>(TEntity entity) where TEntity : class
+    {
+        Store(entity);
+    }
+
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public void Attach<TEntity>(TEntity entity) where TEntity : class
+    {
+        if (entity is Blog e)
+        {
+            Blogs.Attach(e);
+        }
+        else if (entity is Post e)
+        {
+            Posts.Attach(e);
+        }
+        else
+        {
+            throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+        }
+    }
+
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public void Remove<TEntity>(TEntity entity) where TEntity : class
+    {
+        Delete(entity);
+    }
+
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public void Remove<TEntity>(object id) where TEntity : class
+    {
+        Delete<TEntity>(id);
+    }
+
+    public async ValueTask<TEntity?> LoadAsync<TEntity>(object id, System.Threading.CancellationToken cancellationToken = default) where TEntity : class
+    {
+        if (typeof(TEntity) == typeof(Blog))
+        {
+            return (TEntity?)(object?)await Blogs.LoadAsync(id, cancellationToken);
+        }
+        else if (typeof(TEntity) == typeof(Post))
+        {
+            return (TEntity?)(object?)await Posts.LoadAsync(id, cancellationToken);
+        }
+        else
+        {
+            throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+        }
+    }
+
+    public MongoZen.IMutableDbSet<TEntity> Include<TEntity>(System.Linq.Expressions.Expression<System.Func<TEntity, object?>> path) where TEntity : class
+    {
+        if (typeof(TEntity) == typeof(Blog))
+        {
+            return (MongoZen.IMutableDbSet<TEntity>)(object)Blogs.Include(path);
+        }
+        else if (typeof(TEntity) == typeof(Post))
+        {
+            return (MongoZen.IMutableDbSet<TEntity>)(object)Posts.Include(path);
+        }
+        else
+        {
+            throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+        }
+    }
+
+    public MongoZen.IMutableDbSet<TEntity> Include<TEntity, TInclude>(System.Linq.Expressions.Expression<System.Func<TEntity, object?>> path) where TEntity : class where TInclude : class
+    {
+        if (typeof(TEntity) == typeof(Blog))
+        {
+            return (MongoZen.IMutableDbSet<TEntity>)(object)Blogs.Include<TInclude>(path);
+        }
+        else if (typeof(TEntity) == typeof(Post))
+        {
+            return (MongoZen.IMutableDbSet<TEntity>)(object)Posts.Include<TInclude>(path);
+        }
+        else
+        {
+            throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+        }
+    }
+
     public async ValueTask SaveChangesAsync()
     {
         EnsureTransactionActive();
@@ -170,6 +317,121 @@ namespace MyNamespace
 
         public MongoZen.IMutableDbSet<MyNamespace.User> Users { get; }
 
+        public override void Store<TEntity>(TEntity entity) where TEntity : class
+        {
+            if (entity is MyNamespace.User e)
+            {
+                Users.Store(e);
+            }
+            else
+            {
+                throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+            }
+        }
+
+        public override void Delete<TEntity>(TEntity entity) where TEntity : class
+        {
+            if (entity is MyNamespace.User e)
+            {
+                Users.Delete(e);
+            }
+            else
+            {
+                throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+            }
+        }
+
+        public override void Delete<TEntity>(object id) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(MyNamespace.User))
+            {
+                Users.Delete(id);
+            }
+            else
+            {
+                throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+            }
+        }
+
+        public MongoZen.IMutableDbSet<TEntity> Query<TEntity>() where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(MyNamespace.User))
+            {
+                return (MongoZen.IMutableDbSet<TEntity>)(object)Users;
+            }
+            else
+            {
+                throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+            }
+        }
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public void Add<TEntity>(TEntity entity) where TEntity : class
+        {
+            Store(entity);
+        }
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public void Attach<TEntity>(TEntity entity) where TEntity : class
+        {
+            if (entity is MyNamespace.User e)
+            {
+                Users.Attach(e);
+            }
+            else
+            {
+                throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+            }
+        }
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public void Remove<TEntity>(TEntity entity) where TEntity : class
+        {
+            Delete(entity);
+        }
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public void Remove<TEntity>(object id) where TEntity : class
+        {
+            Delete<TEntity>(id);
+        }
+
+        public async ValueTask<TEntity?> LoadAsync<TEntity>(object id, System.Threading.CancellationToken cancellationToken = default) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(MyNamespace.User))
+            {
+                return (TEntity?)(object?)await Users.LoadAsync(id, cancellationToken);
+            }
+            else
+            {
+                throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+            }
+        }
+
+        public MongoZen.IMutableDbSet<TEntity> Include<TEntity>(System.Linq.Expressions.Expression<System.Func<TEntity, object?>> path) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(MyNamespace.User))
+            {
+                return (MongoZen.IMutableDbSet<TEntity>)(object)Users.Include(path);
+            }
+            else
+            {
+                throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+            }
+        }
+
+        public MongoZen.IMutableDbSet<TEntity> Include<TEntity, TInclude>(System.Linq.Expressions.Expression<System.Func<TEntity, object?>> path) where TEntity : class where TInclude : class
+        {
+            if (typeof(TEntity) == typeof(MyNamespace.User))
+            {
+                return (MongoZen.IMutableDbSet<TEntity>)(object)Users.Include<TInclude>(path);
+            }
+            else
+            {
+                throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+            }
+        }
+
         public async ValueTask SaveChangesAsync()
         {
             EnsureTransactionActive();
@@ -216,5 +478,5 @@ namespace MyNamespace
         Assert.Equal(Normalize(expected), Normalize(actualText));
     }
 
-    private static string Normalize(string s) => s.Replace("\r\n", "\n");
+    private static string Normalize(string s) => System.Text.RegularExpressions.Regex.Replace(s, @"\s+", "");
 }

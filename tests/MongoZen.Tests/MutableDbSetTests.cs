@@ -31,7 +31,7 @@ public class MutableDbSetTests : IntegrationTestBase
         var mutableSet = new MutableDbSet<User>(inner);
 
         mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
-        await mutableSet.CommitAsync(TransactionContext.InMemory());
+        await mutableSet.Advanced.CommitAsync(TransactionContext.InMemory());
 
         var result = await mutableSet.QueryAsync(u => u.Name == "Charlie");
 
@@ -52,7 +52,7 @@ public class MutableDbSetTests : IntegrationTestBase
         mutableSet.Add(new User { Id = "2", Name = "Bob", Age = 99 });
         mutableSet.Remove(new User { Id = "1" });
 
-        await mutableSet.CommitAsync(TransactionContext.InMemory());
+        await mutableSet.Advanced.CommitAsync(TransactionContext.InMemory());
 
         var all = await mutableSet.QueryAsync(u => true);
 
@@ -71,7 +71,7 @@ public class MutableDbSetTests : IntegrationTestBase
         mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
         using var session = Client.StartSession();
         session.StartTransaction();
-        await mutableSet.CommitAsync(TransactionContext.FromSession(session));
+        await mutableSet.Advanced.CommitAsync(TransactionContext.FromSession(session));
         await session.CommitTransactionAsync();
 
         var result = await ctx.Users.QueryAsync(u => u.Name == "Charlie");
@@ -100,7 +100,7 @@ public class MutableDbSetTests : IntegrationTestBase
 
         using var session = Client.StartSession();
         session.StartTransaction();
-        await mutableSet.CommitAsync(TransactionContext.FromSession(session));
+        await mutableSet.Advanced.CommitAsync(TransactionContext.FromSession(session));
         await session.CommitTransactionAsync();
 
         var all = await ctx.Users.QueryAsync(u => true);
@@ -121,7 +121,7 @@ public class MutableDbSetTests : IntegrationTestBase
         mutableSet.Add(user);
         mutableSet.Add(new User { Id = "1", Name = "Overwritten", Age = 30 }); // same ID
 
-        await mutableSet.CommitAsync(TransactionContext.InMemory());
+        await mutableSet.Advanced.CommitAsync(TransactionContext.InMemory());
 
         var result = await inner.QueryAsync(u => true);
         Assert.Single(result);
@@ -142,7 +142,7 @@ public class MutableDbSetTests : IntegrationTestBase
 
         using var session = Client.StartSession();
         session.StartTransaction();
-        await mutableSet.CommitAsync(TransactionContext.FromSession(session));
+        await mutableSet.Advanced.CommitAsync(TransactionContext.FromSession(session));
         await session.CommitTransactionAsync();
 
         var result = await ctx.Users.QueryAsync(u => true);
@@ -160,7 +160,7 @@ public class MutableDbSetTests : IntegrationTestBase
         mutableSet.Add(user); // update first
         mutableSet.Add(user);    // then add
 
-        await mutableSet.CommitAsync(TransactionContext.InMemory());
+        await mutableSet.Advanced.CommitAsync(TransactionContext.InMemory());
 
         var result = await inner.QueryAsync(u => true);
         Assert.Single(result);
@@ -182,7 +182,7 @@ public class MutableDbSetTests : IntegrationTestBase
 
         using var session = Client.StartSession();
         session.StartTransaction();
-        await mutableSet.CommitAsync(TransactionContext.FromSession(session));
+        await mutableSet.Advanced.CommitAsync(TransactionContext.FromSession(session));
         await session.CommitTransactionAsync();
 
         var result = await ctx.Users.QueryAsync(u => true);
@@ -198,7 +198,7 @@ public class MutableDbSetTests : IntegrationTestBase
 
         mutableSet.Remove(new User { Id = "non-existent" });
 
-        await mutableSet.CommitAsync(TransactionContext.InMemory());
+        await mutableSet.Advanced.CommitAsync(TransactionContext.InMemory());
 
         var result = await inner.QueryAsync(u => true);
         Assert.Empty(result);
@@ -217,7 +217,7 @@ public class MutableDbSetTests : IntegrationTestBase
 
         using var session = Client.StartSession();
         session.StartTransaction();
-        await mutableSet.CommitAsync(TransactionContext.FromSession(session));
+        await mutableSet.Advanced.CommitAsync(TransactionContext.FromSession(session));
         await session.CommitTransactionAsync();
 
         var result = await ctx.Users.QueryAsync(u => true);
@@ -237,7 +237,7 @@ public class MutableDbSetTests : IntegrationTestBase
         mutableSet.Add(new User { Id = "2", Name = "B updated", Age = 99 });
 
 
-        await mutableSet.CommitAsync(TransactionContext.InMemory());
+        await mutableSet.Advanced.CommitAsync(TransactionContext.InMemory());
 
         var all = await inner.QueryAsync(u => true);
         Assert.Equal(2, all.Count());
@@ -268,7 +268,7 @@ public class MutableDbSetTests : IntegrationTestBase
 
         using var session = Client.StartSession();
         session.StartTransaction();
-        await mutableSet.CommitAsync(TransactionContext.FromSession(session));
+        await mutableSet.Advanced.CommitAsync(TransactionContext.FromSession(session));
         await session.CommitTransactionAsync();
 
         var all = await ctx.Users.QueryAsync(u => true);

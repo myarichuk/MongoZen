@@ -79,34 +79,6 @@ public class DbContextSessionTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task UseSession_WithActiveTransaction_Succeeds()
-    {
-        var ctx = new TestDbContext(new DbContextOptions(Database!));
-        await using var session = new TestDbContextSession(ctx, startTransaction: false);
-
-        using var clientSession = await Client.StartSessionAsync();
-        clientSession.StartTransaction();
-
-        session.UseSession(clientSession);
-
-        Assert.True(session.Transaction.IsActive);
-        Assert.NotNull(session.ClientSession);
-
-        await session.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task UseSession_WithoutActiveTransaction_Throws()
-    {
-        var ctx = new TestDbContext(new DbContextOptions(Database!));
-        await using var session = new TestDbContextSession(ctx, startTransaction: false);
-
-        using var clientSession = await Client.StartSessionAsync();
-
-        Assert.Throws<InvalidOperationException>(() => session.UseSession(clientSession));
-    }
-
-    [Fact]
     public async Task EnsureTransactionActive_ThrowsAfterCommit()
     {
         var ctx = new TestDbContext(new DbContextOptions());

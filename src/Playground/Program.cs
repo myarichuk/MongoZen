@@ -1,4 +1,4 @@
-﻿using EphemeralMongo;
+using EphemeralMongo;
 using MongoDB.Driver;
 using MongoZen;
 using Playground;
@@ -39,14 +39,16 @@ var person3 = new Person
     Age = 25,
 };
 
-await using var session = dbContext.StartSession();
-session.People.Add(person);
-session.People.Add(person2);
-session.People.Add(person3);
+await using (var session = dbContext.StartSession())
+{
+    session.Store(person);
+    session.Store(person2);
+    session.Store(person3);
 
-await session.SaveChangesAsync();
+    await session.SaveChangesAsync();
+}
 
-Console.WriteLine("Inserted data into the 'People' collection.");
+Console.WriteLine("Stored data into the 'People' collection using session.Store().");
 
 var people = await dbContext.People.QueryAsync(p => true);
 Console.WriteLine("Queried in 'People' collection:");
@@ -55,9 +57,15 @@ foreach (var p in people)
     Console.WriteLine($"Id: {p.Id}, Name: {p.Name}, Age: {p.Age}");
 }
 
-var olderThan30People = await dbContext.People.QueryAsync(p => p.Age > 30);
-Console.WriteLine("Queried in 'People' collection for people older than 30:");
-foreach (var p in olderThan30People)
+await using (var session = dbContext.StartSession())
 {
-    Console.WriteLine($"Id: {p.Id}, Name: {p.Name}, Age: {p.Age}");
+    var olderThan30People = await session.Query<Person>()
+        .Where(p => p.Age > 30)
+        .ToListAsync();
+
+    Console.WriteLine("Queried using session.Query<Person>() for people older than 30:");
+    foreach (var p in olderThan30People)
+    {
+        Console.WriteLine($"Id: {p.Id}, Name: {p.Name}, Age: {p.Age}");
+    }
 }

@@ -8,82 +8,68 @@ namespace MongoZen.Tests;
 /// <summary>
 /// Provides a shared ephemeral MongoDB test harness for integration tests.
 /// </summary>
-public class IntegrationTestBase : IAsyncLifetime
+public abstract class IntegrationTestBase : IAsyncLifetime
 {
-    private readonly MongoRunnerOptions _options;
-    private IMongoRunner _runner = null!;
-    private string _databaseName = null!;
-    protected IMongoDatabase? Database;
-    private MongoClient _mongoClient = null!;
-
-    /// <summary>
-    /// Gets the MongoDB client connected to the ephemeral instance.
-    /// </summary>
-    protected MongoClient Client => _mongoClient;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="IntegrationTestBase"/> class.
-    /// </summary>
-    /// <param name="useSingleReplicaSet">Whether the ephemeral instance should run as a single-node replica set.</param>
-    public IntegrationTestBase(bool useSingleReplicaSet = true)
+    private static readonly Lazy<Task<IMongoRunner>> RunnerLazy = new(async () =>
     {
-        _options = new MongoRunnerOptions
+        var options = new MongoRunnerOptions
         {
             Version = MongoVersion.V8,
             Edition = MongoEdition.Community,
-            UseSingleNodeReplicaSet = useSingleReplicaSet,
+            UseSingleNodeReplicaSet = true,
             AdditionalArguments = [ "--quiet" ],
-            StandardErrorLogger = Console.WriteLine,
-            StandardOutputLogger = Console.WriteLine,
             ConnectionTimeout = TimeSpan.FromSeconds(10),
             DataDirectoryLifetime = TimeSpan.FromMinutes(30),
         };
+        return await MongoRunner.RunAsync(options);
+    });
+
+    private string? _databaseName;
+    protected IMongoDatabase? Database;
+    private MongoClient? _mongoClient;
+
+    /// <summary>
+    /// Gets the MongoDB client connected to the shared ephemeral instance.
+    /// </summary>
+    protected MongoClient Client => _mongoClient ?? throw new InvalidOperationException("Client not initialized.");
+
+    protected IntegrationTestBase()
+    {
     }
 
     /// <inheritdoc/>
     public async Task InitializeAsync()
     {
-        try
-        {
-            _runner = await MongoRunner.RunAsync(_options);
-        }
-        catch (EphemeralMongoException ex)
-        {
-            var skipExceptionType = typeof(Assert).Assembly.GetType("Xunit.Sdk.SkipException");
-            if (skipExceptionType is not null)
-            {
-                throw (Exception)Activator.CreateInstance(skipExceptionType, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public, binder: null, args: [$"Integration tests skipped because MongoDB could not be started: {ex.Message}"], culture: null)!;
-            }
-
-            throw;
-        }
-
-        _mongoClient = new MongoClient(_runner.ConnectionString);
-        _databaseName = $"test_{Guid.NewGuid()}";
+        var runner = await RunnerLazy.Value;
+        _mongoClient = new MongoClient(runner.ConnectionString);
+        _databaseName = $"test_{Guid.NewGuid():N}";
         Database = _mongoClient.GetDatabase(_databaseName);
 
-        if (_options.UseSingleNodeReplicaSet)
+        // Ensure replica set is ready if needed (though usually RunAsync handles it)
+        try
         {
             await _mongoClient.GetDatabase("admin")
                 .RunCommandAsync<BsonDocument>(new BsonDocument("replSetGetStatus", 1));
+        }
+        catch
+        {
+            // Ignore if not a replica set or not ready
         }
     }
 
     /// <inheritdoc/>
     public async Task DisposeAsync()
     {
-        if (_databaseName != null)
+        if (_databaseName != null && _mongoClient != null)
         {
             try
             {
                 await _mongoClient.DropDatabaseAsync(_databaseName);
             }
-            catch (ObjectDisposedException)
+            catch
             {
             }
         }
-
         _mongoClient?.Dispose();
-        _runner?.Dispose();
     }
 }

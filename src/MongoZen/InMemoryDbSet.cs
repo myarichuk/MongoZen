@@ -53,6 +53,11 @@ public class InMemoryDbSet<T> : IDbSet<T> where T : class
         return this;
     }
 
+    public IDbSet<T> Include<TInclude>(Expression<Func<T, object?>> path) where TInclude : class
+    {
+        return this;
+    }
+
     public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, CancellationToken cancellationToken = default)
     {
         var expr = _translator.Translate(filter);

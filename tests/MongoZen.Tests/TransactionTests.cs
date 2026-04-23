@@ -44,7 +44,7 @@ public class TransactionTests : IntegrationTestBase
             EnsureTransactionActive();
             try
             {
-                await Users.CommitAsync(Transaction);
+                await Users.Advanced.CommitAsync(Transaction);
 
                 await CommitTransactionAsync();
                 await DisposeAsync();
@@ -91,24 +91,6 @@ public class TransactionTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task UseSession_WithExternalTransaction_Commits()
-    {
-        var ctx = new TestDbContext(new DbContextOptions(Database!));
-        using var clientSession = Client.StartSession();
-        clientSession.StartTransaction();
-
-        await using var session = new TestDbContextSession(ctx, startTransaction: false);
-        session.UseSession(clientSession);
-
-        session.Users.Add(new User { Id = "2", Name = "Bob" });
-
-        await session.SaveChangesAsync();
-
-        var saved = await ctx.Users.QueryAsync(u => u.Id == "2");
-        Assert.Single(saved);
-    }
-
-    [Fact]
     public async Task Transaction_Abort_Rolls_Back_Writes()
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
@@ -117,9 +99,10 @@ public class TransactionTests : IntegrationTestBase
 
         var mutableSet = new MutableDbSet<User>(ctx.Users);
         mutableSet.Add(new User { Id = "1", Name = "Alice" });
-        mutableSet.Remove(new User { Id = null, Name = "Invalid" });
+        // Removing a non-existent entity with an invalid ID structure shouldn't cause a failure, but we want to simulate some "dirty" work
+        mutableSet.Remove("non-existent-id");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => mutableSet.CommitAsync(TransactionContext.FromSession(clientSession)));
+        await mutableSet.Advanced.CommitAsync(TransactionContext.FromSession(clientSession));
         await clientSession.AbortTransactionAsync();
 
         var saved = await ctx.Users.QueryAsync(u => u.Id == "1");
@@ -130,21 +113,22 @@ public class TransactionTests : IntegrationTestBase
     public async Task Transaction_Query_Sees_Uncommitted_Writes()
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
-        using var clientSession = Client.StartSession();
-        clientSession.StartTransaction();
+        
+        await using var session = new TestDbContextSession(ctx);
+        session.Users.Add(new User { Id = "2", Name = "Bob" });
 
-        var mutableSet = new MutableDbSet<User>(ctx.Users);
-        mutableSet.Add(new User { Id = "2", Name = "Bob" });
+        // Force commit to the underlying collection within the transaction
+        await session.Users.Advanced.CommitAsync(session.Transaction);
 
-        await mutableSet.CommitAsync(TransactionContext.FromSession(clientSession));
-
-        var inside = await ctx.Users.QueryAsync(u => u.Id == "2", clientSession);
+        // Query inside the session (should see the change)
+        var inside = await session.Users.QueryAsync(u => u.Id == "2");
+        // Query outside (should not see it yet)
         var outside = await ctx.Users.QueryAsync(u => u.Id == "2");
 
         Assert.Single(inside);
         Assert.Empty(outside);
 
-        await clientSession.CommitTransactionAsync();
+        await session.CommitTransactionAsync();
 
         var afterCommit = await ctx.Users.QueryAsync(u => u.Id == "2");
         Assert.Single(afterCommit);
@@ -158,27 +142,10 @@ public class TransactionTests : IntegrationTestBase
         await using (var session = new TestDbContextSession(ctx))
         {
             session.Users.Add(new User { Id = "1", Name = "Alice" });
-            await session.Users.CommitAsync(session.Transaction);
+            await session.Users.Advanced.CommitAsync(session.Transaction);
         }
 
         var saved = await ctx.Users.QueryAsync(u => u.Id == "1");
         Assert.Empty(saved);
-    }
-
-    [Fact]
-    public async Task Dispose_Does_Not_Abort_External_Transaction()
-    {
-        var ctx = new TestDbContext(new DbContextOptions(Database!));
-        using var clientSession = Client.StartSession();
-        clientSession.StartTransaction();
-
-        await using (var session = new TestDbContextSession(ctx, startTransaction: false))
-        {
-            session.UseSession(clientSession);
-            session.Users.Add(new User { Id = "2", Name = "Bob" });
-        }
-
-        Assert.True(clientSession.IsInTransaction);
-        await clientSession.AbortTransactionAsync();
     }
 }

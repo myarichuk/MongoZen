@@ -39,6 +39,12 @@ public class DbSet<TEntity> : IDbSet<TEntity> where TEntity : class
         return this;
     }
 
+    public IDbSet<TEntity> Include<TInclude>(Expression<Func<TEntity, object?>> path) where TInclude : class
+    {
+        // TODO: Implement RavenDB-style Include
+        return this;
+    }
+
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default) =>
         await (await _collection.FindAsync(filter, cancellationToken: cancellationToken)).ToListAsync(cancellationToken);
 

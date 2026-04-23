@@ -6,9 +6,9 @@ MongoZen is a lightweight, high-performance library that provides an **Entity Fr
     - Aggregates all additions, updates, and removals into a **single bulk operation** per collection, minimizing network round-trips.
     - **Identity Map & Change Tracking**: Automatically tracks fetched entities. Modifications are detected and saved without explicit `Update()` calls.
     - **Atomic by Default**: Operations are atomic when a transaction is active (default for Replica Sets/Sharded Clusters).
-- **Seamless Transactions**:
-    - Transactions are implicit. Queries and commands issued within a session automatically participate in the active transaction, providing a consistent "Read Your Own Writes" experience.
-    - **Smart Fallback**: Automatically detects cluster topology. If transactions aren't supported (e.g., standalone Mongo), it can fall back to non-transactional bulk writes if configured via `TransactionSupportBehavior.Simulate`.
+- **RavenDB-style API**:
+    - Familiar `Store`, `Delete`, `LoadAsync`, and `Query<T>` methods on the session for a "no-nonsense" developer experience.
+    - Automatic ID generation and tracking.
 - **Source-Generated Efficiency**:
     - Uses Roslyn Source Generators to wire up `DbSet` properties and sessions at compile-time, **eliminating reflection** from the hot path.
 - **In-Memory Database for Testing**:
@@ -46,50 +46,53 @@ var options = DbContextOptions.CreateForMongo(
 var context = new MyDbContext(options);
 ```
 
-### 3. Identity Map & Dirty Entity Tracking
+### 3. Usage (RavenDB Style)
 Entities fetched within a session are tracked. Requesting the same entity by ID multiple times returns the **same object instance**, and any changes made to these objects are automatically detected during `SaveChangesAsync()`.
 
 ``` csharp
 await using var session = context.StartSession();
 
 // Fetch an entity
-var person = (await session.People.QueryAsync(p => p.Id == "alice-id")).First();
+var person = await session.LoadAsync<Person>("alice-id");
 
 // Modify properties directly - no Update() call required!
 person.Age = 31;
 person.Name = "Alice Smith";
 
-// Fetching the same ID again returns the same instance
-var personAgain = (await session.People.QueryAsync(p => p.Id == "alice-id")).First();
-Assert.Same(person, personAgain);
+// Querying
+var results = await session.Query<Person>()
+    .Where(p => p.Age > 30)
+    .ToListAsync();
 
 // All changes (including additions and removals) are flushed in a single bulk operation
 await session.SaveChangesAsync();
 ```
 
 ### 4. Unit of Work Pattern
-The `DbContextSession` acts as your Unit of Work. It tracks all changes locally and commits them in one go, optimizing database communication. Queries issued via the session automatically participate in the active transaction.
+The `DbContextSession` acts as your Unit of Work. It tracks all changes locally and commits them in one go, optimizing database communication.
 
 ``` csharp
 await using var session = context.StartSession();
 
-// Add new entities
-session.People.Add(new Person { Name = "Bob", Age = 30 });
+// Store new entities
+session.Store(new Person { Name = "Bob", Age = 30 });
 
-// Remove entities
-session.People.Remove(oldPerson);
-
-// Implicitly track and update existing entities (via Dirty Tracking)
-existingPerson.IsActive = false;
-
-// Queries automatically see your pending changes (Read Your Own Writes)
-var results = await session.People.QueryAsync(p => p.Name == "Bob");
+// Delete entities
+session.Delete(oldPerson);
+session.Delete<Person>("some-id");
 
 // Persist all changes atomically
 await session.SaveChangesAsync();
 ```
 
-### 5. In-Memory Testing
+### 5. Advanced Options
+Internal tracking and management methods are tucked away under the `Advanced` property:
+``` csharp
+var dirty = session.People.Advanced.GetUpdated();
+await session.Advanced.ClearTracking();
+```
+
+### 6. In-Memory Testing
 Switch to the in-memory mode for fast, isolated unit testing:
 ``` csharp
 var options = new DbContextOptions(); // Defaults to UseInMemory = true
@@ -107,7 +110,7 @@ Contributions are welcome! Follow these steps to contribute:
 
 Before submitting PRs, ensure:
 - Tests are added or updated.
-- Code passes the precommit hooks ( rules). `stylecop.json`
+- Code passes the precommit hooks (`stylecop.json` rules).
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## License

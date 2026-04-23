@@ -80,7 +80,7 @@ public class AttachAndRemoveTests : IntegrationTestBase
         public async ValueTask SaveChangesAsync()
         {
             EnsureTransactionActive();
-            await Products.CommitAsync(Transaction);
+            await Products.Advanced.CommitAsync(Transaction);
             await CommitTransactionAsync();
         }
     }

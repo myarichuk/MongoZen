@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Clusters;
@@ -7,11 +8,34 @@ using SharpArena.Allocators;
 namespace MongoZen;
 
 /// <summary>
+/// Non-generic interface for session tracking and access to the context.
+/// </summary>
+public interface IDbContextSession : ISessionTracker
+{
+    DbContext GetDbContext();
+    IClientSessionHandle? ClientSession { get; }
+    TransactionContext Transaction { get; }
+
+    void Store<TEntity>(TEntity entity) where TEntity : class;
+    void Delete<TEntity>(TEntity entity) where TEntity : class;
+    void Delete<TEntity>(object id) where TEntity : class;
+
+    IDbContextSessionAdvanced Advanced { get; }
+}
+
+public interface IDbContextSessionAdvanced
+{
+    Task CommitTransactionAsync();
+    Task AbortTransactionAsync();
+    void ClearTracking();
+}
+
+/// <summary>
 /// Base class for generated unit-of-work session facades.
 /// Manages transaction lifecycle and MongoDB session ownership.
 /// </summary>
 /// <typeparam name="TDbContext">The concrete DbContext type.</typeparam>
-public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionTracker
+public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContextSession, IDbContextSessionAdvanced
     where TDbContext : DbContext
 {
     private static readonly ConcurrentDictionary<IMongoClient, bool> TopologyCache = new();
@@ -37,12 +61,29 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
         }
     }
 
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public ArenaAllocator Arena => _arena;
 
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public IClientSessionHandle? ClientSession => _session;
 
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public TransactionContext Transaction => new(_session, _inMemoryTransaction);
 
+    public DbContext GetDbContext() => _dbContext;
+
+    public IDbContextSessionAdvanced Advanced => this;
+
+    public virtual void Store<TEntity>(TEntity entity) where TEntity : class 
+        => throw new NotSupportedException("This method must be overridden by a derived class or provided by the source generator.");
+    
+    public virtual void Delete<TEntity>(TEntity entity) where TEntity : class
+        => throw new NotSupportedException("This method must be overridden by a derived class or provided by the source generator.");
+
+    public virtual void Delete<TEntity>(object id) where TEntity : class
+        => throw new NotSupportedException("This method must be overridden by a derived class or provided by the source generator.");
+
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public TEntity Track<TEntity>(
         TEntity entity, 
         object id, 
@@ -60,6 +101,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
         return entity;
     }
 
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public IEnumerable<TEntity> GetDirtyEntities<TEntity>() where TEntity : class
     {
         var typeName = typeof(TEntity).Name;
@@ -76,6 +118,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
         }
     }
 
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public void Untrack<TEntity>(object id)
     {
         var key = GetEntityKey<TEntity>(id);
@@ -86,6 +129,17 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
     {
         _trackedEntities.Clear();
         _arena.Reset();
+    }
+
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public void TrackDynamic(object entity, Type entityType, object id)
+    {
+        var key = $"{entityType.Name}/{id}";
+        if (_trackedEntities.ContainsKey(key)) return;
+
+        // Included entities are tracked as read-only snapshots for now.
+        // We don't have a differ for them unless we use reflection or source gen.
+        _trackedEntities[key] = (entity, IntPtr.Zero, (_, _) => false);
     }
 
     private string GetEntityKey<TEntity>(object id)
@@ -180,7 +234,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
             return;
         }
 
-        if (_dbContext.Options.Mongo == null)
+        if (_dbContext.Options.Mongo == null || _dbContext.Options.Conventions.DisableTransactions)
         {
             HandleUnsupportedTransactions();
             return;
