@@ -88,6 +88,8 @@ jobs:
           dotnet-version: 6.0.x
       - name: Git Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           name: nupkg
@@ -97,6 +99,13 @@ jobs:
         with:
           token: ${{ github.token }}
           tag: ${{needs.build-and-pack.outputs.tag}}
+          excludeTypes: build,docs,other,style
+          writeToFile: true
+          changelogFilePath: CHANGELOG.md
+          includeRefIssues: true
+          useGitmojis: true
+          includeInvalidCommits: false
+          reverseOrder: false
 
       - name: Create Release
         uses: ncipollo/release-action@v1
@@ -108,10 +117,6 @@ jobs:
           token: ${{ github.token }}
           tag: ${{needs.build-and-pack.outputs.tag}}
           artifacts: "*.nupkg, *.snupkg"
-      - name: Install GitReleaseNotes tool
-        run: dotnet tool install --global GitReleaseNotes.Tool
-      - name: Generate CHANGELOG.md
-        run: git-release-notes -p nuget -t vnext -o CHANGELOG.md
       - name: Commit CHANGELOG.md
         run: |
             git config --local user.email "action@github.com"
