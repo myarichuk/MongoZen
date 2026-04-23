@@ -26,7 +26,7 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
         public TestDbContextSession(TestDbContext dbContext)
             : base(dbContext)
         {
-            Users = new MutableDbSet<User>(_dbContext.Users, () => Transaction, this, (e, a) => IntPtr.Zero, (e, p) => true, _dbContext.Options.Conventions);
+            Users = new MutableDbSet<User>(_dbContext.Users, () => Transaction, this, null, null, _dbContext.Options.Conventions);
         }
 
         public IMutableDbSet<User> Users { get; }
@@ -65,7 +65,7 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
         var ctx = new TestDbContext(new DbContextOptions(Database!, new Conventions()));
 
         var ex = Assert.Throws<InvalidOperationException>(() => new TestDbContextSession(ctx));
-        Assert.Contains("replica set", ex.Message);
+        Assert.Contains("Transactions not supported", ex.Message);
     }
 
     [Fact]

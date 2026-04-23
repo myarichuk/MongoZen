@@ -114,8 +114,8 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         .Append("_dbContext.").Append(prop.Name).Append(", ")
         .Append("() => Transaction, ")
         .Append("this, ") // Pass the session as ISessionTracker
-        .Append("(entity, arena) => { var s = default(").Append(prop.EntityType).Append("_Shadow); s.From(entity, arena); return (System.IntPtr)System.Runtime.CompilerServices.Unsafe.AsPointer(ref s); }, ")
-        .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
+        .Append("unsafe (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
+        .Append("unsafe (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
         .Append("_dbContext.Options.Conventions")
         .AppendLine(");");
         }

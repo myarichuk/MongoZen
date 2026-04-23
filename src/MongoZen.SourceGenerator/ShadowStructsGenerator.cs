@@ -96,9 +96,15 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
         sb.Append(indent).AppendLine("[StructLayout(LayoutKind.Sequential)]");
         sb.Append(indent).Append("public struct ").Append(type.Name).AppendLine("_Shadow");
         sb.Append(indent).AppendLine("{");
+        
+        if (type.IsReferenceType)
+        {
+            sb.Append(indent2).AppendLine("public bool _hasValue;");
+        }
 
         var properties = type.GetMembers().OfType<IPropertySymbol>()
             .Where(p => !p.IsStatic && p.DeclaredAccessibility == Accessibility.Public)
+            .Where(p => !p.GetAttributes().Any(a => a.AttributeClass?.Name == "BsonIgnoreAttribute"))
             .ToList();
 
         foreach (var prop in properties)
@@ -121,6 +127,10 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
         sb.Append(indent2).Append("public static void From(this ref ").Append(type.Name).Append("_Shadow shadow, ")
           .Append(type.ToDisplayString()).AppendLine(" source, ArenaAllocator arena)");
         sb.Append(indent2).AppendLine("{");
+        if (type.IsReferenceType)
+        {
+            sb.Append(indent2).AppendLine("    shadow._hasValue = true;");
+        }
         foreach (var prop in properties)
         {
             GenerateFromAssignment(sb, indent2 + "    ", prop, "shadow", "source", queue);
@@ -132,6 +142,11 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
         sb.Append(indent2).Append("public static bool IsDirty(this ref ").Append(type.Name).Append("_Shadow shadow, ")
           .Append(type.ToDisplayString()).AppendLine(" current)");
         sb.Append(indent2).AppendLine("{");
+        if (type.IsReferenceType)
+        {
+            sb.Append(indent2).AppendLine("    if (current == null) return shadow._hasValue;");
+            sb.Append(indent2).AppendLine("    if (!shadow._hasValue) return true;");
+        }
         foreach (var prop in properties)
         {
             GenerateIsDirtyCheck(sb, indent2 + "    ", prop, "shadow", "current", queue);
@@ -288,8 +303,11 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
             }
             else
             {
-                sb.Append(indent).Append("        if (item == null) { if (").Append(shadow).Append(".").Append(name).AppendLine("[i].IsDirty(item)) return true; }");
-                sb.Append(indent).Append("        else if (").Append(shadow).Append(".").Append(name).AppendLine("[i].IsDirty(item)) return true;");
+                sb.Append(indent).AppendLine("        if (item == null)");
+                sb.Append(indent).AppendLine("        {");
+                sb.Append(indent).Append("            if (").Append(shadow).Append(".").Append(name).AppendLine("[i]._hasValue) return true;");
+                sb.Append(indent).AppendLine("        }");
+                sb.Append(indent).Append("        else if (!").Append(shadow).Append(".").Append(name).Append("[i]._hasValue || ").Append(shadow).Append(".").Append(name).Append("[i].IsDirty(item)) return true;");
             }
             sb.Append(indent).AppendLine("        i++;");
             sb.Append(indent).AppendLine("    }");

@@ -10,13 +10,6 @@ namespace MongoZen;
 /// Base class for generated unit-of-work session facades.
 /// Manages transaction lifecycle and MongoDB session ownership.
 /// </summary>
-/// <remarks>
-/// <b>In-memory mode limitation:</b> <see cref="AbortTransactionAsync"/> for in-memory
-/// mode only clears the transaction flag. It does <b>not</b> roll back any mutations
-/// already committed via <see cref="MutableDbSet{TEntity}.CommitAsync"/> because
-/// in-memory sets mutate their backing list directly. This is by design for testing
-/// scenarios — treat in-memory commits as immediately durable.
-/// </remarks>
 /// <typeparam name="TDbContext">The concrete DbContext type.</typeparam>
 public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionTracker
     where TDbContext : DbContext
@@ -31,8 +24,8 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
 
     private readonly ArenaAllocator _arena = new();
 
-    // Identity Map and Snapshot storage
-    private readonly Dictionary<string, (object Entity, IntPtr SnapshotPtr, int Length)> _trackedEntities = new();
+    // Identity Map and Shadow storage
+    private readonly Dictionary<string, (object Entity, IntPtr ShadowPtr, Func<object, IntPtr, bool> Differ)> _trackedEntities = new();
 
     protected DbContextSession(TDbContext dbContext, bool startTransaction = true)
     {
@@ -44,20 +37,12 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
         }
     }
 
-    /// <summary>
-    /// Gets the active MongoDB client session handle, if one is attached.
-    /// </summary>
+    public ArenaAllocator Arena => _arena;
+
     public IClientSessionHandle? ClientSession => _session;
 
-    /// <summary>
-    /// Gets the current transaction context. This is cached to prevent
-    /// snapshot races from creating a new struct on each access.
-    /// </summary>
     public TransactionContext Transaction => new(_session, _inMemoryTransaction);
 
-    /// <summary>
-    /// Begins a transaction for this session.
-    /// </summary>
     public void BeginTransaction()
     {
         if (_inMemoryTransaction)
@@ -74,7 +59,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
 
             if (_dbContext.Options.Mongo == null)
             {
-                throw new InvalidOperationException("Mongo database not configured. This is not supposed to happen and is likely a bug.");
+                throw new InvalidOperationException("Mongo database not configured.");
             }
 
             if (!TransactionsSupported())
@@ -99,27 +84,18 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
         _session.StartTransaction();
     }
 
-    /// <summary>
-    /// Attaches an externally-owned session to this DbContext session.
-    /// The caller must have already started a transaction on the session.
-    /// </summary>
-    /// <param name="session">A session with an active transaction.</param>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when a session is already active or the provided session has no active transaction.
-    /// </exception>
     public void UseSession(IClientSessionHandle session)
     {
         ArgumentNullException.ThrowIfNull(session);
 
         if (_session != null || _inMemoryTransaction)
         {
-            throw new InvalidOperationException("A session is already active for this DbContext session.");
+            throw new InvalidOperationException("A session is already active.");
         }
 
         if (!session.IsInTransaction)
         {
-            throw new InvalidOperationException(
-                "The provided session has no active transaction. Call StartTransaction() on the session before passing it to UseSession().");
+            throw new InvalidOperationException("The provided session has no active transaction.");
         }
 
         _session = session;
@@ -127,15 +103,11 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
         _committed = false;
     }
 
-    /// <summary>
-    /// Tracks an entity in the session-wide identity map.
-    /// If an entity with the same ID already exists, the existing instance is returned.
-    /// </summary>
-    /// <typeparam name="TEntity">The type of the entity.</typeparam>
-    /// <param name="entity">The entity instance to track.</param>
-    /// <param name="id">The ID of the entity.</param>
-    /// <returns>The tracked entity instance.</returns>
-    public TEntity Track<TEntity>(TEntity entity, object id) where TEntity : class
+    public TEntity Track<TEntity>(
+        TEntity entity, 
+        object id, 
+        Func<TEntity, ArenaAllocator, IntPtr> materializer, 
+        Func<TEntity, IntPtr, bool> differ) where TEntity : class
     {
         var key = GetEntityKey<TEntity>(id);
         if (_trackedEntities.TryGetValue(key, out var state))
@@ -143,39 +115,20 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
             return (TEntity)state.Entity;
         }
 
-        var bson = entity.ToBson();
-        unsafe
-        {
-            var ptr = _arena.Alloc((nuint)bson.Length);
-            var dest = new Span<byte>(ptr, bson.Length);
-            bson.CopyTo(dest);
-            _trackedEntities[key] = (entity, (IntPtr)ptr, bson.Length);
-        }
-
+        var ptr = materializer(entity, _arena);
+        _trackedEntities[key] = (entity, ptr, (e, p) => differ((TEntity)e, p));
         return entity;
     }
 
-    /// <summary>
-    /// Gets all tracked entities that have changed since they were last tracked.
-    /// </summary>
-    /// <typeparam name="TEntity">The type of the entities to check.</typeparam>
-    /// <returns>A collection of changed entities.</returns>
     public IEnumerable<TEntity> GetDirtyEntities<TEntity>() where TEntity : class
     {
         var typeName = typeof(TEntity).Name;
-        foreach (var state in _trackedEntities)
+        var prefix = typeName + "/";
+        foreach (var entry in _trackedEntities)
         {
-            if (state.Key.StartsWith(typeName + "/") && state.Value.Entity is TEntity entity)
+            if (entry.Key.StartsWith(prefix) && entry.Value.Entity is TEntity entity)
             {
-                bool isDirty;
-                var currentBson = entity.ToBson();
-                unsafe
-                {
-                    var snapshotSpan = new ReadOnlySpan<byte>((void*)state.Value.SnapshotPtr, state.Value.Length);
-                    isDirty = !snapshotSpan.SequenceEqual(currentBson);
-                }
-
-                if (isDirty)
+                if (entry.Value.Differ(entity, entry.Value.ShadowPtr))
                 {
                     yield return entity;
                 }
@@ -183,20 +136,12 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
         }
     }
 
-    /// <summary>
-    /// Clears tracking for a specific entity.
-    /// </summary>
-    /// <typeparam name="TEntity">The type of the entity.</typeparam>
-    /// <param name="id">The ID of the entity.</param>
     public void Untrack<TEntity>(object id)
     {
         var key = GetEntityKey<TEntity>(id);
         _trackedEntities.Remove(key);
     }
 
-    /// <summary>
-    /// Clears all tracking in the session.
-    /// </summary>
     public void ClearTracking()
     {
         _trackedEntities.Clear();
@@ -208,10 +153,6 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
         return $"{typeof(TEntity).Name}/{id}";
     }
 
-    /// <summary>
-    /// Commits the active transaction.
-    /// </summary>
-    /// <returns>A task that completes when the commit operation has finished.</returns>
     public async Task CommitTransactionAsync()
     {
         if (_inMemoryTransaction)
@@ -221,14 +162,9 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
             return;
         }
 
-        if (_session == null)
+        if (_session == null || !_session.IsInTransaction)
         {
             throw new InvalidOperationException("No active transaction to commit.");
-        }
-
-        if (!_session.IsInTransaction)
-        {
-            throw new InvalidOperationException("The active session has no transaction to commit.");
         }
 
         await _session.CommitTransactionAsync();
@@ -240,10 +176,6 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
         }
     }
 
-    /// <summary>
-    /// Aborts the active transaction.
-    /// </summary>
-    /// <returns>A task that completes when the abort operation has finished.</returns>
     public async Task AbortTransactionAsync()
     {
         if (_inMemoryTransaction)
@@ -252,48 +184,28 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
             return;
         }
 
-        if (_session == null)
-        {
-            throw new InvalidOperationException("No active transaction to abort.");
-        }
-
-        if (_session.IsInTransaction)
+        if (_session != null && _session.IsInTransaction)
         {
             await _session.AbortTransactionAsync();
         }
 
         if (_ownsSession)
         {
-            _session.Dispose();
+            _session?.Dispose();
             _session = null;
         }
     }
 
-    /// <summary>
-    /// Disposes the session and aborts any active transaction to prevent resource leaks.
-    /// </summary>
-    /// <returns>A <see cref="ValueTask"/> representing the asynchronous dispose operation.</returns>
     public async ValueTask DisposeAsync()
     {
         if (_session != null)
         {
             if (_session.IsInTransaction && _ownsSession)
             {
-                try
-                {
-                    await _session.AbortTransactionAsync();
-                }
-                catch
-                {
-                    // Best-effort abort during disposal — don't let exceptions escape.
-                }
+                try { await _session.AbortTransactionAsync(); } catch { }
             }
 
-            if (_ownsSession)
-            {
-                _session.Dispose();
-            }
-
+            if (_ownsSession) _session.Dispose();
             _session = null;
         }
 
@@ -306,23 +218,12 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
     {
         if (_committed)
         {
-            throw new InvalidOperationException(
-                "This session has already committed. Call BeginTransaction() to start a new transaction before calling SaveChangesAsync() again.");
+            throw new InvalidOperationException("This session has already committed.");
         }
 
         if (!Transaction.IsActive)
         {
-            throw new InvalidOperationException("A transaction is required to save changes. Start a session with StartSession() first.");
-        }
-
-        if (_session != null && !_session.IsInTransaction)
-        {
-            if (_dbContext.Options.Conventions.TransactionSupportBehavior == TransactionSupportBehavior.Throw)
-            {
-                throw new InvalidOperationException("MongoDB commits require an active transaction.");
-            }
-
-            _inMemoryTransaction = true;
+            throw new InvalidOperationException("A transaction is required.");
         }
     }
 
@@ -334,10 +235,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
             return;
         }
 
-        if (_dbContext.Options.Mongo == null)
-        {
-            throw new InvalidOperationException("Mongo database not configured. This is not supposed to happen and is likely a bug.");
-        }
+        if (_dbContext.Options.Mongo == null) throw new InvalidOperationException("Mongo not configured.");
 
         if (!TransactionsSupported())
         {
@@ -347,12 +245,6 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
 
         if (_session == null)
         {
-            if (_dbContext.Options.Mongo == null)
-            {
-                HandleUnsupportedTransactions();
-                return;
-            }
-
             _session = _dbContext.Options.Mongo.Client.StartSession();
             _ownsSession = true;
         }
@@ -365,13 +257,10 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
 
     private bool TransactionsSupported()
     {
-        var database = _dbContext.Options.Mongo ?? throw new InvalidOperationException("Mongo database not configured. This is not supposed to happen and is likely a bug.");
+        var database = _dbContext.Options.Mongo ?? throw new InvalidOperationException("Mongo not configured.");
         var client = database.Client;
 
-        if (TopologyCache.TryGetValue(client, out var supported))
-        {
-            return supported;
-        }
+        if (TopologyCache.TryGetValue(client, out var supported)) return supported;
 
         if (client is MongoClient mongoClient)
         {
@@ -384,10 +273,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
         }
 
         var hello = database.RunCommand<BsonDocument>(new BsonDocument("hello", 1));
-        var isSharded = hello.TryGetValue("msg", out var msg) && msg == "isdbgrid";
-        var isReplicaSet = hello.TryGetValue("setName", out _);
-
-        supported = isReplicaSet || isSharded;
+        supported = hello.TryGetValue("setName", out _) || (hello.TryGetValue("msg", out var msg) && msg == "isdbgrid");
         TopologyCache.TryAdd(client, supported);
         return supported;
     }
@@ -396,8 +282,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
     {
         if (_dbContext.Options.Conventions.TransactionSupportBehavior == TransactionSupportBehavior.Throw)
         {
-            throw new InvalidOperationException(
-                "MongoDB transactions require a replica set or sharded cluster. Configure Conventions.TransactionSupportBehavior to Simulate to fall back to a non-transactional unit of work.");
+            throw new InvalidOperationException("Transactions not supported.");
         }
 
         _inMemoryTransaction = true;

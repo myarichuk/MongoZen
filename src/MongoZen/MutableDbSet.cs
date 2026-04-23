@@ -39,8 +39,8 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         IDbSet<TEntity> baseSet, 
         Func<TransactionContext> transactionProvider, 
         ISessionTracker tracker, 
-        ShadowMaterializer materializer,
-        ShadowDiffer differ,
+        ShadowMaterializer? materializer = null,
+        ShadowDiffer? differ = null,
         Conventions? conventions = null)
         : this(baseSet, conventions)
     {
@@ -57,9 +57,9 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         _conventions.IdGenerator.AssignId(entity, _baseSet.CollectionName, _conventions.IdConvention);
         _added.Add(entity);
         var id = _idAccessor(entity);
-        if (id != null)
+        if (id != null && _materializer != null && _differ != null)
         {
-            _tracker?.Track(entity, id);
+            _tracker?.Track(entity, id, (e, a) => _materializer(e, a), (e, p) => _differ(e, p));
         }
     }
 
@@ -70,16 +70,6 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         if (id != null)
         {
             _tracker?.Untrack<TEntity>(id);
-        }
-    }
-
-    public void Update(TEntity entity)
-    {
-        _updated.Add(entity);
-        var id = _idAccessor(entity);
-        if (id != null)
-        {
-            _tracker?.Track(entity, id);
         }
     }
 
@@ -176,7 +166,11 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         return entities.Select(e =>
         {
             var id = _idAccessor(e);
-            return id != null ? _tracker.Track(e, id) : e;
+            if (id != null && _materializer != null && _differ != null)
+            {
+                return _tracker.Track(e, id, (ent, a) => _materializer(ent, a), (ent, p) => _differ(ent, p));
+            }
+            return e;
         }).ToList();
     }
 

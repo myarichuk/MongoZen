@@ -49,7 +49,7 @@ public class MutableDbSetTests : IntegrationTestBase
         var mutableSet = new MutableDbSet<User>(inner);
 
         mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
-        mutableSet.Update(new User { Id = "2", Name = "Bob", Age = 99 });
+        mutableSet.Add(new User { Id = "2", Name = "Bob", Age = 99 });
         mutableSet.Remove(new User { Id = "1" });
 
         await mutableSet.CommitAsync(TransactionContext.InMemory());
@@ -95,7 +95,7 @@ public class MutableDbSetTests : IntegrationTestBase
         var mutableSet = new MutableDbSet<User>(ctx.Users);
 
         mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
-        mutableSet.Update(new User { Id = "2", Name = "Bob", Age = 99 });
+        mutableSet.Add(new User { Id = "2", Name = "Bob", Age = 99 });
         mutableSet.Remove(new User { Id = "1" });
 
         using var session = Client.StartSession();
@@ -157,7 +157,7 @@ public class MutableDbSetTests : IntegrationTestBase
         var mutableSet = new MutableDbSet<User>(inner);
 
         var user = new User { Id = "1", Name = "Newbie", Age = 25 };
-        mutableSet.Update(user); // update first
+        mutableSet.Add(user); // update first
         mutableSet.Add(user);    // then add
 
         await mutableSet.CommitAsync(TransactionContext.InMemory());
@@ -177,7 +177,7 @@ public class MutableDbSetTests : IntegrationTestBase
 
         var mutableSet = new MutableDbSet<User>(ctx.Users);
         var user = new User { Id = "1", Name = "Newbie", Age = 25 };
-        mutableSet.Update(user);
+        mutableSet.Add(user);
         mutableSet.Add(user);
 
         using var session = Client.StartSession();
@@ -234,7 +234,8 @@ public class MutableDbSetTests : IntegrationTestBase
         var mutableSet = new MutableDbSet<User>(inner);
         mutableSet.Add(new User { Id = "3", Name = "C", Age = 30 });
         mutableSet.Remove(new User { Id = "1" });
-        mutableSet.Update(new User { Id = "2", Name = "B updated", Age = 99 });
+        mutableSet.Add(new User { Id = "2", Name = "B updated", Age = 99 });
+
 
         await mutableSet.CommitAsync(TransactionContext.InMemory());
 
@@ -262,7 +263,8 @@ public class MutableDbSetTests : IntegrationTestBase
         var mutableSet = new MutableDbSet<User>(ctx.Users);
         mutableSet.Add(new User { Id = "3", Name = "C", Age = 30 });
         mutableSet.Remove(new User { Id = "1" });
-        mutableSet.Update(new User { Id = "2", Name = "B updated", Age = 99 });
+        mutableSet.Add(new User { Id = "2", Name = "B updated", Age = 99 });
+
 
         using var session = Client.StartSession();
         session.StartTransaction();
