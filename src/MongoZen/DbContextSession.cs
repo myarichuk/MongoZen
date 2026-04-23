@@ -33,7 +33,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
 
         if (startTransaction)
         {
-            StartTransaction();
+            EnsureTransactionStarted();
         }
     }
 
@@ -42,66 +42,6 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
     public IClientSessionHandle? ClientSession => _session;
 
     public TransactionContext Transaction => new(_session, _inMemoryTransaction);
-
-    public void BeginTransaction()
-    {
-        if (_inMemoryTransaction)
-        {
-            throw new InvalidOperationException("A transaction is already active for this session.");
-        }
-
-        if (_session != null)
-        {
-            if (_session.IsInTransaction)
-            {
-                return;
-            }
-
-            if (_dbContext.Options.Mongo == null)
-            {
-                throw new InvalidOperationException("Mongo database not configured.");
-            }
-
-            if (!TransactionsSupported())
-            {
-                HandleUnsupportedTransactions();
-                return;
-            }
-
-            _session.StartTransaction();
-            return;
-        }
-
-        if (_dbContext.Options.Mongo == null)
-        {
-            HandleUnsupportedTransactions();
-            return;
-        }
-
-        _session = _dbContext.Options.Mongo.Client.StartSession();
-        _ownsSession = true;
-        _committed = false;
-        _session.StartTransaction();
-    }
-
-    public void UseSession(IClientSessionHandle session)
-    {
-        ArgumentNullException.ThrowIfNull(session);
-
-        if (_session != null || _inMemoryTransaction)
-        {
-            throw new InvalidOperationException("A session is already active.");
-        }
-
-        if (!session.IsInTransaction)
-        {
-            throw new InvalidOperationException("The provided session has no active transaction.");
-        }
-
-        _session = session;
-        _ownsSession = false;
-        _committed = false;
-    }
 
     public TEntity Track<TEntity>(
         TEntity entity, 
@@ -223,19 +163,28 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
 
         if (!Transaction.IsActive)
         {
-            throw new InvalidOperationException("A transaction is required.");
+            EnsureTransactionStarted();
         }
     }
 
-    private void StartTransaction()
+    private void EnsureTransactionStarted()
     {
+        if (_inMemoryTransaction || (_session != null && _session.IsInTransaction))
+        {
+            return;
+        }
+
         if (_dbContext.Options.UseInMemory)
         {
             _inMemoryTransaction = true;
             return;
         }
 
-        if (_dbContext.Options.Mongo == null) throw new InvalidOperationException("Mongo not configured.");
+        if (_dbContext.Options.Mongo == null)
+        {
+            HandleUnsupportedTransactions();
+            return;
+        }
 
         if (!TransactionsSupported())
         {
@@ -249,10 +198,8 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, ISessionT
             _ownsSession = true;
         }
 
-        if (!_session.IsInTransaction)
-        {
-            _session.StartTransaction();
-        }
+        _session.StartTransaction();
+        _committed = false;
     }
 
     private bool TransactionsSupported()

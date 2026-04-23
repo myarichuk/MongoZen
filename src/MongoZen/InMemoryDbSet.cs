@@ -48,6 +48,11 @@ public class InMemoryDbSet<T> : IDbSet<T> where T : class
         return item != null ? Clone(item) : null;
     }
 
+    public IDbSet<T> Include(Expression<Func<T, object?>> path)
+    {
+        return this;
+    }
+
     public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, CancellationToken cancellationToken = default)
     {
         var expr = _translator.Translate(filter);

@@ -30,6 +30,23 @@ public class InMemoryTransactionTests
 
         public IMutableDbSet<User> Users { get; }
 
+        public void Remove<TEntity>(object id) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(User)) Users.Remove(id);
+        }
+
+        public async ValueTask<TEntity?> LoadAsync<TEntity>(object id, System.Threading.CancellationToken cancellationToken = default) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(User)) return (TEntity?)(object?)await Users.LoadAsync(id, cancellationToken);
+            return null;
+        }
+
+        public IMutableDbSet<TEntity> Include<TEntity>(System.Linq.Expressions.Expression<Func<TEntity, object?>> path) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(User)) return (IMutableDbSet<TEntity>)(object)Users.Include((System.Linq.Expressions.Expression<Func<User, object?>>)(object)path);
+            throw new ArgumentException();
+        }
+
         public async ValueTask SaveChangesAsync()
         {
             EnsureTransactionActive();

@@ -161,6 +161,12 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         GenerateGenericAsyncDispatch(sb, indent2 + "    ", mutableProps, "LoadAsync", "id", "cancellationToken");
         sb.Append(indent2).AppendLine("}");
 
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("public MongoZen.IMutableDbSet<TEntity> Include<TEntity>(System.Linq.Expressions.Expression<System.Func<TEntity, object?>> path) where TEntity : class");
+        sb.Append(indent2).AppendLine("{");
+        GenerateGenericDispatchReturn(sb, indent2 + "    ", mutableProps, "Include", "path");
+        sb.Append(indent2).AppendLine("}");
+
         // SaveChangesAsync
         sb.AppendLine();
         sb.Append(indent2).AppendLine("public async ValueTask SaveChangesAsync()");
@@ -232,6 +238,25 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
             sb.Append(indent).Append(i == 0 ? "if" : "else if").Append(" (typeof(TEntity) == typeof(").Append(prop.EntityType).AppendLine("))");
             sb.Append(indent).AppendLine("{");
             sb.Append(indent).Append("    ").Append(prop.Name).Append(".").Append(methodName).AppendLine("(id);");
+            sb.Append(indent).AppendLine("}");
+        }
+        if (props.Count > 0)
+        {
+            sb.Append(indent).AppendLine("else");
+            sb.Append(indent).AppendLine("{");
+            sb.Append(indent).Append("    throw new System.ArgumentException($\"Entity type {typeof(TEntity).Name} is not part of this DbContext.\");");
+            sb.Append(indent).AppendLine("}");
+        }
+    }
+
+    private static void GenerateGenericDispatchReturn(StringBuilder sb, string indent, List<(string Name, string EntityType)> props, string methodName, params string[] args)
+    {
+        for (int i = 0; i < props.Count; i++)
+        {
+            var prop = props[i];
+            sb.Append(indent).Append(i == 0 ? "if" : "else if").Append(" (typeof(TEntity) == typeof(").Append(prop.EntityType).AppendLine("))");
+            sb.Append(indent).AppendLine("{");
+            sb.Append(indent).Append("    return (MongoZen.IMutableDbSet<TEntity>)(object)").Append(prop.Name).Append(".").Append(methodName).Append("(").Append(string.Join(", ", args)).AppendLine(");");
             sb.Append(indent).AppendLine("}");
         }
         if (props.Count > 0)

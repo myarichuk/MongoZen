@@ -16,6 +16,8 @@ public interface IMutableDbSet<T> : IDbSet<T> where T : class
 
     new ValueTask<T?> LoadAsync(object id, CancellationToken cancellationToken = default);
 
+    new IMutableDbSet<T> Include(System.Linq.Expressions.Expression<Func<T, object?>> path);
+
     IEnumerable<T> GetAdded();
 
     IEnumerable<T> GetRemoved();

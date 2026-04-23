@@ -110,6 +110,12 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         return entity;
     }
 
+    public IMutableDbSet<TEntity> Include(System.Linq.Expressions.Expression<Func<TEntity, object?>> path)
+    {
+        // TODO: Implement Include tracking
+        return this;
+    }
+
     public IEnumerable<TEntity> GetAdded() => _added;
 
     public IEnumerable<TEntity> GetRemoved() => _removed;

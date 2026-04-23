@@ -16,4 +16,6 @@ public interface IDbSet<T> : IQueryable<T> where T : class
     ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default);
 
     ValueTask<T?> LoadAsync(object id, CancellationToken cancellationToken = default);
+
+    IDbSet<T> Include(Expression<Func<T, object?>> path);
 }

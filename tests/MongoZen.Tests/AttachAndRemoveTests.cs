@@ -71,6 +71,12 @@ public class AttachAndRemoveTests : IntegrationTestBase
             return null;
         }
 
+        public IMutableDbSet<TEntity> Include<TEntity>(System.Linq.Expressions.Expression<Func<TEntity, object?>> path) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(Product)) return (IMutableDbSet<TEntity>)(object)Products.Include((System.Linq.Expressions.Expression<Func<Product, object?>>)(object)path);
+            throw new ArgumentException();
+        }
+
         public async ValueTask SaveChangesAsync()
         {
             EnsureTransactionActive();
