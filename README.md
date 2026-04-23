@@ -1,16 +1,16 @@
 # MongoZen
 
-Look, MongoDB is great, but the mapping experience in C# usually sucks. You either end up with reflection-heavy "automagical" libraries that crawl at runtime, or you're stuck writing manual BsonDocument boilerplate like it's 2011.
+MongoDB is nice and all, but the driver experience in C# usually sucks. You either end up with reflection-heavy "automagical" repositories, or you're writing manual BsonDocument boilerplate for aggregation pipelines like it's 2011.
 
-**MongoZen** is what happens when you want the "Unit of Work" and "Identity Map" patterns from EF Core or RavenDB, but you want them to actually be fast and MongoDB-native. No nonsense, just performance.
+Now, the idea behind **MongoZen** is to take a Mongo driver then add "Unit of Work" and "Identity Map" patterns from EF Core or RavenDB. But I wanted them to actually be fast and as MongoDB-native as possible.
 
-## Why use this?
+## So, why should you care?
 
-*   **No Reflection on the Hot Path**: We use Roslyn Source Generators to wire up your `DbSet` and sessions at compile-time. If it's slow, it's not because of us.
-*   **Identity Map**: If you load the same document twice in one session, you get the same instance. Period.
-*   **Automatic Change Tracking**: Modify your POCOs directly. When you call `SaveChangesAsync()`, we figure out what changed and flush it in a **single bulk operation** per collection.
-*   **RavenDB-style API**: `Store`, `Delete`, `LoadAsync`. It's a clean API that doesn't get in your way.
-*   **In-Memory Provider**: Write tests that actually run fast without spinning up a Docker container every time.
+*   **No Reflection on the Hot Path**: Instead, there are Roslyn Source Generators to wire up your `DbSet` and sessions at compile-time. If it's slow, it's not because of us.
+*   **Identity Map**: If you load the same document twice in one session, you get the same instance.
+*   **Automatic Change Tracking**: Modify POCOs directly. When you call `SaveChangesAsync()`, we figure out what changed and flush it in a **single bulk write operation** per collection. Or a transaction if supported.
+*   **RavenDB-inspired API**: `Store`, `Delete`, `LoadAsync`. It's a clean API that doesn't get in your way.
+*   **In-Memory Provider**: Write tests that run fast without spinning up a Docker "testcontainer" container every time.
 
 ## Quick Start
 
