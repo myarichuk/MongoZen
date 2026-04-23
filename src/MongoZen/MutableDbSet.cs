@@ -264,48 +264,9 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         }
     }
 
-    private Task InternalCommitAsync(InMemoryDbSet<TEntity> memSet, List<TEntity> updated, CancellationToken cancellationToken = default)
+    private async Task InternalCommitAsync(InMemoryDbSet<TEntity> memSet, List<TEntity> updated, CancellationToken cancellationToken = default)
     {
-        foreach (var entity in _added)
-        {
-            var existing = GetExistingFromInMemory(memSet, entity);
-            if (existing != null)
-            {
-                memSet.Collection.Remove(existing);
-            }
-
-            memSet.Collection.Add(Clone(entity));
-        }
-
-        foreach (var entity in _removed)
-        {
-            var existing = GetExistingFromInMemory(memSet, entity);
-            if (existing != null)
-            {
-                memSet.Collection.Remove(existing);
-            }
-        }
-
-        foreach (var id in _removedIds)
-        {
-            var existing = memSet.Collection.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
-            if (existing != null)
-            {
-                memSet.Collection.Remove(existing);
-            }
-        }
-
-        foreach (var entity in updated)
-        {
-            var existing = GetExistingFromInMemory(memSet, entity);
-            if (existing != null)
-            {
-                memSet.Collection.Remove(existing);
-                memSet.Collection.Add(Clone(entity));
-            }
-        }
-
-        return Task.CompletedTask;
+        await memSet.CommitAsync(_added, _removed, _removedIds, updated, cancellationToken);
     }
 
     private TEntity? GetExistingFromInMemory(InMemoryDbSet<TEntity> memSet, TEntity entity)

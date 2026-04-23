@@ -82,6 +82,56 @@ public class InMemoryDbSet<T> : IDbSet<T> where T : class
 
     public IQueryProvider Provider => _items.AsQueryable().Provider;
 
+    internal async Task CommitAsync(IEnumerable<T> added, IEnumerable<T> removed, IEnumerable<object> removedIds, IEnumerable<T> updated, CancellationToken cancellationToken = default)
+    {
+        // Simulate atomic update
+        lock (_items)
+        {
+            foreach (var entity in added)
+            {
+                var id = _idAccessor(entity);
+                if (id != null)
+                {
+                    var existing = _items.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
+                    if (existing != null) _items.Remove(existing);
+                }
+                _items.Add(Clone(entity));
+            }
+
+            foreach (var entity in removed)
+            {
+                var id = _idAccessor(entity);
+                if (id != null)
+                {
+                    var existing = _items.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
+                    if (existing != null) _items.Remove(existing);
+                }
+            }
+
+            foreach (var id in removedIds)
+            {
+                var existing = _items.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
+                if (existing != null) _items.Remove(existing);
+            }
+
+            foreach (var entity in updated)
+            {
+                var id = _idAccessor(entity);
+                if (id != null)
+                {
+                    var existing = _items.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
+                    if (existing != null)
+                    {
+                        _items.Remove(existing);
+                        _items.Add(Clone(entity));
+                    }
+                }
+            }
+        }
+
+        await Task.CompletedTask;
+    }
+
     private static T Clone(T source)
     {
         var bson = source.ToBson();
