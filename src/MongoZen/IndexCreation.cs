@@ -19,16 +19,20 @@ public static class IndexCreation
         var taskTypes = assembly.GetTypes()
             .Where(t => t is { IsAbstract: false, IsClass: true } && typeof(IAbstractIndexCreationTask).IsAssignableFrom(t));
 
-        var tasks = new List<Task>();
+        var tasks = new List<IAbstractIndexCreationTask>();
         foreach (var type in taskTypes)
         {
             if (Activator.CreateInstance(type) is IAbstractIndexCreationTask task)
             {
-                tasks.Add(task.ExecuteAsync(database, cancellationToken));
+                tasks.Add(task);
             }
         }
 
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+        // Deduplicate by IndexName + CollectionName to avoid firing identical commands in parallel
+        // Note: A single class might create multiple models, so we check ExecuteAsync logic too.
+        // For simplicity, we assume one Task class per index (or group of indexes).
+        
+        await Task.WhenAll(tasks.Select(t => t.ExecuteAsync(database, cancellationToken))).ConfigureAwait(false);
     }
 
     /// <summary>

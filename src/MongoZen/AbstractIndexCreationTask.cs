@@ -15,6 +15,7 @@ public abstract class AbstractIndexCreationTask<T> : IAbstractIndexCreationTask 
 {
     /// <summary>
     /// Gets the name of the index. Defaults to the class name.
+    /// This is only used if <see cref="CreateIndexModel"/> does not explicitly set a name.
     /// </summary>
     public virtual string IndexName => GetType().Name;
 
@@ -24,6 +25,12 @@ public abstract class AbstractIndexCreationTask<T> : IAbstractIndexCreationTask 
     public virtual string CollectionName => typeof(T).Name;
 
     /// <summary>
+    /// Gets or sets whether to drop the index if it exists with a different definition and recreate it.
+    /// Use with caution in production.
+    /// </summary>
+    public virtual bool ForceRecreate => false;
+
+    /// <summary>
     /// Gets the MongoDB index keys builder.
     /// </summary>
     protected IndexKeysDefinitionBuilder<T> Keys => Builders<T>.IndexKeys;
@@ -31,25 +38,55 @@ public abstract class AbstractIndexCreationTask<T> : IAbstractIndexCreationTask 
     /// <summary>
     /// Creates the index model defining the keys and options.
     /// </summary>
-    public abstract CreateIndexModel<T> CreateIndexModel();
+    public virtual CreateIndexModel<T>? CreateIndexModel() => null;
+
+    /// <summary>
+    /// Creates multiple index models. Override this if you want to define multiple indexes in a single class.
+    /// </summary>
+    public virtual IEnumerable<CreateIndexModel<T>> CreateIndexModels()
+    {
+        var single = CreateIndexModel();
+        if (single != null) yield return single;
+    }
 
     async Task IAbstractIndexCreationTask.ExecuteAsync(IMongoDatabase database, CancellationToken cancellationToken)
     {
         var collection = database.GetCollection<T>(CollectionName);
-        var model = CreateIndexModel();
+        var models = CreateIndexModels().ToList();
 
-        // Ensure the name is set if not explicitly provided by the user in CreateIndexModel
-        if (string.IsNullOrEmpty(model.Options?.Name))
+        if (models.Count == 0) return;
+
+        for (int i = 0; i < models.Count; i++)
         {
-            var options = model.Options ?? new CreateIndexOptions();
-            options.Name = IndexName;
-            
-            // CreateIndexModel is immutable-ish in its properties, but Options is a reference to a mutable object.
-            // However, the Driver's CreateIndexModel constructor takes the options.
-            // If we want to be safe, we reconstruct if Options was null.
-            model = new CreateIndexModel<T>(model.Keys, options);
+            var model = models[i];
+            if (string.IsNullOrEmpty(model.Options?.Name))
+            {
+                var options = model.Options ?? new CreateIndexOptions();
+                options.Name = models.Count == 1 ? IndexName : $"{IndexName}_{i}";
+                models[i] = new CreateIndexModel<T>(model.Keys, options);
+            }
         }
 
-        await collection.Indexes.CreateOneAsync(model, cancellationToken: cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await collection.Indexes.CreateManyAsync(models, cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (MongoCommandException ex) when (ex.CodeName == "IndexOptionsConflict" || ex.Message.Contains("already exists with different options"))
+        {
+            if (ForceRecreate)
+            {
+                foreach (var model in models)
+                {
+                    var name = model.Options?.Name ?? IndexName;
+                    await collection.Indexes.DropOneAsync(name, cancellationToken).ConfigureAwait(false);
+                }
+                await collection.Indexes.CreateManyAsync(models, cancellationToken: cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"Index creation failed for collection '{CollectionName}'. An index with the same name already exists but with a different definition. " +
+                "Update the index name, manually drop the existing index, or set 'ForceRecreate = true' in your index task class.", ex);
+        }
     }
 }
