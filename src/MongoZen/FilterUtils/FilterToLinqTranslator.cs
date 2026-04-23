@@ -12,7 +12,16 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
     private static readonly RenderArgs<T> RenderArgs = new(BsonSerializer.LookupSerializer<T>(), BsonSerializer.SerializerRegistry);
     private static readonly ParameterExpression Param = Expression.Parameter(typeof(T), "x");
 
+    private static readonly ConcurrentDictionary<BsonDocument, Func<T, bool>> CompiledCache = 
+        new(new BsonDocumentEqualityComparer());
+
     private readonly Dictionary<string, IFilterElementTranslator> _elementTranslators;
+
+    private class BsonDocumentEqualityComparer : IEqualityComparer<BsonDocument>
+    {
+        public bool Equals(BsonDocument? x, BsonDocument? y) => x == null ? y == null : x.Equals(y);
+        public int GetHashCode(BsonDocument obj) => obj.GetHashCode(); // BsonDocument.GetHashCode is content-based
+    }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using a custom set of filter element translators.
@@ -54,6 +63,15 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
         MongoLinqValidator.ValidateAndThrowIfNeeded(lambda); // ensure Mongo LINQ compatibility
 
         return lambda;
+    }
+
+    /// <summary>
+    /// Gets a compiled delegate for the filter, using the cache if available.
+    /// </summary>
+    public Func<T, bool> GetCompiled(FilterDefinition<T> filter)
+    {
+        var doc = filter.Render(RenderArgs);
+        return CompiledCache.GetOrAdd(doc, _ => Translate(filter).Compile());
     }
 
     public Expression Translate(BsonDocument filter, ParameterExpression parameter) => ParseDocument(filter, parameter);

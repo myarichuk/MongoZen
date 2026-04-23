@@ -64,15 +64,15 @@ public class MongoLinqValidatorTests
     }
 
     [Fact]
-    public void CapturedClosureConstant_ShouldThrow()
+    public void CapturedClosureConstant_ShouldNotThrow()
     {
         var age = 42;
         Expression<Func<Person, bool>> expr = p => p.Age == age;
 
-        var ex = Assert.Throws<NotSupportedException>(() =>
+        var ex = Record.Exception(() =>
             MongoLinqValidator.ValidateAndThrowIfNeeded(expr));
 
-        Assert.Contains("Captured constants", ex.Message);
+        Assert.Null(ex);
     }
 
     [Fact]
