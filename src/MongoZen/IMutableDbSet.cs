@@ -4,6 +4,12 @@ public interface IMutableDbSet<T> : IDbSet<T> where T : class
 {
     void Add(T entity);
 
+    /// <summary>
+    /// Starts tracking the entity as "Unchanged".
+    /// If the entity is later modified, it will be saved during SaveChangesAsync.
+    /// </summary>
+    void Attach(T entity);
+
     void Remove(T entity);
 
     IEnumerable<T> GetAdded();

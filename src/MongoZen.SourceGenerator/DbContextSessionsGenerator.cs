@@ -114,8 +114,8 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         .Append("_dbContext.").Append(prop.Name).Append(", ")
         .Append("() => Transaction, ")
         .Append("this, ") // Pass the session as ISessionTracker
-        .Append("unsafe (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
-        .Append("unsafe (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
+        .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
+        .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
         .Append("_dbContext.Options.Conventions")
         .AppendLine(");");
         }
@@ -129,6 +129,25 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
               .Append(prop.EntityType).Append("> ")
               .Append(prop.Name).AppendLine(" { get; }");
         }
+
+        // Generic Add/Attach/Remove methods
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("public void Add<TEntity>(TEntity entity) where TEntity : class");
+        sb.Append(indent2).AppendLine("{");
+        GenerateGenericDispatch(sb, indent2 + "    ", mutableProps, "Add");
+        sb.Append(indent2).AppendLine("}");
+
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("public void Attach<TEntity>(TEntity entity) where TEntity : class");
+        sb.Append(indent2).AppendLine("{");
+        GenerateGenericDispatch(sb, indent2 + "    ", mutableProps, "Attach");
+        sb.Append(indent2).AppendLine("}");
+
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("public void Remove<TEntity>(TEntity entity) where TEntity : class");
+        sb.Append(indent2).AppendLine("{");
+        GenerateGenericDispatch(sb, indent2 + "    ", mutableProps, "Remove");
+        sb.Append(indent2).AppendLine("}");
 
         // SaveChangesAsync
         sb.AppendLine();
@@ -172,5 +191,24 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         }
 
         return sb.ToString();
+    }
+
+    private static void GenerateGenericDispatch(StringBuilder sb, string indent, List<(string Name, string EntityType)> props, string methodName)
+    {
+        for (int i = 0; i < props.Count; i++)
+        {
+            var prop = props[i];
+            sb.Append(indent).Append(i == 0 ? "if" : "else if").Append(" (entity is ").Append(prop.EntityType).AppendLine(" e)");
+            sb.Append(indent).AppendLine("{");
+            sb.Append(indent).Append("    ").Append(prop.Name).Append(".").Append(methodName).AppendLine("(e);");
+            sb.Append(indent).AppendLine("}");
+        }
+        if (props.Count > 0)
+        {
+            sb.Append(indent).AppendLine("else");
+            sb.Append(indent).AppendLine("{");
+            sb.Append(indent).Append("    throw new System.ArgumentException($\"Entity type {typeof(TEntity).Name} is not part of this DbContext.\");");
+            sb.Append(indent).AppendLine("}");
+        }
     }
 }

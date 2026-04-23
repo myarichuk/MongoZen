@@ -16,6 +16,7 @@
     <Description>MongoZen: A minimal ceremony MongoDB-based data access library to make working with MongoDB feel more ORM-like</Description>
     <RepositoryUrl>https://github.com/myarichuk/MongoFlow</RepositoryUrl>
     <RootNamespace>MongoZen</RootNamespace>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>

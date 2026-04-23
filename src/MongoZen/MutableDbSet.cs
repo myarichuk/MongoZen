@@ -63,6 +63,20 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         }
     }
 
+    public void Attach(TEntity entity)
+    {
+        var id = _idAccessor(entity);
+        if (id == null)
+        {
+            throw new InvalidOperationException("Cannot attach an entity without an ID.");
+        }
+
+        if (_materializer != null && _differ != null)
+        {
+            _tracker?.Track(entity, id, (e, a) => _materializer(e, a), (e, p) => _differ(e, p));
+        }
+    }
+
     public void Remove(TEntity entity)
     {
         _removed.Add(entity);
@@ -195,9 +209,9 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
             .GroupBy(e => e!.GetId(_idAccessor))
             .ToDictionary(g => g.Key, g => g.Last());
 
-        foreach (var id in removedIds)
+        if (removedIds.Count > 0)
         {
-            models.Add(new DeleteOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, id)));
+            models.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, removedIds)));
         }
 
         var upserts = new Dictionary<object, TEntity>();
