@@ -1,18 +1,17 @@
 namespace MongoZen;
 
-public interface IMutableDbSet<T> : IDbSet<T>
+public interface IMutableDbSet<T> : IDbSet<T> where T : class
 {
     void Add(T entity);
 
     void Remove(T entity);
-
-    void Update(T entity);
 
     IEnumerable<T> GetAdded();
 
     IEnumerable<T> GetRemoved();
 
     IEnumerable<T> GetUpdated();
+
 
     Task CommitAsync(TransactionContext transaction, CancellationToken cancellationToken = default); // eventually used in SaveChanges()
 

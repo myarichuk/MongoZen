@@ -1,15 +1,35 @@
 using MongoDB.Driver;
 using MongoZen;
 using Xunit;
+using SharpArena.Allocators;
 
 namespace MongoZen.Tests;
 
 public class OverhaulTests : IntegrationTestBase
 {
-    private class User
+    public class User
     {
         public string Id { get; set; } = Guid.NewGuid().ToString();
         public string Name { get; set; } = string.Empty;
+    }
+
+    private struct User_Shadow
+    {
+        public bool _hasValue;
+        public SharpArena.Collections.ArenaString Name;
+
+        public void From(User source, ArenaAllocator arena)
+        {
+            _hasValue = true;
+            Name = SharpArena.Collections.ArenaString.Clone(source.Name, arena);
+        }
+
+        public bool IsDirty(User current)
+        {
+            if (current == null) return _hasValue;
+            if (!_hasValue) return true;
+            return !Name.Equals(current.Name);
+        }
     }
 
     private partial class TestDbContext : DbContext
@@ -18,12 +38,25 @@ public class OverhaulTests : IntegrationTestBase
         public IDbSet<User> Users { get; set; } = null!;
     }
 
-    // This part would normally be generated
     private sealed class TestDbContextSession : DbContextSession<TestDbContext>
     {
         public TestDbContextSession(TestDbContext dbContext) : base(dbContext)
         {
-            Users = new MutableDbSet<User>(_dbContext.Users, () => Transaction, this, (e, a) => IntPtr.Zero, (e, p) => true, _dbContext.Options.Conventions);
+            Users = new MutableDbSet<User>(
+                _dbContext.Users, 
+                () => Transaction, 
+                this, 
+                (entity, arena) => { unsafe {
+                    var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<User_Shadow>()); 
+                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<User_Shadow>(ptr); 
+                    s.From(entity, arena); 
+                    return (System.IntPtr)ptr; 
+                } },
+                (entity, ptr) => { unsafe {
+                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<User_Shadow>((void*)ptr); 
+                    return s.IsDirty(entity); 
+                } },
+                _dbContext.Options.Conventions);
         }
 
         public IMutableDbSet<User> Users { get; }
@@ -50,8 +83,6 @@ public class OverhaulTests : IntegrationTestBase
         // Start a new session
         var session2 = new TestDbContextSession(ctx);
         
-        // Query within the transaction (should be empty if we haven't saved session2 yet, 
-        // but here we just want to see it doesn't throw and uses the session)
         var results = await session2.Users.QueryAsync(u => u.Name == "Implicit");
         Assert.Single(results);
     }
@@ -70,9 +101,12 @@ public class OverhaulTests : IntegrationTestBase
         await session.SaveChangesAsync();
 
         var session2 = new TestDbContextSession(ctx);
-        u1.Name = "User1 Updated";
-        session2.Users.Update(u1);
-        session2.Users.Remove(u2);
+        var u1Loaded = (await session2.Users.QueryAsync(u => u.Name == "User1")).First();
+        u1Loaded.Name = "User1 Updated";
+        
+        var u2Loaded = (await session2.Users.QueryAsync(u => u.Name == "User2")).First();
+        session2.Users.Remove(u2Loaded);
+        
         session2.Users.Add(new User { Name = "User3" });
         
         await session2.SaveChangesAsync();
