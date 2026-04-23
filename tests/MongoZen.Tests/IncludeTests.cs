@@ -20,9 +20,8 @@ public class IncludeTests : IntegrationTestBase
         public decimal Amount { get; set; }
     }
 
-    public partial class TestContext : DbContext
+    public partial class TestContext(DbContextOptions options) : DbContext(options)
     {
-        public TestContext(DbContextOptions options) : base(options) { }
         public IDbSet<Customer> Customers { get; set; } = null!;
         public IDbSet<Order> Orders { get; set; } = null!;
     }

@@ -13,9 +13,8 @@ public class AttachAndRemoveTests : IntegrationTestBase
         public decimal Price { get; set; }
     }
 
-    public partial class ShopContext : DbContext
+    public partial class ShopContext(DbContextOptions options) : DbContext(options)
     {
-        public ShopContext(DbContextOptions options) : base(options) { }
         public IDbSet<Product> Products { get; set; } = null!;
     }
 

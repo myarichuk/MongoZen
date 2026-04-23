@@ -11,9 +11,8 @@ public class IdGenerationTests : IntegrationTestBase
         public string Name { get; set; } = string.Empty;
     }
 
-    private partial class TestDbContext : DbContext
+    private partial class TestDbContext(DbContextOptions options) : DbContext(options)
     {
-        public TestDbContext(DbContextOptions options) : base(options) { }
         public IDbSet<User> Users { get; set; } = null!;
     }
 

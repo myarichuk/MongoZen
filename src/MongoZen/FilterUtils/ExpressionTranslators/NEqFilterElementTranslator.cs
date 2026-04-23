@@ -3,12 +3,7 @@ using System.Linq.Expressions;
 namespace MongoZen.FilterUtils.ExpressionTranslators;
 
 // doc: https://www.mongodb.com/docs/manual/reference/operator/query/ne/
-public class NEqFilterElementTranslator : BinaryOperatorFilterElementTranslator
+public class NEqFilterElementTranslator() : BinaryOperatorFilterElementTranslator(Expression.NotEqual)
 {
-    public NEqFilterElementTranslator()
-        : base(Expression.NotEqual)
-    {
-    }
-
     public override string Operator => "$ne";
 }

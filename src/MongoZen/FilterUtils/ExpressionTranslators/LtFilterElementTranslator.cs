@@ -2,12 +2,7 @@ using System.Linq.Expressions;
 
 namespace MongoZen.FilterUtils.ExpressionTranslators;
 
-public class LtFilterElementTranslator : BinaryOperatorFilterElementTranslator
+public class LtFilterElementTranslator() : BinaryOperatorFilterElementTranslator(Expression.LessThan)
 {
-    public LtFilterElementTranslator()
-        : base(Expression.LessThan)
-    {
-    }
-
     public override string Operator => "$lt";
 }

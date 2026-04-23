@@ -12,23 +12,14 @@ public class DbContextSessionTests : IntegrationTestBase
         public string Name { get; set; } = string.Empty;
     }
 
-    private class TestDbContext : DbContext
+    private class TestDbContext(DbContextOptions options) : DbContext(options)
     {
-        public TestDbContext(DbContextOptions options)
-            : base(options)
-        {
-        }
-
         public IDbSet<User> Users { get; set; } = null!;
     }
 
-    private sealed class TestDbContextSession : DbContextSession<TestDbContext>
+    private sealed class TestDbContextSession(TestDbContext dbContext, bool startTransaction = true)
+        : DbContextSession<TestDbContext>(dbContext, startTransaction)
     {
-        public TestDbContextSession(TestDbContext dbContext, bool startTransaction = true)
-            : base(dbContext, startTransaction)
-        {
-        }
-
         public void ExposeEnsureTransactionActive() => EnsureTransactionActive();
     }
 

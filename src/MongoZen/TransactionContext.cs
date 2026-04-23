@@ -2,17 +2,11 @@ using MongoDB.Driver;
 
 namespace MongoZen;
 
-public readonly struct TransactionContext
+public readonly struct TransactionContext(IClientSessionHandle? session, bool isInMemoryTransaction)
 {
-    public TransactionContext(IClientSessionHandle? session, bool isInMemoryTransaction)
-    {
-        Session = session;
-        IsInMemoryTransaction = isInMemoryTransaction;
-    }
+    public IClientSessionHandle? Session { get; } = session;
 
-    public IClientSessionHandle? Session { get; }
-
-    public bool IsInMemoryTransaction { get; }
+    public bool IsInMemoryTransaction { get; } = isInMemoryTransaction;
 
     public bool IsActive => Session != null || IsInMemoryTransaction;
 

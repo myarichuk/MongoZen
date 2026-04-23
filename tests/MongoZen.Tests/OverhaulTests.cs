@@ -32,9 +32,8 @@ public class OverhaulTests : IntegrationTestBase
         }
     }
 
-    private partial class TestDbContext : DbContext
+    private partial class TestDbContext(DbContextOptions options) : DbContext(options)
     {
-        public TestDbContext(DbContextOptions options) : base(options) { }
         public IDbSet<User> Users { get; set; } = null!;
     }
 

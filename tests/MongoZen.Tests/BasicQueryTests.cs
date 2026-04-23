@@ -16,14 +16,9 @@ public class BasicQueryTests : IntegrationTestBase
         public int Age { get; set; }
     }
 
-    private class TestDbContext : DbContext
+    private class TestDbContext(DbContextOptions options) : DbContext(options)
     {
         public IDbSet<User> Users { get; set; } = null!;
-
-        public TestDbContext(DbContextOptions options)
-            : base(options)
-        {
-        }
     }
 
     private async Task<IEnumerable<User>> InsertTestUsersAsync()

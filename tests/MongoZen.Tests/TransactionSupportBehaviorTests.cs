@@ -11,14 +11,9 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
         public string Name { get; set; } = string.Empty;
     }
 
-    private class TestDbContext : DbContext
+    private class TestDbContext(DbContextOptions options) : DbContext(options)
     {
         public IDbSet<User> Users { get; set; } = null!;
-
-        public TestDbContext(DbContextOptions options)
-            : base(options)
-        {
-        }
     }
 
     private sealed class TestDbContextSession : DbContextSession<TestDbContext>

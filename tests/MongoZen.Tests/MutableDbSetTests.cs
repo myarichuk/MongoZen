@@ -14,13 +14,8 @@ public class MutableDbSetTests : IntegrationTestBase
         public int Age { get; set; }
     }
 
-    private class TestDbContext : DbContext
+    private class TestDbContext(DbContextOptions options) : DbContext(options)
     {
-        public TestDbContext(DbContextOptions options)
-            : base(options)
-        {
-        }
-
         public IDbSet<User> Users { get; set; } = null!;
     }
 

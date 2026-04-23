@@ -11,9 +11,8 @@ public class InMemoryTransactionTests
         public string Name { get; set; } = string.Empty;
     }
 
-    public partial class TestContext : DbContext
+    public partial class TestContext(DbContextOptions options) : DbContext(options)
     {
-        public TestContext(DbContextOptions options) : base(options) { }
         public IDbSet<User> Users { get; set; } = null!;
     }
 
