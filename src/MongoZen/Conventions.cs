@@ -7,4 +7,6 @@ public record Conventions
     public IIdGenerator IdGenerator { get; set; } = new PrefixedStringIdGenerator();
 
     public TransactionSupportBehavior TransactionSupportBehavior { get; set; } = TransactionSupportBehavior.Throw;
+
+    public bool DisableTransactions { get; set; } = false;
 }

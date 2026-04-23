@@ -36,7 +36,7 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
             EnsureTransactionActive();
             try
             {
-                await Users.CommitAsync(Transaction);
+                await Users.Advanced.CommitAsync(Transaction);
 
                 await CommitTransactionAsync();
                 await DisposeAsync();
@@ -54,15 +54,10 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
         }
     }
 
-    public TransactionSupportBehaviorTests()
-        : base(useSingleReplicaSet: false)
-    {
-    }
-
     [Fact]
     public void StartSession_Throws_When_Transactions_Unsupported()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database!, new Conventions()));
+        var ctx = new TestDbContext(new DbContextOptions(Database!, new Conventions { DisableTransactions = true }));
 
         var ex = Assert.Throws<InvalidOperationException>(() => new TestDbContextSession(ctx));
         Assert.Contains("Transactions not supported", ex.Message);
@@ -71,7 +66,7 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
     [Fact]
     public async Task SaveChanges_Simulates_When_Transactions_Unsupported()
     {
-        var conventions = new Conventions { TransactionSupportBehavior = TransactionSupportBehavior.Simulate };
+        var conventions = new Conventions { TransactionSupportBehavior = TransactionSupportBehavior.Simulate, DisableTransactions = true };
         var ctx = new TestDbContext(new DbContextOptions(Database!, conventions));
         await using var session = new TestDbContextSession(ctx);
 

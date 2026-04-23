@@ -1,5 +1,5 @@
 using System.Collections;
-using System.Text.Json;
+using System.Linq.Expressions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -8,7 +8,7 @@ using MongoDB.Driver;
 
 namespace MongoZen;
 
-public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : class
+public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanced<TEntity> where TEntity : class
 {
     public delegate IntPtr ShadowMaterializer(TEntity entity, SharpArena.Allocators.ArenaAllocator arena);
     public delegate bool ShadowDiffer(TEntity entity, IntPtr snapshotPtr);
@@ -27,6 +27,9 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
     private readonly List<TEntity> _removed = [];
     private readonly List<object> _removedIds = [];
     private readonly List<TEntity> _updated = [];
+    private readonly List<(LambdaExpression Path, Type IncludeType)> _includes = [];
+
+    public IMutableDbSetAdvanced<TEntity> Advanced => this;
 
     public MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
     {
@@ -94,6 +97,12 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         _tracker?.Untrack<TEntity>(id);
     }
 
+    public void Store(TEntity entity) => Add(entity);
+
+    public void Delete(TEntity entity) => Remove(entity);
+
+    public void Delete(object id) => Remove(id);
+
     public async ValueTask<TEntity?> LoadAsync(object id, CancellationToken cancellationToken = default)
     {
         if (_tracker != null)
@@ -110,11 +119,27 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         return entity;
     }
 
-    public IMutableDbSet<TEntity> Include(System.Linq.Expressions.Expression<Func<TEntity, object?>> path)
+    public IMutableDbSet<TEntity> Include(Expression<Func<TEntity, object?>> path)
     {
-        // TODO: Implement Include tracking
+        _includes.Add((path, GetIncludeType(path)));
         return this;
     }
+
+    public IMutableDbSet<TEntity> Include<TInclude>(Expression<Func<TEntity, object?>> path) where TInclude : class
+    {
+        _includes.Add((path, typeof(TInclude)));
+        return this;
+    }
+
+    private static Type GetIncludeType(Expression<Func<TEntity, object?>> path)
+    {
+        var memberExpr = path.Body as MemberExpression;
+        if (memberExpr == null && path.Body is UnaryExpression unary) memberExpr = unary.Operand as MemberExpression;
+        return memberExpr?.Type ?? typeof(object);
+    }
+
+    IDbSet<TEntity> IDbSet<TEntity>.Include(Expression<Func<TEntity, object?>> path) => Include(path);
+    IDbSet<TEntity> IDbSet<TEntity>.Include<TInclude>(Expression<Func<TEntity, object?>> path) where TInclude : class => Include<TInclude>(path);
 
     public IEnumerable<TEntity> GetAdded() => _added;
 
@@ -126,22 +151,16 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
     {
         if (!transaction.IsActive)
         {
-            throw new InvalidOperationException("A transaction is required to commit changes. Start a session with StartSession() and pass the transaction to CommitAsync().");
+            throw new InvalidOperationException("A transaction is required to commit changes.");
         }
 
-        // Include dirty entities from tracker that aren't explicitly in _updated or _added
         var dirty = _tracker?.GetDirtyEntities<TEntity>() ?? Enumerable.Empty<TEntity>();
         var allUpdated = _updated.Concat(dirty.Where(d => !_updated.Contains(d) && !_added.Contains(d))).ToList();
 
         switch (_baseSet)
         {
             case InMemoryDbSet<TEntity> memSet:
-                if (!transaction.IsInMemoryTransaction)
-                {
-                    throw new InvalidOperationException("In-memory commits require an in-memory transaction.");
-                }
-
-                await InternalCommitAsync(memSet, allUpdated, cancellationToken);
+                await memSet.CommitAsync(_added, _removed, _removedIds, allUpdated, cancellationToken);
                 break;
             case DbSet<TEntity> mongoSet:
                 await InternalCommitAsync(mongoSet, transaction.Session, allUpdated, cancellationToken);
@@ -157,6 +176,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         _removed.Clear();
         _removedIds.Clear();
         _updated.Clear();
+        _includes.Clear();
         _tracker?.ClearTracking();
     }
 
@@ -174,8 +194,13 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default)
     {
         var session = _transactionProvider?.Invoke().Session;
-        var results = session != null
-            ? await _baseSet.QueryAsync(filter, session, cancellationToken)
+        if (_includes.Count > 0 && _baseSet is DbSet<TEntity> mongoSet)
+        {
+            return await QueryWithIncludesAsync(mongoSet, filter, session, cancellationToken);
+        }
+
+        var results = session != null && _baseSet is DbSet<TEntity> ds
+            ? await ds.QueryAsync(filter, session, cancellationToken)
             : await _baseSet.QueryAsync(filter, cancellationToken);
 
         return TrackResults(results);
@@ -183,39 +208,91 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
 
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, CancellationToken cancellationToken = default)
     {
-        var session = _transactionProvider?.Invoke().Session;
-        var results = session != null
-            ? await _baseSet.QueryAsync(filter, session, cancellationToken)
-            : await _baseSet.QueryAsync(filter, cancellationToken);
-
-        return TrackResults(results);
+        return await QueryAsync(Builders<TEntity>.Filter.Where(filter), cancellationToken);
     }
 
-    public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
+    private async Task<IEnumerable<TEntity>> QueryWithIncludesAsync(DbSet<TEntity> mongoSet, FilterDefinition<TEntity> filter, IClientSessionHandle? session, CancellationToken cancellationToken)
     {
-        var results = await _baseSet.QueryAsync(filter, session, cancellationToken);
-        return TrackResults(results);
+        var pipeline = new List<BsonDocument> { new BsonDocument("$match", filter.Render(new RenderArgs<TEntity>(mongoSet.Collection.DocumentSerializer, mongoSet.Collection.Settings.SerializerRegistry))) };
+        var includeMaps = new List<(string LocalField, string ForeignCollection, string AsField, Type ForeignType)>();
+
+        foreach (var (path, includeType) in _includes)
+        {
+            var memberExpr = path.Body as MemberExpression;
+            if (memberExpr == null && path.Body is UnaryExpression unary) memberExpr = unary.Operand as MemberExpression;
+            
+            if (memberExpr == null) continue;
+
+            var localField = memberExpr.Member.Name;
+            var foreignType = includeType;
+            
+            if (_tracker is IDbContextSession sessionTyped)
+            {
+                var foreignCollection = sessionTyped.GetDbContext().GetCollectionName(foreignType);
+                var asField = $"_included_{localField}";
+                
+                pipeline.Add(new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", foreignCollection },
+                    { "localField", localField },
+                    { "foreignField", "_id" },
+                    { "as", asField }
+                }));
+                
+                includeMaps.Add((localField, foreignCollection, asField, foreignType));
+            }
+        }
+
+        List<BsonDocument> rawResults;
+        if (session != null)
+            rawResults = await mongoSet.Collection.Aggregate(session, PipelineDefinition<TEntity, BsonDocument>.Create(pipeline)).ToListAsync(cancellationToken);
+        else
+            rawResults = await mongoSet.Collection.Aggregate(PipelineDefinition<TEntity, BsonDocument>.Create(pipeline)).ToListAsync(cancellationToken);
+
+        var entities = new List<TEntity>();
+        foreach (var doc in rawResults)
+        {
+            foreach (var map in includeMaps)
+            {
+                if (doc.TryGetValue(map.AsField, out var includedArray) && includedArray.IsBsonArray)
+                {
+                    foreach (var includedDoc in includedArray.AsBsonArray)
+                    {
+                        var foreignEntity = MongoDB.Bson.Serialization.BsonSerializer.Deserialize(includedDoc.AsBsonDocument, map.ForeignType);
+                        var id = includedDoc.AsBsonDocument.GetValue("_id", BsonNull.Value);
+                        if (id != BsonNull.Value)
+                        {
+                            var idValue = BsonTypeMapper.MapToDotNetValue(id);
+                            _tracker?.TrackDynamic(foreignEntity, map.ForeignType, idValue);
+                        }
+                    }
+                    doc.Remove(map.AsField); // Clean up for deserialization of the base entity
+                }
+            }
+
+            var entity = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<TEntity>(doc);
+            var trackedEntity = TrackSingle(entity);
+            entities.Add(trackedEntity);
+        }
+
+        return entities;
     }
 
-    public async ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
+    private TEntity TrackSingle(TEntity entity)
     {
-        var results = await _baseSet.QueryAsync(filter, session, cancellationToken);
-        return TrackResults(results);
+        if (_tracker == null) return entity;
+        var id = _idAccessor(entity);
+        if (id != null && _materializer != null && _differ != null)
+        {
+            return _tracker.Track(entity, id, (ent, a) => _materializer(ent, a), (ent, p) => _differ(ent, p));
+        }
+        return entity;
     }
 
     private IEnumerable<TEntity> TrackResults(IEnumerable<TEntity> entities)
     {
         if (_tracker == null) return entities;
-
-        return entities.Select(e =>
-        {
-            var id = _idAccessor(e);
-            if (id != null && _materializer != null && _differ != null)
-            {
-                return _tracker.Track(e, id, (ent, a) => _materializer(ent, a), (ent, p) => _differ(ent, p));
-            }
-            return e;
-        }).ToList();
+        return entities.Select(TrackSingle).ToList();
     }
 
     private async Task InternalCommitAsync(DbSet<TEntity> mongoSet, IClientSessionHandle? session, List<TEntity> updated, CancellationToken cancellationToken = default)
@@ -268,27 +345,5 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
                 await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
             }
         }
-    }
-
-    private async Task InternalCommitAsync(InMemoryDbSet<TEntity> memSet, List<TEntity> updated, CancellationToken cancellationToken = default)
-    {
-        await memSet.CommitAsync(_added, _removed, _removedIds, updated, cancellationToken);
-    }
-
-    private TEntity? GetExistingFromInMemory(InMemoryDbSet<TEntity> memSet, TEntity entity)
-    {
-        var id = _idAccessor(entity)
-            ?? throw new InvalidOperationException("Cannot fetch entity Id without known Id property.");
-
-        return memSet.Collection.FirstOrDefault(x =>
-            x is not null
-            && _idAccessor(x) is { } existingId
-            && existingId.Equals(id));
-    }
-
-    private static TEntity Clone(TEntity source)
-    {
-        var bson = source.ToBson();
-        return MongoDB.Bson.Serialization.BsonSerializer.Deserialize<TEntity>(bson);
     }
 }

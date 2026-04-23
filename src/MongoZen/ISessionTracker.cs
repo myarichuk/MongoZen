@@ -17,5 +17,7 @@ public interface ISessionTracker
     
     void ClearTracking();
 
+    void TrackDynamic(object entity, Type entityType, object id);
+
     SharpArena.Allocators.ArenaAllocator Arena { get; }
 }

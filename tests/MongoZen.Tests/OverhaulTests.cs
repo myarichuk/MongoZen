@@ -64,9 +64,9 @@ public class OverhaulTests : IntegrationTestBase
         public async Task SaveChangesAsync()
         {
             EnsureTransactionActive();
-            await Users.CommitAsync(Transaction);
+            await Users.Advanced.CommitAsync(Transaction);
             await CommitTransactionAsync();
-            Users.ClearTracking();
+            Users.Advanced.ClearTracking();
         }
     }
 

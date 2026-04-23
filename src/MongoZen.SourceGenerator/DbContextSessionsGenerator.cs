@@ -114,8 +114,8 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         .Append("_dbContext.").Append(prop.Name).Append(", ")
         .Append("() => Transaction, ")
         .Append("this, ") // Pass the session as ISessionTracker
-        .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
-        .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
+        .Append("unsafe (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
+        .Append("unsafe (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
         .Append("_dbContext.Options.Conventions")
         .AppendLine(");");
         }
@@ -130,29 +130,58 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
               .Append(prop.Name).AppendLine(" { get; }");
         }
 
-        // Generic Add/Attach/Remove methods
+        // RavenDB-style API
         sb.AppendLine();
-        sb.Append(indent2).AppendLine("public void Add<TEntity>(TEntity entity) where TEntity : class");
+        sb.Append(indent2).AppendLine("public override void Store<TEntity>(TEntity entity) where TEntity : class");
         sb.Append(indent2).AppendLine("{");
-        GenerateGenericDispatch(sb, indent2 + "    ", mutableProps, "Add");
+        GenerateGenericDispatch(sb, indent2 + "    ", mutableProps, "Store");
         sb.Append(indent2).AppendLine("}");
 
         sb.AppendLine();
+        sb.Append(indent2).AppendLine("public override void Delete<TEntity>(TEntity entity) where TEntity : class");
+        sb.Append(indent2).AppendLine("{");
+        GenerateGenericDispatch(sb, indent2 + "    ", mutableProps, "Delete");
+        sb.Append(indent2).AppendLine("}");
+
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("public override void Delete<TEntity>(object id) where TEntity : class");
+        sb.Append(indent2).AppendLine("{");
+        GenerateGenericDispatchById(sb, indent2 + "    ", mutableProps, "Delete");
+        sb.Append(indent2).AppendLine("}");
+
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("public MongoZen.IMutableDbSet<TEntity> Query<TEntity>() where TEntity : class");
+        sb.Append(indent2).AppendLine("{");
+        GenerateGenericDispatchReturn(sb, indent2 + "    ", mutableProps, "Query"); // Wait, Query doesn't exist on IMutableDbSet, but it IS the IMutableDbSet
+        sb.Append(indent2).AppendLine("}");
+
+        // Generic Add/Attach/Remove methods (keeping for compatibility, but hiding)
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]");
+        sb.Append(indent2).AppendLine("public void Add<TEntity>(TEntity entity) where TEntity : class");
+        sb.Append(indent2).AppendLine("{");
+        sb.Append(indent2).AppendLine("    Store(entity);");
+        sb.Append(indent2).AppendLine("}");
+
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]");
         sb.Append(indent2).AppendLine("public void Attach<TEntity>(TEntity entity) where TEntity : class");
         sb.Append(indent2).AppendLine("{");
         GenerateGenericDispatch(sb, indent2 + "    ", mutableProps, "Attach");
         sb.Append(indent2).AppendLine("}");
 
         sb.AppendLine();
+        sb.Append(indent2).AppendLine("[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]");
         sb.Append(indent2).AppendLine("public void Remove<TEntity>(TEntity entity) where TEntity : class");
         sb.Append(indent2).AppendLine("{");
-        GenerateGenericDispatch(sb, indent2 + "    ", mutableProps, "Remove");
+        sb.Append(indent2).AppendLine("    Delete(entity);");
         sb.Append(indent2).AppendLine("}");
 
         sb.AppendLine();
+        sb.Append(indent2).AppendLine("[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]");
         sb.Append(indent2).AppendLine("public void Remove<TEntity>(object id) where TEntity : class");
         sb.Append(indent2).AppendLine("{");
-        GenerateGenericDispatchById(sb, indent2 + "    ", mutableProps, "Remove");
+        sb.Append(indent2).AppendLine("    Delete<TEntity>(id);");
         sb.Append(indent2).AppendLine("}");
 
         sb.AppendLine();
@@ -165,6 +194,12 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("public MongoZen.IMutableDbSet<TEntity> Include<TEntity>(System.Linq.Expressions.Expression<System.Func<TEntity, object?>> path) where TEntity : class");
         sb.Append(indent2).AppendLine("{");
         GenerateGenericDispatchReturn(sb, indent2 + "    ", mutableProps, "Include", "path");
+        sb.Append(indent2).AppendLine("}");
+
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("public MongoZen.IMutableDbSet<TEntity> Include<TEntity, TInclude>(System.Linq.Expressions.Expression<System.Func<TEntity, object?>> path) where TEntity : class where TInclude : class");
+        sb.Append(indent2).AppendLine("{");
+        GenerateGenericDispatchReturnWithInclude(sb, indent2 + "    ", mutableProps, "Include", "path");
         sb.Append(indent2).AppendLine("}");
 
         // SaveChangesAsync
@@ -256,7 +291,14 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
             var prop = props[i];
             sb.Append(indent).Append(i == 0 ? "if" : "else if").Append(" (typeof(TEntity) == typeof(").Append(prop.EntityType).AppendLine("))");
             sb.Append(indent).AppendLine("{");
-            sb.Append(indent).Append("    return (MongoZen.IMutableDbSet<TEntity>)(object)").Append(prop.Name).Append(".").Append(methodName).Append("(").Append(string.Join(", ", args)).AppendLine(");");
+            if (methodName == "Query")
+            {
+                sb.Append(indent).Append("    return (MongoZen.IMutableDbSet<TEntity>)(object)").Append(prop.Name).AppendLine(";");
+            }
+            else
+            {
+                sb.Append(indent).Append("    return (MongoZen.IMutableDbSet<TEntity>)(object)").Append(prop.Name).Append(".").Append(methodName).Append("(").Append(string.Join(", ", args)).AppendLine(");");
+            }
             sb.Append(indent).AppendLine("}");
         }
         if (props.Count > 0)
@@ -276,6 +318,25 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
             sb.Append(indent).Append(i == 0 ? "if" : "else if").Append(" (typeof(TEntity) == typeof(").Append(prop.EntityType).AppendLine("))");
             sb.Append(indent).AppendLine("{");
             sb.Append(indent).Append("    return (TEntity?)(object?)await ").Append(prop.Name).Append(".").Append(methodName).Append("(").Append(string.Join(", ", args)).AppendLine(");");
+            sb.Append(indent).AppendLine("}");
+        }
+        if (props.Count > 0)
+        {
+            sb.Append(indent).AppendLine("else");
+            sb.Append(indent).AppendLine("{");
+            sb.Append(indent).Append("    throw new System.ArgumentException($\"Entity type {typeof(TEntity).Name} is not part of this DbContext.\");");
+            sb.Append(indent).AppendLine("}");
+        }
+    }
+
+    private static void GenerateGenericDispatchReturnWithInclude(StringBuilder sb, string indent, List<(string Name, string EntityType)> props, string methodName, params string[] args)
+    {
+        for (int i = 0; i < props.Count; i++)
+        {
+            var prop = props[i];
+            sb.Append(indent).Append(i == 0 ? "if" : "else if").Append(" (typeof(TEntity) == typeof(").Append(prop.EntityType).AppendLine("))");
+            sb.Append(indent).AppendLine("{");
+            sb.Append(indent).Append("    return (MongoZen.IMutableDbSet<TEntity>)(object)").Append(prop.Name).Append(".").Append(methodName).Append("<TInclude>(").Append(string.Join(", ", args)).AppendLine(");");
             sb.Append(indent).AppendLine("}");
         }
         if (props.Count > 0)
