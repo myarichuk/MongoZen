@@ -88,7 +88,7 @@ public sealed class DbContextInitializerGenerator : IIncrementalGenerator
             {
                 var entityType = namedType.TypeArguments[0].ToDisplayString();
                 sb.Append(indent2).Append("        this.").Append(member.Name)
-                  .Append(" = new MongoZen.InMemoryDbSet<").Append(entityType).Append(">(Options.Conventions, \"").Append(member.Name).AppendLine("\");");
+                  .Append(" = new MongoZen.InMemoryDbSet<").Append(entityType).Append(">([], conventions: Options.Conventions, collectionName: \"").Append(member.Name).AppendLine("\");");
             }
         }
         

@@ -73,8 +73,8 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
     public BloggingContextSession(BloggingContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
     {
         unsafe {
-            Blogs = new MongoZen.MutableDbSet<Blog>(_dbContext.Blogs, () => Transaction, this, unsafe (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Blog_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, unsafe (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.IsDirty(entity); }, _dbContext.Options.Conventions);
-            Posts = new MongoZen.MutableDbSet<Post>(_dbContext.Posts, () => Transaction, this, unsafe (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Post_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, unsafe (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.IsDirty(entity); }, _dbContext.Options.Conventions);
+            Blogs = new MongoZen.MutableDbSet<Blog>(_dbContext.Blogs, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Blog_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.IsDirty(entity); }, _dbContext.Options.Conventions);
+            Posts = new MongoZen.MutableDbSet<Post>(_dbContext.Posts, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Post_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.IsDirty(entity); }, _dbContext.Options.Conventions);
         }
     }
 
@@ -200,11 +200,11 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
     {
         if (typeof(TEntity) == typeof(Blog))
         {
-            return (MongoZen.IMutableDbSet<TEntity>)(object)Blogs.Include(path);
+            return (MongoZen.IMutableDbSet<TEntity>)(object)Blogs.Include((System.Linq.Expressions.Expression<System.Func<Blog, object?>>)(object)path);
         }
         else if (typeof(TEntity) == typeof(Post))
         {
-            return (MongoZen.IMutableDbSet<TEntity>)(object)Posts.Include(path);
+            return (MongoZen.IMutableDbSet<TEntity>)(object)Posts.Include((System.Linq.Expressions.Expression<System.Func<Post, object?>>)(object)path);
         }
         else
         {
@@ -216,11 +216,11 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
     {
         if (typeof(TEntity) == typeof(Blog))
         {
-            return (MongoZen.IMutableDbSet<TEntity>)(object)Blogs.Include<TInclude>(path);
+            return (MongoZen.IMutableDbSet<TEntity>)(object)Blogs.Include<TInclude>((System.Linq.Expressions.Expression<System.Func<Blog, object?>>)(object)path);
         }
         else if (typeof(TEntity) == typeof(Post))
         {
-            return (MongoZen.IMutableDbSet<TEntity>)(object)Posts.Include<TInclude>(path);
+            return (MongoZen.IMutableDbSet<TEntity>)(object)Posts.Include<TInclude>((System.Linq.Expressions.Expression<System.Func<Post, object?>>)(object)path);
         }
         else
         {
@@ -233,13 +233,13 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
         EnsureTransactionActive();
         try
         {
-            await Blogs.CommitAsync(Transaction);
-            await Posts.CommitAsync(Transaction);
+            await Blogs.Advanced.CommitAsync(Transaction);
+            await Posts.Advanced.CommitAsync(Transaction);
 
             await CommitTransactionAsync();
 
-            Blogs.ClearTracking();
-            Posts.ClearTracking();
+            Blogs.Advanced.ClearTracking();
+            Posts.Advanced.ClearTracking();
         }
         catch
         {
@@ -311,7 +311,7 @@ namespace MyNamespace
         public MyContextSession(MyNamespace.MyContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
         {
             unsafe {
-                Users = new MongoZen.MutableDbSet<MyNamespace.User>(_dbContext.Users, () => Transaction, this, unsafe (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<MyNamespace.User_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, unsafe (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.IsDirty(entity); }, _dbContext.Options.Conventions);
+                Users = new MongoZen.MutableDbSet<MyNamespace.User>(_dbContext.Users, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<MyNamespace.User_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.IsDirty(entity); }, _dbContext.Options.Conventions);
             }
         }
 
@@ -412,7 +412,7 @@ namespace MyNamespace
         {
             if (typeof(TEntity) == typeof(MyNamespace.User))
             {
-                return (MongoZen.IMutableDbSet<TEntity>)(object)Users.Include(path);
+                return (MongoZen.IMutableDbSet<TEntity>)(object)Users.Include((System.Linq.Expressions.Expression<System.Func<MyNamespace.User, object?>>)(object)path);
             }
             else
             {
@@ -424,7 +424,7 @@ namespace MyNamespace
         {
             if (typeof(TEntity) == typeof(MyNamespace.User))
             {
-                return (MongoZen.IMutableDbSet<TEntity>)(object)Users.Include<TInclude>(path);
+                return (MongoZen.IMutableDbSet<TEntity>)(object)Users.Include<TInclude>((System.Linq.Expressions.Expression<System.Func<MyNamespace.User, object?>>)(object)path);
             }
             else
             {
@@ -437,11 +437,11 @@ namespace MyNamespace
             EnsureTransactionActive();
             try
             {
-                await Users.CommitAsync(Transaction);
+                await Users.Advanced.CommitAsync(Transaction);
 
                 await CommitTransactionAsync();
 
-                Users.ClearTracking();
+                Users.Advanced.ClearTracking();
             }
             catch
             {
