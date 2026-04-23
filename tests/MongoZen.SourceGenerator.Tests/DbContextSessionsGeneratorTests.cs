@@ -71,8 +71,10 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
 
     public BloggingContextSession(BloggingContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
     {
-        Blogs = new MongoZen.MutableDbSet<Blog>(_dbContext.Blogs, () => Transaction, this, _dbContext.Options.Conventions);
-        Posts = new MongoZen.MutableDbSet<Post>(_dbContext.Posts, () => Transaction, this, _dbContext.Options.Conventions);
+        unsafe {
+            Blogs = new MongoZen.MutableDbSet<Blog>(_dbContext.Blogs, () => Transaction, this, (entity, arena) => { var s = default(Blog_Shadow); s.From(entity, arena); return (System.IntPtr)System.Runtime.CompilerServices.Unsafe.AsPointer(ref s); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.IsDirty(entity); }, _dbContext.Options.Conventions);
+            Posts = new MongoZen.MutableDbSet<Post>(_dbContext.Posts, () => Transaction, this, (entity, arena) => { var s = default(Post_Shadow); s.From(entity, arena); return (System.IntPtr)System.Runtime.CompilerServices.Unsafe.AsPointer(ref s); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.IsDirty(entity); }, _dbContext.Options.Conventions);
+        }
     }
 
     public MongoZen.IMutableDbSet<Blog> Blogs { get; }
@@ -160,7 +162,9 @@ namespace MyNamespace
 
         public MyContextSession(MyNamespace.MyContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
         {
-            Users = new MongoZen.MutableDbSet<MyNamespace.User>(_dbContext.Users, () => Transaction, this, _dbContext.Options.Conventions);
+            unsafe {
+                Users = new MongoZen.MutableDbSet<MyNamespace.User>(_dbContext.Users, () => Transaction, this, (entity, arena) => { var s = default(MyNamespace.User_Shadow); s.From(entity, arena); return (System.IntPtr)System.Runtime.CompilerServices.Unsafe.AsPointer(ref s); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.IsDirty(entity); }, _dbContext.Options.Conventions);
+            }
         }
 
         public MongoZen.IMutableDbSet<MyNamespace.User> Users { get; }
