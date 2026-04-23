@@ -60,8 +60,7 @@ foreach (var p in people)
 await using (var session = dbContext.StartSession())
 {
     var olderThan30People = await session.Query<Person>()
-        .Where(p => p.Age > 30)
-        .ToListAsync();
+        .QueryAsync(p => p.Age > 30);
 
     Console.WriteLine("Queried using session.Query<Person>() for people older than 30:");
     foreach (var p in olderThan30People)

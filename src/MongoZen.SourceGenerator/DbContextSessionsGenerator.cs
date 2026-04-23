@@ -114,8 +114,8 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         .Append("_dbContext.").Append(prop.Name).Append(", ")
         .Append("() => Transaction, ")
         .Append("this, ") // Pass the session as ISessionTracker
-        .Append("unsafe (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
-        .Append("unsafe (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
+        .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
+        .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
         .Append("_dbContext.Options.Conventions")
         .AppendLine(");");
         }
@@ -211,7 +211,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("    {");
         foreach (var prop in mutableProps)
         {
-            sb.Append(indent2).Append("        await ").Append(prop.Name).AppendLine(".CommitAsync(Transaction);");
+            sb.Append(indent2).Append("        await ").Append(prop.Name).AppendLine(".Advanced.CommitAsync(Transaction);");
         }
 
         sb.AppendLine();
@@ -221,7 +221,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         // Clear tracking only after successful commit
         foreach (var prop in mutableProps)
         {
-            sb.Append(indent2).Append("        ").Append(prop.Name).AppendLine(".ClearTracking();");
+            sb.Append(indent2).Append("        ").Append(prop.Name).AppendLine(".Advanced.ClearTracking();");
         }
 
         sb.Append(indent2).AppendLine("    }");
@@ -297,7 +297,8 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
             }
             else
             {
-                sb.Append(indent).Append("    return (MongoZen.IMutableDbSet<TEntity>)(object)").Append(prop.Name).Append(".").Append(methodName).Append("(").Append(string.Join(", ", args)).AppendLine(");");
+                var castArgs = args.Select(a => $"(System.Linq.Expressions.Expression<System.Func<{prop.EntityType}, object?>>)(object){a}").ToArray();
+                sb.Append(indent).Append("    return (MongoZen.IMutableDbSet<TEntity>)(object)").Append(prop.Name).Append(".").Append(methodName).Append("(").Append(string.Join(", ", castArgs)).AppendLine(");");
             }
             sb.Append(indent).AppendLine("}");
         }
@@ -336,7 +337,8 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
             var prop = props[i];
             sb.Append(indent).Append(i == 0 ? "if" : "else if").Append(" (typeof(TEntity) == typeof(").Append(prop.EntityType).AppendLine("))");
             sb.Append(indent).AppendLine("{");
-            sb.Append(indent).Append("    return (MongoZen.IMutableDbSet<TEntity>)(object)").Append(prop.Name).Append(".").Append(methodName).Append("<TInclude>(").Append(string.Join(", ", args)).AppendLine(");");
+            var castArgs = args.Select(a => $"(System.Linq.Expressions.Expression<System.Func<{prop.EntityType}, object?>>)(object){a}").ToArray();
+            sb.Append(indent).Append("    return (MongoZen.IMutableDbSet<TEntity>)(object)").Append(prop.Name).Append(".").Append(methodName).Append("<TInclude>(").Append(string.Join(", ", castArgs)).AppendLine(");");
             sb.Append(indent).AppendLine("}");
         }
         if (props.Count > 0)
