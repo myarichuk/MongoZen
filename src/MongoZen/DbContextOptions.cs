@@ -1,5 +1,6 @@
 using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Driver;
+using System.Reflection;
 // ReSharper disable FlagArgument
 
 namespace MongoZen;
@@ -18,6 +19,17 @@ public class DbContextOptions
     public Conventions Conventions { get; set; }
 
     public IMongoDatabase? Mongo { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether to automatically create indexes defined in index tasks.
+    /// </summary>
+    public bool AutoCreateIndexes { get; set; } = false;
+
+    /// <summary>
+    /// Gets or sets the assemblies to scan for index creation tasks.
+    /// If null, the assembly containing the DbContext will be used.
+    /// </summary>
+    public List<Assembly>? IndexDiscoveryAssemblies { get; set; }
 
     public DbContextOptions(Conventions? conventions = null)
     {

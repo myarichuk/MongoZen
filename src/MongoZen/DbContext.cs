@@ -45,6 +45,30 @@ public abstract partial class DbContext : IDisposable
     }
 
     /// <summary>
+    /// Creates all indexes defined in the assemblies configured in <see cref="DbContextOptions.IndexDiscoveryAssemblies"/>.
+    /// If no assemblies are configured, scans the assembly containing this DbContext.
+    /// </summary>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    public async Task CreateIndexesAsync(CancellationToken cancellationToken = default)
+    {
+        if (Options.Mongo == null || Options.UseInMemory)
+        {
+            return;
+        }
+
+        var assemblies = Options.IndexDiscoveryAssemblies;
+        if (assemblies == null || assemblies.Count == 0)
+        {
+            assemblies = new List<System.Reflection.Assembly> { GetType().Assembly };
+        }
+
+        foreach (var assembly in assemblies)
+        {
+            await IndexCreation.CreateIndexesAsync(assembly, Options.Mongo, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
     /// Initializes DbSet properties. This implementation uses reflection as a fallback.
     /// Source generators will override this method to provide a high-performance, reflection-free implementation.
     /// </summary>
