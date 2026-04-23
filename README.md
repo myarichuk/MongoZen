@@ -61,7 +61,7 @@ person.Name = "Alice Smith";
 
 // Fetching the same ID again returns the same instance
 var personAgain = (await session.People.QueryAsync(p => p.Id == "alice-id")).First();
-Assert.ReferenceEquals(person, personAgain);
+Assert.Same(person, personAgain);
 
 // All changes (including additions and removals) are flushed in a single bulk operation
 await session.SaveChangesAsync();
