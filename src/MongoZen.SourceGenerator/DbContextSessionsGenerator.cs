@@ -104,18 +104,22 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
           .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext, bool startTransaction) : base(dbContext, startTransaction)");
         sb.Append(indent2).AppendLine("{");
+        sb.Append(indent2).AppendLine("    unsafe {");
 
         foreach (var prop in mutableProps)
         {
-        sb.Append(indent2).Append("    ").Append(prop.Name)
+        sb.Append(indent2).Append("        ").Append(prop.Name)
         .Append(" = new MongoZen.MutableDbSet<")
         .Append(prop.EntityType).Append(">(")
         .Append("_dbContext.").Append(prop.Name).Append(", ")
         .Append("() => Transaction, ")
         .Append("this, ") // Pass the session as ISessionTracker
+        .Append("(entity, arena) => { var s = default(").Append(prop.EntityType).Append("_Shadow); s.From(entity, arena); return (System.IntPtr)System.Runtime.CompilerServices.Unsafe.AsPointer(ref s); }, ")
+        .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
         .Append("_dbContext.Options.Conventions")
         .AppendLine(");");
         }
+        sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
         sb.AppendLine();
 

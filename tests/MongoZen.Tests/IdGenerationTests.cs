@@ -21,7 +21,7 @@ public class IdGenerationTests : IntegrationTestBase
     {
         public TestDbContextSession(TestDbContext dbContext) : base(dbContext)
         {
-            Users = new MutableDbSet<User>(_dbContext.Users, () => Transaction, this, _dbContext.Options.Conventions);
+            Users = new MutableDbSet<User>(_dbContext.Users, () => Transaction, this, (e, a) => IntPtr.Zero, (e, p) => true, _dbContext.Options.Conventions);
         }
 
         public IMutableDbSet<User> Users { get; }

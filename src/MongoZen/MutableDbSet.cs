@@ -10,6 +10,9 @@ namespace MongoZen;
 
 public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : class
 {
+    public delegate IntPtr ShadowMaterializer(TEntity entity, SharpArena.Allocators.ArenaAllocator arena);
+    public delegate bool ShadowDiffer(TEntity entity, IntPtr snapshotPtr);
+
     private readonly IDbSet<TEntity> _baseSet;
     private readonly Func<TransactionContext>? _transactionProvider;
     private readonly ISessionTracker? _tracker;
@@ -17,11 +20,12 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
     private readonly string _idFieldName;
     private readonly Conventions _conventions;
 
+    private readonly ShadowMaterializer? _materializer;
+    private readonly ShadowDiffer? _differ;
+
     private readonly List<TEntity> _added = [];
     private readonly List<TEntity> _removed = [];
     private readonly List<TEntity> _updated = [];
-
-    public string CollectionName => _baseSet.CollectionName;
 
     public MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
     {
@@ -31,12 +35,22 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
     }
 
-    public MutableDbSet(IDbSet<TEntity> baseSet, Func<TransactionContext> transactionProvider, ISessionTracker tracker, Conventions? conventions = null)
+    public MutableDbSet(
+        IDbSet<TEntity> baseSet, 
+        Func<TransactionContext> transactionProvider, 
+        ISessionTracker tracker, 
+        ShadowMaterializer materializer,
+        ShadowDiffer differ,
+        Conventions? conventions = null)
         : this(baseSet, conventions)
     {
         _transactionProvider = transactionProvider;
         _tracker = tracker;
+        _materializer = materializer;
+        _differ = differ;
     }
+
+    public string CollectionName => _baseSet.CollectionName;
 
     public void Add(TEntity entity)
     {
