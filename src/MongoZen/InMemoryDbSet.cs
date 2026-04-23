@@ -60,8 +60,8 @@ public class InMemoryDbSet<T> : IDbSet<T> where T : class
 
     public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, CancellationToken cancellationToken = default)
     {
-        var expr = _translator.Translate(filter);
-        var result = _items.AsQueryable().Where(expr).Select(Clone).ToList();
+        var compiled = _translator.GetCompiled(filter);
+        var result = _items.Where(compiled).Select(Clone).ToList();
         return ValueTask.FromResult((IEnumerable<T>)result);
     }
 

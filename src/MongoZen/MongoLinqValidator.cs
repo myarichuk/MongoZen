@@ -34,10 +34,5 @@ public static class MongoLinqValidator
             node.NodeType == ExpressionType.Convert
                 ? throw new NotSupportedException("Type casts are not supported")
                 : base.VisitUnary(node);
-
-        protected override Expression VisitMember(MemberExpression node) =>
-            node.Expression is ConstantExpression
-                ? throw new NotSupportedException("Captured constants (closures) are not supported")
-                : base.VisitMember(node);
     }
 }

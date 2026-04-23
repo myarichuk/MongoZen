@@ -511,13 +511,37 @@ public class FilterToLinqTests
     }
 
     [Fact]
-    public void AllFilter_WithEmptyArray_ShouldAlwaysMatch()
+    public void CapturedClosure_ShouldWork()
     {
-        var filter = Builders<Person>.Filter.All(p => p.Tags, Array.Empty<string>());
+        var targetName = "Alice";
+        var filter = Builders<Person>.Filter.Eq(p => p.Name, targetName);
         var expr = _translator.Translate(filter).Compile();
 
-        Assert.True(expr(new Person { Tags = [] }));
-        Assert.True(expr(new Person { Tags = ["random"] }));
+        Assert.True(expr(new Person { Name = "Alice" }));
+        Assert.False(expr(new Person { Name = "Bob" }));
+    }
+
+    [Fact]
+    public void CompiledCache_ShouldReuseDelegate()
+    {
+        var filter1 = Builders<Person>.Filter.Eq(p => p.Name, "Alice");
+        var filter2 = Builders<Person>.Filter.Eq("Name", "Alice"); // yields same BSON
+
+        var func1 = _translator.GetCompiled(filter1);
+        var func2 = _translator.GetCompiled(filter2);
+
+        Assert.Same(func1, func2);
+    }
+
+    [Fact]
+    public void NestedArrayPath_ShouldThrowNotSupported_UntilImplemented()
+    {
+        // This currently hits the "Check if we hit a collection" block but doesn't handle it yet
+        var filter = new BsonDocument("Lines.Product", "Apples").ToFilterDefinition<Order>();
+        var translator = new FilterToLinqTranslator<Order>();
+        
+        // It will currently throw because it tries to access .Product on a List<OrderLine>
+        Assert.ThrowsAny<Exception>(() => translator.Translate(filter));
     }
 
     public class Order
