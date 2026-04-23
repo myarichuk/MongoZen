@@ -12,6 +12,10 @@ public interface IMutableDbSet<T> : IDbSet<T> where T : class
 
     void Remove(T entity);
 
+    void Remove(object id);
+
+    new ValueTask<T?> LoadAsync(object id, CancellationToken cancellationToken = default);
+
     IEnumerable<T> GetAdded();
 
     IEnumerable<T> GetRemoved();

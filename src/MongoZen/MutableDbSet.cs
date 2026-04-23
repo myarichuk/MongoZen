@@ -25,6 +25,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
 
     private readonly List<TEntity> _added = [];
     private readonly List<TEntity> _removed = [];
+    private readonly List<object> _removedIds = [];
     private readonly List<TEntity> _updated = [];
 
     public MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
@@ -87,6 +88,28 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         }
     }
 
+    public void Remove(object id)
+    {
+        _removedIds.Add(id);
+        _tracker?.Untrack<TEntity>(id);
+    }
+
+    public async ValueTask<TEntity?> LoadAsync(object id, CancellationToken cancellationToken = default)
+    {
+        if (_tracker != null)
+        {
+            var tracked = _tracker.GetDirtyEntities<TEntity>().FirstOrDefault(e => _idAccessor(e)?.Equals(id) == true);
+            if (tracked != null) return tracked;
+        }
+
+        var entity = await _baseSet.LoadAsync(id, cancellationToken);
+        if (entity != null && _tracker != null && _materializer != null && _differ != null)
+        {
+            return _tracker.Track(entity, id, (e, a) => _materializer(e, a), (e, p) => _differ(e, p));
+        }
+        return entity;
+    }
+
     public IEnumerable<TEntity> GetAdded() => _added;
 
     public IEnumerable<TEntity> GetRemoved() => _removed;
@@ -126,6 +149,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
     {
         _added.Clear();
         _removed.Clear();
+        _removedIds.Clear();
         _updated.Clear();
         _tracker?.ClearTracking();
     }
@@ -201,6 +225,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         var removedIds = _removed
             .Where(e => e is not null)
             .Select(e => e!.GetId(_idAccessor))
+            .Concat(_removedIds)
             .Distinct()
             .ToList();
 
@@ -255,6 +280,15 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity> where TEntity : clas
         foreach (var entity in _removed)
         {
             var existing = GetExistingFromInMemory(memSet, entity);
+            if (existing != null)
+            {
+                memSet.Collection.Remove(existing);
+            }
+        }
+
+        foreach (var id in _removedIds)
+        {
+            var existing = memSet.Collection.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
             if (existing != null)
             {
                 memSet.Collection.Remove(existing);

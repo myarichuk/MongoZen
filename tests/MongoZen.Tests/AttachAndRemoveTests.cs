@@ -60,6 +60,17 @@ public class AttachAndRemoveTests : IntegrationTestBase
             if (entity is Product p) Products.Remove(p);
         }
 
+        public void Remove<TEntity>(object id) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(Product)) Products.Remove(id);
+        }
+
+        public async ValueTask<TEntity?> LoadAsync<TEntity>(object id, System.Threading.CancellationToken cancellationToken = default) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(Product)) return (TEntity?)(object?)await Products.LoadAsync(id, cancellationToken);
+            return null;
+        }
+
         public async ValueTask SaveChangesAsync()
         {
             EnsureTransactionActive();
@@ -150,6 +161,47 @@ public class AttachAndRemoveTests : IntegrationTestBase
         {
             session.Remove(p1);
             session.Remove(p2);
+            await session.SaveChangesAsync();
+        }
+
+        var count = await Database!.GetCollection<Product>("Products").CountDocumentsAsync(FilterDefinition<Product>.Empty);
+        Assert.Equal(0, count);
+    }
+
+    [Fact]
+    public async Task LoadAsync_TracksAndReturnsSameInstance()
+    {
+        var ctx = new ShopContext(new DbContextOptions(Database!));
+        var p1 = new Product { Name = "TrackMe" };
+        await Database!.GetCollection<Product>("Products").InsertOneAsync(p1);
+
+        await using (var session = new ShopContextSession(ctx))
+        {
+            var loaded = await session.LoadAsync<Product>(p1.Id);
+            Assert.NotNull(loaded);
+            Assert.Equal("TrackMe", loaded!.Name);
+
+            var loadedAgain = await session.LoadAsync<Product>(p1.Id);
+            Assert.Same(loaded, loadedAgain); // Identity Map check
+
+            loaded.Name = "TrackedChange";
+            await session.SaveChangesAsync();
+        }
+
+        var updated = await Database!.GetCollection<Product>("Products").Find(p => p.Id == p1.Id).FirstOrDefaultAsync();
+        Assert.Equal("TrackedChange", updated.Name);
+    }
+
+    [Fact]
+    public async Task RemoveById_DeletesFromDatabase()
+    {
+        var ctx = new ShopContext(new DbContextOptions(Database!));
+        var p1 = new Product { Name = "DeleteMe" };
+        await Database!.GetCollection<Product>("Products").InsertOneAsync(p1);
+
+        await using (var session = new ShopContextSession(ctx))
+        {
+            session.Remove<Product>(p1.Id);
             await session.SaveChangesAsync();
         }
 

@@ -10,6 +10,8 @@ namespace MongoZen;
 public class InMemoryDbSet<T> : IDbSet<T> where T : class
 {
     private readonly List<T> _items;
+    private readonly Func<T, object?> _idAccessor;
+    private readonly Conventions _conventions;
 
     public string CollectionName { get; }
 
@@ -22,19 +24,28 @@ public class InMemoryDbSet<T> : IDbSet<T> where T : class
     /// Initializes a new instance of the <see cref="InMemoryDbSet{T}"/> class.
     /// </summary>
     /// <param name="items">Initial items for the in-memory collection</param>
+    /// <param name="conventions">Conventions to use for ID mapping</param>
     /// <param name="collectionName">Optional name for the collection</param>
-    public InMemoryDbSet(IEnumerable<T> items, string? collectionName = null)
+    public InMemoryDbSet(IEnumerable<T> items, Conventions? conventions = null, string? collectionName = null)
     {
         _items = [..items];
+        _conventions = conventions ?? new();
+        _idAccessor = EntityIdAccessor<T>.GetAccessor(_conventions.IdConvention);
         CollectionName = collectionName ?? typeof(T).Name;
     }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="InMemoryDbSet{T}"/> class.
     /// </summary>
-    public InMemoryDbSet()
-        : this([], null)
+    public InMemoryDbSet(Conventions? conventions = null)
+        : this([], conventions, null)
     {
+    }
+
+    public async ValueTask<T?> LoadAsync(object id, CancellationToken cancellationToken = default)
+    {
+        var item = _items.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
+        return item != null ? Clone(item) : null;
     }
 
     public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, CancellationToken cancellationToken = default)

@@ -58,8 +58,11 @@ object instance;
 
 if (Options.UseInMemory)
 {
-var constructed = typeof(InMemoryDbSet<>).MakeGenericType(entityType);
-instance = Activator.CreateInstance(constructed)!;
+    var constructed = typeof(InMemoryDbSet<>).MakeGenericType(entityType);
+    // InMemoryDbSet<T>(IEnumerable<T> items, Conventions? conventions = null, string? collectionName = null)
+    var itemsType = typeof(IEnumerable<>).MakeGenericType(entityType);
+    var emptyItems = typeof(Enumerable).GetMethod("Empty")!.MakeGenericMethod(entityType).Invoke(null, null);
+    instance = Activator.CreateInstance(constructed, [emptyItems, Options.Conventions, prop.Name])!;
 }
 else
 {
@@ -84,4 +87,3 @@ prop.SetValue(this, instance);
 }
 }
 }
-

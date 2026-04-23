@@ -1,0 +1,76 @@
+name: Manual Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_increment:
+        description: 'Version increment (patch, minor, major)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build-and-pack:
+    name: Build & Pack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup .NET tooling
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v3.2.0
+        with:
+          versionSpec: '5.x'
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Determine version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v3.2.0
+        with:
+          useConfigFile: true
+          configFilePath: ./.github/gitversion.yml
+      - name: Restore
+        run: dotnet restore
+      - name: Build
+        run: dotnet build --configuration Release /p:CI=true /p:Version=${{ steps.gitversion.outputs.AssemblySemVer }} /p:AssemblyVersion=${{ steps.gitversion.outputs.AssemblySemVer }} /p:FileVersion=${{ steps.gitversion.outputs.assemblySemFileVer }} /p:InformationalVersion=${{ steps.gitversion.outputs.InformationalVersion }} --no-restore
+      - name: Test
+        run: dotnet test --configuration Release --no-build --verbosity normal
+      - name: Pack NuGet
+        run: dotnet pack --configuration release /p:CI=true -o:package /p:Version=${{ steps.gitversion.outputs.AssemblySemVer }} /p:PackageVersion=${{ steps.gitversion.outputs.AssemblySemVer }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: ./package/
+    outputs:
+      version: ${{ steps.gitversion.outputs.AssemblySemVer }}
+
+  publish:
+    name: Publish
+    needs: [build-and-pack]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: nupkg
+          path: ./package/
+      - name: Publish to NuGet
+        run: dotnet nuget push ./package/*.nupkg -s https://api.nuget.org/v3/index.json -k ${{ secrets.NUGET_TOKEN }}
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ needs.build-and-pack.outputs.version }}
+          name: v${{ needs.build-and-pack.outputs.version }}
+          generateReleaseNotes: true
+          artifacts: "./package/*.nupkg,./package/*.snupkg"
+          token: ${{ github.token }}

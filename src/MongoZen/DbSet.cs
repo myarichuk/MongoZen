@@ -12,6 +12,7 @@ public class DbSet<TEntity> : IDbSet<TEntity> where TEntity : class
 {
     private readonly IQueryable<TEntity> _collectionAsQueryable;
     private readonly Func<TEntity, object?> _idAccessor;
+    private readonly string _idFieldName;
     private readonly Conventions _conventions;
     private readonly IMongoCollection<TEntity> _collection;
 
@@ -21,8 +22,15 @@ public class DbSet<TEntity> : IDbSet<TEntity> where TEntity : class
     {
         _conventions = conventions ?? new();
         _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
+        _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
         _collection = collection;
         _collectionAsQueryable = _collection.AsQueryable();
+    }
+
+    public async ValueTask<TEntity?> LoadAsync(object id, CancellationToken cancellationToken = default)
+    {
+        var filter = Builders<TEntity>.Filter.Eq(_idFieldName, id);
+        return await (await _collection.FindAsync(filter, cancellationToken: cancellationToken)).FirstOrDefaultAsync(cancellationToken);
     }
 
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default) =>
