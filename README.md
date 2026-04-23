@@ -4,8 +4,8 @@ MongoZen is a lightweight, high-performance library that provides an **Entity Fr
 ## Key Features
 - **Unit of Work & Bulk Commits**:
     - Aggregates all additions, updates, and removals into a **single bulk operation** per collection, minimizing network round-trips.
+    - **Identity Map & Change Tracking**: Automatically tracks fetched entities. Modifications are detected and saved without explicit `Update()` calls.
     - **Atomic by Default**: Operations are atomic when a transaction is active (default for Replica Sets/Sharded Clusters).
-    - Automatic ID deduplication (last operation wins).
 - **Seamless Transactions**:
     - Transactions are implicit. Queries and commands issued within a session automatically participate in the active transaction, providing a consistent "Read Your Own Writes" experience.
     - **Smart Fallback**: Automatically detects cluster topology. If transactions aren't supported (e.g., standalone Mongo), it can fall back to non-transactional bulk writes if configured via `TransactionSupportBehavior.Simulate`.
@@ -46,29 +46,47 @@ var options = DbContextOptions.CreateForMongo(
 var context = new MyDbContext(options);
 ```
 
-### 3. High-Performance Unit of Work
-Use the generated session to track changes and persist them atomically using MongoDB's `BulkWriteAsync`:
+### 3. Identity Map & Dirty Entity Tracking
+Entities fetched within a session are tracked. Requesting the same entity by ID multiple times returns the **same object instance**, and any changes made to these objects are automatically detected during `SaveChangesAsync()`.
+
 ``` csharp
 await using var session = context.StartSession();
 
-// Operations are tracked locally
-session.People.Add(new Person { Name = "Alice", Age = 30 });
-session.People.Update(existingPerson);
-session.People.Remove(oldPerson);
+// Fetch an entity
+var person = (await session.People.QueryAsync(p => p.Id == "alice-id")).First();
 
-// All changes are flushed in a single atomic bulk operation
+// Modify properties directly - no Update() call required!
+person.Age = 31;
+person.Name = "Alice Smith";
+
+// Fetching the same ID again returns the same instance
+var personAgain = (await session.People.QueryAsync(p => p.Id == "alice-id")).First();
+Assert.Same(person, personAgain);
+
+// All changes (including additions and removals) are flushed in a single bulk operation
 await session.SaveChangesAsync();
 ```
 
-### 4. Implicit Transaction Flow
-Queries issued via the session automatically use the active transaction. You don't need to pass a session handle manually.
+### 4. Unit of Work Pattern
+The `DbContextSession` acts as your Unit of Work. It tracks all changes locally and commits them in one go, optimizing database communication. Queries issued via the session automatically participate in the active transaction.
+
 ``` csharp
 await using var session = context.StartSession();
 
-session.People.Add(new Person { Name = "Bob" });
+// Add new entities
+session.People.Add(new Person { Name = "Bob", Age = 30 });
 
-// This query automatically sees "Bob" because it implicitly uses the transaction
+// Remove entities
+session.People.Remove(oldPerson);
+
+// Implicitly track and update existing entities (via Dirty Tracking)
+existingPerson.IsActive = false;
+
+// Queries automatically see your pending changes (Read Your Own Writes)
 var results = await session.People.QueryAsync(p => p.Name == "Bob");
+
+// Persist all changes atomically
+await session.SaveChangesAsync();
 ```
 
 ### 5. In-Memory Testing
