@@ -138,6 +138,14 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _includes.Clear();
     }
 
+    void IInternalMutableDbSet.RefreshShadows(ISessionTracker tracker)
+    {
+        if (_materializer != null)
+        {
+            tracker.RefreshShadows<TEntity>(_materializer);
+        }
+    }
+
     private Dictionary<DocId, TEntity>? _upsertBuffer;
     private HashSet<DocId>? _dedupeBuffer;
     private HashSet<object>? _rawIdBuffer;

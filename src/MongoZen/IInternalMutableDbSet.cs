@@ -7,4 +7,5 @@ public interface IInternalMutableDbSet
 {
     ValueTask CommitAsync(TransactionContext transaction, CancellationToken cancellationToken = default);
     void ClearTracking();
+    void RefreshShadows(ISessionTracker tracker);
 }
