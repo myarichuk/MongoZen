@@ -71,18 +71,18 @@ We compare MongoZen against a **hand-optimized raw driver** baseline. The goal i
 
 | Method | Category | Count | Mean | Ratio | Allocated | Alloc Ratio |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **MongoZen_ReadRepeat** | **IdentityMap** | 5000 | **2.7 ms** | **0.02** | **32 KB** | **0.01** |
-| RawDriver_ReadRepeat | IdentityMap | 5000 | 140.0 ms | 1.00 | 3172 KB | 1.00 |
-| **MongoZen_ReadAndModify** | **ReadModify** | 5000 | **232.8 ms** | **0.65** | **31123 KB** | **0.96** |
-| RawDriver_ReadAndModify | ReadModify | 5000 | 362.3 ms | 1.00 | 32338 KB | 1.00 |
-| **MongoZen_InsertBatch** | **Insert** | 5000 | **397.0 ms** | **3.62** | **20505 KB** | **2.48** |
-| RawDriver_InsertBatch | Insert | 5000 | 115.8 ms | 1.00 | 8274 KB | 1.00 |
+| **MongoZen_ReadRepeat** | **IdentityMap** | 5000 | **5.0 ms** | **0.02** | **33 KB** | **0.01** |
+| RawDriver_ReadRepeat | IdentityMap | 5000 | 305.9 ms | 1.00 | 3173 KB | 1.00 |
+| **MongoZen_ReadAndModify** | **ReadModify** | 5000 | **198.7 ms** | **0.67** | **30195 KB** | **0.93** |
+| RawDriver_ReadAndModify | ReadModify | 5000 | 297.3 ms | 1.00 | 32339 KB | 1.00 |
+| **MongoZen_InsertBatch** | **Insert** | 5000 | **285.7 ms** | **1.75** | **19464 KB** | **2.35** |
+| RawDriver_InsertBatch | Insert | 5000 | 171.0 ms | 1.00 | 8275 KB | 1.00 |
 
 ### What these numbers mean:
 
 1.  **IdentityMap (Repeated Reads)**: Serve requests from memory. MongoZen is **~50x - 100x faster** because it serves repeated requests for the same ID from the local `ISessionTracker` instead of hitting the wire.
-2.  **ReadAndModify (Change Tracking)**: This is the core "Zen" win. Even with the overhead of diffing, MongoZen is **35% faster** and uses **less memory** than hand-written `BulkWrite` code. Why? Our optimized internal engine (using unmanaged Arena memory and HashSets) is more efficient at preparing the write models than manual LINQ-to-model mapping.
-3.  **Insert (The "Tracking Tax")**: This is the only place with overhead (~3.6x slower). This is the one-time cost of allocating shadow structs and registering entities in the Identity Map so you can enjoy the performance wins above for the rest of the object lifecycle.
+2.  **ReadAndModify (Change Tracking)**: This is the core "Zen" win. Even with the overhead of diffing, MongoZen is **33% faster** and uses **less memory** than hand-written `BulkWrite` code. Why? Our optimized internal engine (using unmanaged Arena memory, HashSets, and zero-allocation `DocId` fingerprints) is more efficient at preparing write models than manual C# code.
+3.  **Insert (The "Tracking Tax")**: Overhead has been **cut in half** (from 3.6x to 1.75x) thanks to the `DocId` discriminated union and session-level buffer pooling. This is the one-time cost of allocating shadow structs and registering entities in the Identity Map so you can enjoy the performance wins above for the rest of the object lifecycle.
 
 ## More Info
 
