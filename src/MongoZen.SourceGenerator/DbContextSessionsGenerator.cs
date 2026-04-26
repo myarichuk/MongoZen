@@ -19,10 +19,12 @@ namespace MongoZen.SourceGenerator;
 [Generator]
 public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 {
+    private const string IDbSet = "IDbSet";
+    private const string IMutableDbSet = "IMutableDbSet";
+
     /// <summary>
     /// Initializes the incremental generation pipeline for DbContext session wrapper classes.
-    /// </summary>
-    /// <param name="context">The generator initialization context.</param>
+    /// </summary>    /// <param name="context">The generator initialization context.</param>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var dbContextSymbols = context.SyntaxProvider
@@ -88,7 +90,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
         {
             if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
-                namedType.Name == "IDbSet")
+                (namedType.Name == IDbSet || namedType.Name == IMutableDbSet))
             {
                 var entityType = namedType.TypeArguments[0].ToDisplayString();
                 mutableProps.Add((member.Name, entityType));
