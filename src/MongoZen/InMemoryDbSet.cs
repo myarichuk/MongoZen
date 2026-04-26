@@ -11,8 +11,10 @@ namespace MongoZen;
 public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
 {
     private readonly Dictionary<object, T> _data = new();
+    private readonly Dictionary<object, long> _versions = new();
     private readonly Func<T, object?> _idAccessor;
     private readonly string _idFieldName;
+    private readonly Conventions _conventions;
 
     public string CollectionName { get; }
 
@@ -23,11 +25,18 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
     {
         var id = _idAccessor(entity) ?? throw new InvalidOperationException("Entity has no ID.");
         _data[id] = entity;
+
+        var versionGetter = ConcurrencyVersionAccessor<T>.GetGetter(_conventions.ConcurrencyPropertyName);
+        if (versionGetter != null)
+        {
+            _versions[id] = versionGetter(entity);
+        }
     }
 
     public InMemoryDbSet(string collectionName, Conventions conventions)
     {
         CollectionName = collectionName;
+        _conventions = conventions;
         _idAccessor = EntityIdAccessor<T>.GetAccessor(conventions.IdConvention);
         _idFieldName = conventions.IdConvention.ResolveIdProperty<T>()?.Name ?? "_id";
     }
@@ -78,6 +87,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
     {
         var id = _idAccessor(entity) ?? throw new InvalidOperationException("Entity has no ID.");
         _data.Remove(id);
+        _versions.Remove(id);
         return Task.CompletedTask;
     }
 
@@ -97,6 +107,9 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
         // Mirror the deduplication semantics of DbSet.CommitAsync so that
         // in-memory tests see the same Remove→Add→Dirty ordering as production.
 
+        var versionGetter = ConcurrencyVersionAccessor<T>.GetGetter(_conventions.ConcurrencyPropertyName);
+        var versionSetter = ConcurrencyVersionAccessor<T>.GetSetter(_conventions.ConcurrencyPropertyName);
+
         // 1. Removals — collect and deduplicate via DocId
         foreach (var entity in removed)
         {
@@ -107,6 +120,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
             {
                 rawIdBuffer.Add(id);
                 _data.Remove(id);
+                _versions.Remove(id);
             }
         }
         foreach (var id in removedIds)
@@ -117,6 +131,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
             {
                 rawIdBuffer.Add(id);
                 _data.Remove(id);
+                _versions.Remove(id);
             }
         }
 
@@ -133,7 +148,13 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
         }
         foreach (var entry in upsertBuffer)
         {
-            _data[_idAccessor(entry.Value)!] = entry.Value;
+            var entity = entry.Value;
+            var id = _idAccessor(entity)!;
+            _data[id] = entity;
+            if (versionGetter != null)
+            {
+                _versions[id] = versionGetter(entity);
+            }
             dedupeBuffer.Add(entry.Key); // prevent dirty from overwriting a fresh add
         }
         upsertBuffer.Clear();
@@ -155,9 +176,33 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
             if (!dedupeBuffer.Contains(docId))
                 upsertBuffer[docId] = entity;
         }
+
+        var conflicts = new List<object>();
         foreach (var entry in upsertBuffer)
         {
-            _data[_idAccessor(entry.Value)!] = entry.Value;
+            var entity = entry.Value;
+            var id = _idAccessor(entity)!;
+
+            if (versionGetter != null && versionSetter != null)
+            {
+                var expectedVersion = versionGetter(entity);
+                if (!_versions.TryGetValue(id, out var actualVersion) || actualVersion != expectedVersion)
+                {
+                    conflicts.Add(id);
+                    continue;
+                }
+
+                var newVersion = actualVersion + 1;
+                versionSetter(entity, newVersion);
+                _versions[id] = newVersion;
+            }
+
+            _data[id] = entity;
+        }
+
+        if (conflicts.Count > 0)
+        {
+            throw new ConcurrencyException($"Optimistic concurrency check failed for {conflicts.Count} entities in-memory.", conflicts);
         }
 
         await Task.Yield();
