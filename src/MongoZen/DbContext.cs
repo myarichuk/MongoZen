@@ -26,7 +26,17 @@ public abstract partial class DbContext : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    public string GetCollectionName(Type entityType)
+    /// <summary>
+    /// Returns the MongoDB collection name for the given entity type by scanning
+    /// the DbContext's IDbSet&lt;T&gt; properties via reflection.
+    /// </summary>
+    /// <remarks>
+    /// TODO (perf): this scans all properties via reflection on every call.
+    /// The source generator already produces a <c>{DbContextName}Session</c> class;
+    /// it should also emit an override of this method that resolves names with a
+    /// simple switch expression — O(1), zero allocation, no reflection.
+    /// </remarks>
+    public virtual string GetCollectionName(Type entityType)
     {
         var dbSetInterface = typeof(IDbSet<>).MakeGenericType(entityType);
         var prop = GetType()

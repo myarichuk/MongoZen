@@ -22,7 +22,7 @@ public class ComparisonBenchmarks
     private List<BenchmarkEntity> _testData = null!;
     private List<string> _testIds = null!;
 
-    [Params(1000, 5000)]
+    [Params(10, 100, 500, 1000)]
     public int EntityCount;
 
     [GlobalSetup]

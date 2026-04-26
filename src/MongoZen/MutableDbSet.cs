@@ -180,9 +180,16 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default)
     {
         var session = _transactionProvider?.Invoke().Session;
-        if (_includes.Count > 0 && _dbSet is DbSet<TEntity> mongoSet)
+        if (_includes.Count > 0)
         {
-            return await QueryWithIncludesAsync(mongoSet, filter, session, cancellationToken);
+            if (_dbSet is DbSet<TEntity> mongoSet)
+            {
+                return await QueryWithIncludesAsync(mongoSet, filter, session, cancellationToken);
+            }
+
+            throw new InvalidOperationException(
+                $"Includes are only supported on the default MongoDB DbSet implementation. " +
+                $"The current implementation '{_dbSet.GetType().Name}' does not support Includes.");
         }
 
         var results = session != null && _dbSet is DbSet<TEntity> ds
@@ -220,7 +227,10 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
             }
             else
             {
-                throw new InvalidOperationException("Includes require an IDbContextSession tracker.");
+                throw new InvalidOperationException(
+                    $"Includes on '{typeof(TEntity).Name}' require an IDbContextSession tracker. " +
+                    "Make sure the MutableDbSet was created with a session (not standalone) and the " +
+                    "underlying IDbSet<T> is a DbSet<T> backed by a real MongoDB collection.");
             }
         }
 

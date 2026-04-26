@@ -138,6 +138,26 @@ public sealed class DbContextInitializerGenerator : IIncrementalGenerator
         
         sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
+        sb.AppendLine();
+
+        sb.Append(indent2).AppendLine("public override string GetCollectionName(System.Type entityType)");
+        sb.Append(indent2).AppendLine("{");
+        sb.Append(indent2).AppendLine("    return entityType switch");
+        sb.Append(indent2).AppendLine("    {");
+
+        foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
+        {
+            if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
+                (namedType.Name == "IDbSet" || namedType.AllInterfaces.Any(i => i.Name == "IDbSet")))
+            {
+                var entityType = namedType.TypeArguments[0].ToDisplayString();
+                sb.Append(indent2).Append("        var t when t == typeof(").Append(entityType).Append(") => \"").Append(member.Name).AppendLine("\",");
+            }
+        }
+
+        sb.Append(indent2).AppendLine("        _ => base.GetCollectionName(entityType)");
+        sb.Append(indent2).AppendLine("    };");
+        sb.Append(indent2).AppendLine("}");
 
         sb.Append(indent).AppendLine("}");
         
