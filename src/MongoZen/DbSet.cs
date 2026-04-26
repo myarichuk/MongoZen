@@ -73,8 +73,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
     {
         var models = new List<WriteModel<TEntity>>();
 
-        // Use a HashSet for efficient O(1) skip checks. 
-        // We track IDs that are being removed so we don't try to upsert/update them.
+        // Track IDs being removed for O(1) exclusion check.
         var removedIdSet = new HashSet<object>(removed
             .Where(e => e is not null)
             .Select(e => e!.GetId(_idAccessor)!)
@@ -85,24 +84,35 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             models.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, removedIdSet)));
         }
 
-        // Add brand-new entities using InsertOneModel (zero filter allocation overhead)
+        // Use a single dictionary to deduplicate all "Upserts" (Added + Updated).
+        // If an ID appears multiple times, the last one wins, matching the previous behavior.
+        var upserts = new Dictionary<object, TEntity>();
+        
         foreach (var entity in added)
         {
             if (entity == null) continue;
             var id = entity.GetId(_idAccessor);
-            if (id == null || removedIdSet.Contains(id)) continue;
-
-            models.Add(new InsertOneModel<TEntity>(entity));
+            if (id != null && !removedIdSet.Contains(id))
+            {
+                upserts[id] = entity;
+            }
         }
 
-        // Add modified entities using ReplaceOneModel
         foreach (var entity in updated)
         {
             if (entity == null) continue;
             var id = entity.GetId(_idAccessor);
-            if (id == null || removedIdSet.Contains(id)) continue;
+            if (id != null && !removedIdSet.Contains(id))
+            {
+                upserts[id] = entity;
+            }
+        }
 
-            models.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, id), entity));
+        foreach (var entry in upserts)
+        {
+            // We use ReplaceOne + IsUpsert=true because it handles both brand-new 
+            // entities and existing ones correctly in a single operation.
+            models.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, entry.Key), entry.Value) { IsUpsert = true });
         }
 
         if (models.Count > 0)
