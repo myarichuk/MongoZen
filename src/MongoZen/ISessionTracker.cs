@@ -13,11 +13,11 @@ public interface ISessionTracker
 
     IEnumerable<TEntity> GetDirtyEntities<TEntity>() where TEntity : class;
     
+    bool TryGetEntity<TEntity>(object id, out TEntity? entity) where TEntity : class;
+
     void Untrack<TEntity>(object id);
     
     void ClearTracking();
 
     void TrackDynamic(object entity, Type entityType, object id);
-
-    SharpArena.Allocators.ArenaAllocator Arena { get; }
 }

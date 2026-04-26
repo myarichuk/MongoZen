@@ -1,6 +1,8 @@
+using System;
+
 namespace MongoZen;
 
-public class PrefixedStringIdGenerator : IIdGenerator
+public record PrefixedStringIdGenerator : IIdGenerator
 {
     public void AssignId<TEntity>(TEntity entity, string collectionName, IIdConvention convention) where TEntity : class
     {

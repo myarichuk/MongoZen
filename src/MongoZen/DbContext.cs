@@ -19,7 +19,10 @@ public abstract partial class DbContext : IDisposable
 
     public void Dispose()
     {
-        Options.Mongo?.Client.Dispose();
+        if (Options.OwnsClient)
+        {
+            Options.Mongo?.Client.Dispose();
+        }
         GC.SuppressFinalize(this);
     }
 

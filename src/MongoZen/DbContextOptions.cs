@@ -1,6 +1,7 @@
 using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Driver;
 using System.Reflection;
+using System.Collections.Concurrent;
 // ReSharper disable FlagArgument
 
 namespace MongoZen;
@@ -14,11 +15,13 @@ public class DbContextOptions
         Conventions = conventions ?? new Conventions();
     }
 
-    public bool UseInMemory { get; set; }
+    public bool UseInMemory { get; init; }
 
-    public Conventions Conventions { get; set; }
+    internal bool OwnsClient { get; set; }
 
-    public IMongoDatabase? Mongo { get; set; }
+    public Conventions Conventions { get; init; }
+
+    public IMongoDatabase? Mongo { get; init; }
 
     /// <summary>
     /// Gets or sets whether to automatically create indexes defined in index tasks.
@@ -91,6 +94,6 @@ public class DbContextOptions
 
         var client = new MongoClient(settings);
         var database = client.GetDatabase(databaseName);
-        return new DbContextOptions(database, conventions);
+        return new DbContextOptions(database, conventions) { OwnsClient = true };
     }
 }
