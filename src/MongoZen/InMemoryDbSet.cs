@@ -192,9 +192,12 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
                     continue;
                 }
 
+                // Increment version for DB state
                 var newVersion = actualVersion + 1;
-                versionSetter(entity, newVersion);
                 _versions[id] = newVersion;
+                
+                // DbSet increments the entity version in CommitAsync, so we match it here.
+                versionSetter(entity, newVersion);
             }
 
             _data[id] = entity;

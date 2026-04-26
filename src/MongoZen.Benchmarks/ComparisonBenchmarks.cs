@@ -92,7 +92,8 @@ public class ComparisonBenchmarks
             Bio = "This is a long bio string to make serialization more expensive. " + string.Join(" ", Enumerable.Repeat("bla", 10)),
             CreatedAt = DateTime.UtcNow,
             Tags = ["tag1", "tag2", "tag3"],
-            Metadata = new Dictionary<string, string> { { "key1", "value1" }, { "key2", "value2" } }
+            Metadata = new Dictionary<string, string> { { "key1", "value1" }, { "key2", "value2" } },
+            Version = 1
         }).ToList();
 
         _testIds = _testData.Select(e => e.Id).ToList();
@@ -107,7 +108,8 @@ public class ComparisonBenchmarks
     // Insert benchmarks: collection must be empty going in.
     [IterationSetup(Targets = [
         nameof(RawDriver_InsertBatch),
-        nameof(MongoZen_InsertBatch)])]
+        nameof(MongoZen_InsertBatch),
+        nameof(MongoZen_InsertBatch_NoConcurrency)])]
     public void IterationSetup_Empty()
     {
         _database.DropCollection("Entities");
@@ -117,7 +119,9 @@ public class ComparisonBenchmarks
     // is not measured as part of the benchmark itself.
     [IterationSetup(Targets = [
         nameof(RawDriver_ReadAndModify),
-        nameof(MongoZen_ReadAndModify)])]
+        nameof(RawDriver_ReadAndModify_WithManualConcurrency),
+        nameof(MongoZen_ReadAndModify),
+        nameof(MongoZen_ReadAndModify_NoConcurrency)])]
     public void IterationSetup_WithData()
     {
         _database.DropCollection("Entities");
@@ -125,10 +129,7 @@ public class ComparisonBenchmarks
         _collection.InsertMany(_testData);
     }
 
-    // ReadRepeat benchmarks: seed just one document — EntityCount is irrelevant
-    // here since we always read the same single entity 10 times. Seeding the
-    // full _testData would add noise that scales with the EntityCount param
-    // without affecting what is actually being measured.
+    // ReadRepeat benchmarks: seed just one document
     [IterationSetup(Targets = [
         nameof(RawDriver_ReadRepeat),
         nameof(MongoZen_ReadRepeat)])]
@@ -140,23 +141,32 @@ public class ComparisonBenchmarks
 
     // -------------------------------------------------------------------------
     // Insert benchmarks
-    // Measures the overhead of MongoZen's Unit of Work vs a raw InsertManyAsync.
     // -------------------------------------------------------------------------
 
     [BenchmarkCategory("Insert"), Benchmark(Baseline = true)]
     public async Task RawDriver_InsertBatch()
     {
-        // Baseline: manual InsertManyAsync. Pure performance, zero overhead.
         await _collection.InsertManyAsync(_testData);
     }
 
     [BenchmarkCategory("Insert"), Benchmark]
     public async Task MongoZen_InsertBatch()
     {
-        // MongoZen: Store() in a loop + SaveChangesAsync().
-        // Overhead vs baseline: tracking each entity and preparing the BulkWrite.
-        // Benefit: Unit of Work pattern — save once at the end.
+        // Uses default Version concurrency if property exists
         await using var session = _dbContext.StartSession();
+        foreach (var entity in _testData)
+        {
+            session.Store(entity);
+        }
+        await session.SaveChangesAsync();
+    }
+
+    [BenchmarkCategory("Insert"), Benchmark]
+    public async Task MongoZen_InsertBatch_NoConcurrency()
+    {
+        var options = new DbContextOptions(_database, new Conventions { ConcurrencyPropertyName = null });
+        var db = new BenchmarkDbContext(options);
+        await using var session = db.StartSession();
         foreach (var entity in _testData)
         {
             session.Store(entity);
@@ -166,24 +176,14 @@ public class ComparisonBenchmarks
 
     // -------------------------------------------------------------------------
     // Read + modify benchmarks
-    //
-    // Both methods perform exactly 1 read round-trip ($in query) and 1 write
-    // round-trip (BulkWrite). The only difference is MongoZen's overhead:
-    // identity map registration, shadow copying, and diffing on save.
-    // That is precisely what we want to measure here.
-    //
-    // NOTE: QueryAsync must translate the predicate to a server-side $in query.
-    // If it evaluates client-side, this benchmark is no longer a fair comparison.
     // -------------------------------------------------------------------------
 
     [BenchmarkCategory("ReadModify"), Benchmark(Baseline = true)]
     public async Task RawDriver_ReadAndModify()
     {
-        // 1 read: fetch all entities in a single $in query.
         var filter = Builders<BenchmarkEntity>.Filter.In(e => e.Id, _testIds);
         var entities = await _collection.Find(filter).ToListAsync();
 
-        // 1 write: mutate in memory, then flush as a single BulkWrite.
         var writes = entities.Select(e =>
         {
             e.Age++;
@@ -196,35 +196,68 @@ public class ComparisonBenchmarks
     }
 
     [BenchmarkCategory("ReadModify"), Benchmark]
+    public async Task RawDriver_ReadAndModify_WithManualConcurrency()
+    {
+        var filter = Builders<BenchmarkEntity>.Filter.In(e => e.Id, _testIds);
+        var entities = await _collection.Find(filter).ToListAsync();
+
+        var writes = entities.Select(e =>
+        {
+            var oldVersion = e.Version;
+            e.Age++;
+            e.Name = "Updated Name";
+            e.Version++;
+            
+            var updateFilter = Builders<BenchmarkEntity>.Filter.And(
+                Builders<BenchmarkEntity>.Filter.Eq(x => x.Id, e.Id),
+                Builders<BenchmarkEntity>.Filter.Eq(x => x.Version, oldVersion)
+            );
+            
+            return new ReplaceOneModel<BenchmarkEntity>(updateFilter, e) { IsUpsert = false };
+        }).ToList<WriteModel<BenchmarkEntity>>();
+
+        var result = await _collection.BulkWriteAsync(writes);
+        if (result.MatchedCount < entities.Count)
+        {
+            throw new Exception("Concurrency conflict");
+        }
+    }
+
+    [BenchmarkCategory("ReadModify"), Benchmark]
     public async Task MongoZen_ReadAndModify()
     {
         await using var session = _dbContext.StartSession();
-
-        // QueryAsync translates the predicate to a server-side $in.
         var entities = await session.Entities.QueryAsync(e => _testIds.Contains(e.Id));
-
         foreach (var entity in entities)
         {
             entity.Age++;
             entity.Name = "Updated Name";
         }
+        await session.SaveChangesAsync();
+    }
 
+    [BenchmarkCategory("ReadModify"), Benchmark]
+    public async Task MongoZen_ReadAndModify_NoConcurrency()
+    {
+        var options = new DbContextOptions(_database, new Conventions { ConcurrencyPropertyName = null });
+        var db = new BenchmarkDbContext(options);
+        await using var session = db.StartSession();
+        var entities = await session.Entities.QueryAsync(e => _testIds.Contains(e.Id));
+        foreach (var entity in entities)
+        {
+            entity.Age++;
+            entity.Name = "Updated Name";
+        }
         await session.SaveChangesAsync();
     }
 
     // -------------------------------------------------------------------------
     // Identity Map / repeated-read benchmarks
-    //
-    // Both methods read the same single document 10 times.
-    // Raw always hits the wire; MongoZen hits it once then serves from the
-    // Identity Map for the remaining 9 reads.
-    // EntityCount has no effect here — only one document is ever seeded.
     // -------------------------------------------------------------------------
 
     [BenchmarkCategory("IdentityMap"), Benchmark(Baseline = true)]
     public async Task RawDriver_ReadRepeat()
     {
-        // Raw: every read hits the wire — no caching.
         var id = _testIds[0];
         for (int i = 0; i < 100; i++)
         {
@@ -235,8 +268,6 @@ public class ComparisonBenchmarks
     [BenchmarkCategory("IdentityMap"), Benchmark]
     public async Task MongoZen_ReadRepeat()
     {
-        // MongoZen: first read hits the wire; the remaining 99 are Identity Map
-        // lookups (local dictionary).
         var id = _testIds[0];
         await using var session = _dbContext.StartSession();
         for (int i = 0; i < 100; i++)

@@ -146,6 +146,22 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         }
     }
 
+    void IInternalMutableDbSet.RevertVersions()
+    {
+        if (_upsertBuffer == null || _upsertBuffer.Count == 0) return;
+
+        var versionSetter = ConcurrencyVersionAccessor<TEntity>.GetSetter(_conventions.ConcurrencyPropertyName);
+        var versionGetter = ConcurrencyVersionAccessor<TEntity>.GetGetter(_conventions.ConcurrencyPropertyName);
+
+        if (versionSetter == null || versionGetter == null) return;
+
+        foreach (var entry in _upsertBuffer.Values)
+        {
+            var current = versionGetter(entry);
+            versionSetter(entry, current - 1);
+        }
+    }
+
     private Dictionary<DocId, TEntity>? _upsertBuffer;
     private HashSet<DocId>? _dedupeBuffer;
     private HashSet<object>? _rawIdBuffer;

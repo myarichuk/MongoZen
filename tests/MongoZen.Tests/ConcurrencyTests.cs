@@ -152,38 +152,32 @@ public class ConcurrencyTests : IntegrationTestBase
         }
 
         // 2. Load in two concurrent sessions
-        // Since InMemory stores references, we need to be careful.
-        // Actually, we can just simulate two sessions loading the SAME reference
-        // but with different tracked versions if they were separate sessions.
-        
         await using var session1 = new MyDbContextSession(db);
         await using var session2 = new MyDbContextSession(db);
 
         var p1 = await session1.People.LoadAsync("p1");
         var p2 = await session2.People.LoadAsync("p1");
         
-        // Note: p1 and p2 ARE the same reference in current InMemoryDbSet.
-        // But the sessions track their own state.
-
+        Assert.NotNull(p1);
+        Assert.NotNull(p2);
+        
         // 3. Update session 1 and save
-        p1!.Name = "Alice Revised";
+        p1.Name = "Alice Revised";
         await session1.SaveChangesAsync();
         Assert.Equal(2, p1.Version);
 
-        // 4. Update session 2 and try to save - should fail
-        // Even though p2.Version is now 2 (because it's the same object as p1), 
-        // session 2 tracked it when it was 1.
-        // Wait, if p2.Version is 2, then session2's versionGetter(p2) will return 2!
-        // This is the problem with storing references in InMemoryDbSet.
+        // 4. Update session 2 and try to save - should fail because session 2 still thinks it has version 1,
+        // but the database (in-memory) now has version 2.
+        p2.Name = "Alice Conflict";
         
-        // To truly test this in-memory, we'd need to simulate the reference being updated
-        // by another process while session 2 still thinks it has version 1.
-        
-        // Let's manually set the version back to 1 on p2 before saving session 2 
-        // to simulate session 2 "stale" state.
-        // Actually, we can't easily do that if they are the same reference.
-        
-        // This highlights why InMemoryDbSet without cloning is limited for concurrency testing.
-        // But it still provides basic check that the version in _versions matches what is in the POCO.
+        // We need to simulate that p2 still has Version 1 in session 2's eyes.
+        // In InMemoryDbSet, because it's the SAME reference, p2.Version is already 2!
+        // So we manually set it back to 1 to simulate a stale entity.
+        p2.Version = 1; 
+
+        var ex = await Assert.ThrowsAsync<ConcurrencyException>(() => session2.SaveChangesAsync());
+        Assert.Contains("in-memory", ex.Message);
+        Assert.Single(ex.FailedIds);
+        Assert.Equal("p1", ex.FailedIds[0]);
     }
 }

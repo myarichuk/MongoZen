@@ -91,9 +91,19 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         EnsureTransactionActive();
 
         var transaction = Transaction;
-        foreach (var set in _dbSets.Values)
+        try 
         {
-            await set.CommitAsync(transaction, cancellationToken);
+            foreach (var set in _dbSets.Values)
+            {
+                await set.CommitAsync(transaction, cancellationToken);
+            }
+        }
+        catch (ConcurrencyException)
+        {
+            // If we fail, we MUST NOT refresh shadows.
+            // Revert version numbers in the entities because DbSet.CommitAsync already incremented them.
+            RevertVersions();
+            throw;
         }
 
         if (!_inMemoryTransaction && _session != null && _session.IsInTransaction)
@@ -110,6 +120,14 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         // If the commit above threw, shadows are NOT refreshed and the pending
         // change sets are NOT cleared, allowing the caller to retry.
         AcceptChanges();
+    }
+
+    private void RevertVersions()
+    {
+        foreach (var set in _dbSets.Values)
+        {
+            set.RevertVersions();
+        }
     }
 
     private void AcceptChanges()
@@ -130,7 +148,9 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     }
 
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public void RefreshShadows<TEntity>(Func<TEntity, ArenaAllocator, IntPtr> materializer) where TEntity : class
+    public void RefreshShadows<TEntity>(
+        Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr> materializer,
+        Action<TEntity>? versionIncrementer = null) where TEntity : class
     {
         if (!_trackedEntities.TryGetValue(typeof(TEntity), out var map)) return;
 
@@ -144,8 +164,13 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
             var entry = kvp.Value;
             if (entry.ShadowPtr == IntPtr.Zero || entry.Materializer == null) continue;
 
-            var newShadowPtr = materializer((TEntity)entry.Entity, _arena);
-            map[kvp.Key] = (entry.Entity, newShadowPtr, entry.Differ, entry.Materializer);
+            var entity = (TEntity)entry.Entity;
+            
+            // Only increment version if we are actually refreshing (AcceptChanges)
+            versionIncrementer?.Invoke(entity);
+
+            var newShadowPtr = materializer(entity, _arena);
+            map[kvp.Key] = (entity, newShadowPtr, entry.Differ, entry.Materializer);
         }
     }
 

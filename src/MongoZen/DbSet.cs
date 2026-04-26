@@ -159,11 +159,13 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             }
         }
 
-        var versionGetter = ConcurrencyVersionAccessor<TEntity>.GetGetter(_conventions.ConcurrencyPropertyName);
-        var versionSetter = ConcurrencyVersionAccessor<TEntity>.GetSetter(_conventions.ConcurrencyPropertyName);
-        var concurrencyElementName = ConcurrencyVersionAccessor<TEntity>.GetElementName(_conventions.ConcurrencyPropertyName);
+        Func<TEntity, long>? versionGetter = null;
+        Action<TEntity, long>? versionSetter = null;
+        string? concurrencyElementName = null;
+        var versionAccessorsResolved = false;
+
         var updateCount = 0;
-        var versionMap = (versionGetter != null) ? new Dictionary<object, long>() : null;
+        Dictionary<object, long>? versionMap = null;
 
         foreach (var entry in upsertBuffer)
         {
@@ -171,12 +173,22 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var rawId = entity.GetId(_idAccessor);
             var filter = Builders<TEntity>.Filter.Eq(_idFieldName, rawId);
 
+            if (!versionAccessorsResolved)
+            {
+                versionGetter = ConcurrencyVersionAccessor<TEntity>.GetGetter(_conventions.ConcurrencyPropertyName);
+                versionSetter = ConcurrencyVersionAccessor<TEntity>.GetSetter(_conventions.ConcurrencyPropertyName);
+                concurrencyElementName = ConcurrencyVersionAccessor<TEntity>.GetElementName(_conventions.ConcurrencyPropertyName);
+                versionAccessorsResolved = true;
+            }
+
             if (versionGetter != null && versionSetter != null && concurrencyElementName != null)
             {
                 var currentVersion = versionGetter(entity);
-                versionMap![rawId] = currentVersion;
+                versionMap ??= new Dictionary<object, long>();
+                versionMap[rawId] = currentVersion;
 
                 filter = Builders<TEntity>.Filter.And(filter, Builders<TEntity>.Filter.Eq(concurrencyElementName, currentVersion));
+                
                 versionSetter(entity, currentVersion + 1);
                 
                 modelBuffer.Add(new ReplaceOneModel<TEntity>(filter, entity) { IsUpsert = false });
