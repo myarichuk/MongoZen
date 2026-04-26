@@ -161,6 +161,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
 
         var versionGetter = ConcurrencyVersionAccessor<TEntity>.GetGetter(_conventions.ConcurrencyPropertyName);
         var versionSetter = ConcurrencyVersionAccessor<TEntity>.GetSetter(_conventions.ConcurrencyPropertyName);
+        var concurrencyElementName = ConcurrencyVersionAccessor<TEntity>.GetElementName(_conventions.ConcurrencyPropertyName);
         var updateCount = 0;
         var versionMap = (versionGetter != null) ? new Dictionary<object, long>() : null;
 
@@ -170,12 +171,12 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var rawId = entity.GetId(_idAccessor);
             var filter = Builders<TEntity>.Filter.Eq(_idFieldName, rawId);
 
-            if (versionGetter != null && versionSetter != null)
+            if (versionGetter != null && versionSetter != null && concurrencyElementName != null)
             {
                 var currentVersion = versionGetter(entity);
                 versionMap![rawId] = currentVersion;
 
-                filter = Builders<TEntity>.Filter.And(filter, Builders<TEntity>.Filter.Eq(_conventions.ConcurrencyPropertyName, currentVersion));
+                filter = Builders<TEntity>.Filter.And(filter, Builders<TEntity>.Filter.Eq(concurrencyElementName, currentVersion));
                 versionSetter(entity, currentVersion + 1);
                 
                 modelBuffer.Add(new ReplaceOneModel<TEntity>(filter, entity) { IsUpsert = false });
@@ -201,16 +202,16 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
 
             if (updateCount > 0 && result.MatchedCount < updateCount)
             {
-                var failedIds = await FindConcurrencyConflictsAsync(versionMap!, transaction.Session, cancellationToken);
+                var failedIds = await FindConcurrencyConflictsAsync(versionMap!, concurrencyElementName!, transaction.Session, cancellationToken);
                 throw new ConcurrencyException($"Optimistic concurrency check failed. Expected {updateCount} matches, but got {result.MatchedCount}.", failedIds);
             }
         }
     }
 
-    private async Task<List<object>> FindConcurrencyConflictsAsync(Dictionary<object, long> versionMap, IClientSessionHandle? session, CancellationToken ct)
+    private async Task<List<object>> FindConcurrencyConflictsAsync(Dictionary<object, long> versionMap, string concurrencyElementName, IClientSessionHandle? session, CancellationToken ct)
     {
         var ids = versionMap.Keys.ToList();
-        var projection = Builders<TEntity>.Projection.Include(_idFieldName).Include(_conventions.ConcurrencyPropertyName!);
+        var projection = Builders<TEntity>.Projection.Include(_idFieldName).Include(concurrencyElementName);
         
         List<BsonDocument> docs;
         var filter = Builders<TEntity>.Filter.In(_idFieldName, ids);
@@ -229,7 +230,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
 
             if (versionMap.TryGetValue(id, out var expectedVersion))
             {
-                var actualVersion = BsonTypeMapper.MapToDotNetValue(doc[_conventions.ConcurrencyPropertyName!]);
+                var actualVersion = BsonTypeMapper.MapToDotNetValue(doc[concurrencyElementName]);
                 if (Convert.ToInt64(actualVersion) != expectedVersion)
                 {
                     conflicts.Add(id);
