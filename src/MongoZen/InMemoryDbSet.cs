@@ -106,7 +106,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
     public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
         => QueryAsync(filter, cancellationToken);
 
-    async ValueTask IInternalDbSet<T>.CommitAsync(IEnumerable<T> added, IEnumerable<T> removed, IEnumerable<object> removedIds, IEnumerable<T> updated, Dictionary<object, T> upsertBuffer, HashSet<object> removedIdBuffer, List<WriteModel<T>> modelBuffer, IClientSessionHandle? session, CancellationToken cancellationToken)
+    async ValueTask IInternalDbSet<T>.CommitAsync(IEnumerable<T> added, IEnumerable<T> removed, IEnumerable<object> removedIds, IEnumerable<T> updated, IEnumerable<T> dirty, Dictionary<object, T> upsertBuffer, HashSet<object> removedIdBuffer, List<WriteModel<T>> modelBuffer, IClientSessionHandle? session, CancellationToken cancellationToken)
     {
         // Simulate atomic update
         await _lock.WaitAsync(cancellationToken);
