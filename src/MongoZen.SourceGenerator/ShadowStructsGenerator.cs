@@ -213,6 +213,11 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
 
     private static bool IsPrimitive(ITypeSymbol type)
     {
+        // IMPORTANT guard ordering: callers must check for System.String BEFORE calling
+        // IsPrimitive, because string has SpecialType != None and would be treated as a
+        // primitive here (direct copy / != comparison), which would produce incorrect
+        // reference-equality comparisons for dirty-checking. GetShadowTypeName and
+        // GenerateValueDirtyCheck both guard string first.
         if (type.SpecialType != SpecialType.None) return true;
         if (type.TypeKind == TypeKind.Enum) return true;
         // Treat BSON value types (ObjectId, Decimal128, etc.) as primitives — direct copy is safe.
@@ -436,6 +441,13 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
             }
             else
             {
+                // NOTE: String-keyed dictionaries fall back to ArenaList<KeyValuePairShadow>
+                // because ArenaString does not implement IEquatable<ArenaString> and therefore
+                // cannot be used as a key in ArenaDictionary. The dirty check below performs a
+                // LINEAR SCAN per key — O(n²) overall. For entities with small dictionaries
+                // (typical TTRPG metadata bags) this is acceptable. If profiling shows this
+                // is a hot path, consider making ArenaString implement IEquatable<ArenaString>
+                // to unlock the O(1) ArenaDictionary path for string keys as well.
                 sb.Append(indent).Append("    if (").Append(shadowExpr).Append(".Length != ").Append(currentExpr).AppendLine(".Count) return true;");
                 sb.Append(indent).Append("    foreach (var kvp in ").Append(currentExpr).AppendLine(")");
                 sb.Append(indent).AppendLine("    {");

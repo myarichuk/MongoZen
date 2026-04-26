@@ -8,7 +8,7 @@ public readonly struct TransactionContext(IClientSessionHandle? session, bool is
 
     public bool IsInMemoryTransaction { get; } = isInMemoryTransaction;
 
-    public bool IsActive => Session != null || IsInMemoryTransaction;
+    public bool IsActive => IsInMemoryTransaction || (Session != null && Session.IsInTransaction);
 
     public static TransactionContext FromSession(IClientSessionHandle session)
     {
