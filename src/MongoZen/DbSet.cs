@@ -93,40 +93,51 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             modelBuffer.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, removedIdBuffer)));
         }
 
-        // 1. Process brand-new entities using InsertOneModel (no filter allocation overhead)
+        // 1. Deduplicate brand-new entities
         foreach (var entity in added)
         {
             if (entity == null) continue;
             var id = entity.GetId(_idAccessor);
             if (id != null && !removedIdBuffer.Contains(id))
             {
-                modelBuffer.Add(new InsertOneModel<TEntity>(entity));
-                upsertBuffer[id] = entity;
+                upsertBuffer[id] = entity; // last one wins
             }
         }
 
-        // 2. Process explicitly updated entities
+        // 2. Add to models and mark as processed
+        foreach (var entry in upsertBuffer)
+        {
+            modelBuffer.Add(new InsertOneModel<TEntity>(entry.Value));
+            removedIdBuffer.Add(entry.Key); // Skip updates for this ID!
+        }
+        
+        upsertBuffer.Clear();
+
+        // 3. Process explicitly updated entities
         foreach (var entity in updated)
         {
             if (entity == null) continue;
             var id = entity.GetId(_idAccessor);
-            if (id != null && !removedIdBuffer.Contains(id) && !upsertBuffer.ContainsKey(id))
+            if (id != null && !removedIdBuffer.Contains(id))
             {
-                modelBuffer.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, id), entity));
-                upsertBuffer[id] = entity;
+                upsertBuffer[id] = entity; // last one wins
             }
         }
 
-        // 3. Process implicitly tracked dirty entities
+        // 4. Process implicitly tracked dirty entities
         foreach (var entity in dirty)
         {
             if (entity == null) continue;
             var id = entity.GetId(_idAccessor);
-            if (id != null && !removedIdBuffer.Contains(id) && !upsertBuffer.ContainsKey(id))
+            if (id != null && !removedIdBuffer.Contains(id))
             {
-                modelBuffer.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, id), entity));
-                upsertBuffer[id] = entity;
+                upsertBuffer[id] = entity; // last one wins
             }
+        }
+
+        foreach (var entry in upsertBuffer)
+        {
+            modelBuffer.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, entry.Key), entry.Value) { IsUpsert = true });
         }
 
         if (modelBuffer.Count > 0)
