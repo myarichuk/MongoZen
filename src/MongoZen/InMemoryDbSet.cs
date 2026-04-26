@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Linq.Expressions;
 using MongoDB.Driver;
+using MongoZen.Collections;
+using SharpArena.Allocators;
 
 namespace MongoZen;
 
@@ -8,7 +10,7 @@ namespace MongoZen;
 /// A test-friendly implementation of IDbSet that stores entities in a local dictionary.
 /// Does NOT perform deep cloning by default — changes to entities are immediate.
 /// </summary>
-public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
+public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDbSet where T : class
 {
     private readonly Dictionary<object, T> _data = new();
     private readonly Dictionary<object, long> _versions = new();
@@ -91,22 +93,51 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
         return Task.CompletedTask;
     }
 
+    public void Dispose()
+    {
+        // No-op for InMemoryDbSet
+    }
+
+    void IInternalMutableDbSet.ClearTracking()
+    {
+        // No-op for InMemoryDbSet as it doesn't track local changes.
+    }
+
+    void IInternalMutableDbSet.RefreshShadows(ISessionTracker tracker)
+    {
+        // No-op for InMemoryDbSet as it doesn't track local changes.
+    }
+
+    void IInternalMutableDbSet.RevertVersions()
+    {
+        // No-op for InMemoryDbSet because its CommitAsync implementation is atomic.
+    }
+
+    async ValueTask IInternalMutableDbSet.CommitAsync(TransactionContext transaction, CancellationToken cancellationToken)
+    {
+        // This is called by DbContextSession if the underlying set IS an InMemoryDbSet.
+        // But in MongoZen, DbContextSession always wraps IDbSet in a MutableDbSet.
+        // So this will likely not be called, but we implement it for completeness.
+        await Task.Yield();
+    }
+
     async ValueTask IInternalDbSet<T>.CommitAsync(
         IEnumerable<T> added, 
         IEnumerable<T> removed, 
         IEnumerable<object> removedIds, 
         IEnumerable<T> updated, 
         IEnumerable<T> dirty, 
-        Dictionary<DocId, T> upsertBuffer,
-        HashSet<DocId> dedupeBuffer,
-        HashSet<object> rawIdBuffer,
-        List<WriteModel<T>> modelBuffer,
+        PooledDictionary<DocId, T> upsertBuffer,
+        PooledHashSet<object> rawIdBuffer,
+        PooledList<WriteModel<T>> modelBuffer,
         TransactionContext transaction, 
+        ArenaAllocator arena,
         CancellationToken cancellationToken)
     {
         // Mirror the deduplication semantics of DbSet.CommitAsync so that
         // in-memory tests see the same Remove→Add→Dirty ordering as production.
 
+        var dedupeBuffer = new ArenaHashSet<DocId>(arena, 128);
         var versionGetter = ConcurrencyVersionAccessor<T>.GetGetter(_conventions.ConcurrencyPropertyName);
         var versionSetter = ConcurrencyVersionAccessor<T>.GetSetter(_conventions.ConcurrencyPropertyName);
 

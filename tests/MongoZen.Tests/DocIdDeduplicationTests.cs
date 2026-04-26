@@ -142,9 +142,9 @@ public class DocIdDeduplicationTests : IntegrationTestBase
         
         var internalSet = (IInternalDbSet<TEntity>)dbSet;
         using var arena = new SharpArena.Allocators.ArenaAllocator();
-        var upsertBuf = new Dictionary<DocId, TEntity>();
-        var removedBuf = new HashSet<DocId>();
-        var modelBuf = new List<WriteModel<TEntity>>();
+        using var upsertBuf = new MongoZen.Collections.PooledDictionary<DocId, TEntity>(16);
+        using var rawIdBuf = new MongoZen.Collections.PooledHashSet<object>(16);
+        using var modelBuf = new MongoZen.Collections.PooledList<WriteModel<TEntity>>(16);
 
         var e1 = new TEntity();
         typeof(TEntity).GetProperty("Id")!.SetValue(e1, id);
@@ -156,19 +156,17 @@ public class DocIdDeduplicationTests : IntegrationTestBase
 
         // Act: Commit both. Deduplication should take the last one ("Second").
         // Dirty list is empty for this test.
-        var dedupeBuf = new HashSet<DocId>();
-        var rawIdBuf = new HashSet<object>();
-        await ((IInternalDbSet<TEntity>)dbSet).CommitAsync(
+        await internalSet.CommitAsync(
             added: new[] { e1, e2 }, 
             removed: [], 
             removedIds: [], 
             updated: [], 
             dirty: [], 
             upsertBuffer: upsertBuf,
-            dedupeBuffer: dedupeBuf,
             rawIdBuffer: rawIdBuf,
             modelBuffer: modelBuf,
             transaction: TransactionContext.InMemory(),
+            arena: arena,
             cancellationToken: default);
 
         // Assert

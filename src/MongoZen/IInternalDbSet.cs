@@ -1,4 +1,5 @@
 using MongoDB.Driver;
+using MongoZen.Collections;
 
 namespace MongoZen;
 
@@ -10,10 +11,10 @@ internal interface IInternalDbSet<T> where T : class
         IEnumerable<object> removedIds, 
         IEnumerable<T> updated, 
         IEnumerable<T> dirty, 
-        Dictionary<DocId, T> upsertBuffer,
-        HashSet<DocId> dedupeBuffer,
-        HashSet<object> rawIdBuffer,
-        List<MongoDB.Driver.WriteModel<T>> modelBuffer,
+        PooledDictionary<DocId, T> upsertBuffer,
+        PooledHashSet<object> rawIdBuffer,
+        PooledList<MongoDB.Driver.WriteModel<T>> modelBuffer,
         TransactionContext transaction, 
+        SharpArena.Allocators.ArenaAllocator arena,
         CancellationToken cancellationToken = default);
 }

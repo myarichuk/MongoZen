@@ -76,17 +76,18 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         IEnumerable<object> removedIds, 
         IEnumerable<TEntity> updated, 
         IEnumerable<TEntity> dirty, 
-        Dictionary<DocId, TEntity> upsertBuffer,
-        HashSet<DocId> dedupeBuffer,
-        HashSet<object> rawIdBuffer,
-        List<WriteModel<TEntity>> modelBuffer,
+        MongoZen.Collections.PooledDictionary<DocId, TEntity> upsertBuffer,
+        MongoZen.Collections.PooledHashSet<object> rawIdBuffer,
+        MongoZen.Collections.PooledList<WriteModel<TEntity>> modelBuffer,
         TransactionContext transaction, 
+        SharpArena.Allocators.ArenaAllocator arena,
         CancellationToken cancellationToken)
     {
         modelBuffer.Clear();
-        dedupeBuffer.Clear();
         upsertBuffer.Clear();
         rawIdBuffer.Clear();
+
+        var dedupeBuffer = new MongoZen.Collections.ArenaHashSet<DocId>(arena, 128);
 
         // 1. Process Removals (Deduplicate via DocId, store raw for filter)
         foreach (var entity in removed)
@@ -112,6 +113,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
 
         if (rawIdBuffer.Count > 0)
         {
+            // Builders<T>.Filter.In handles IEnumerable<T>
             modelBuffer.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, rawIdBuffer)));
         }
 
@@ -124,7 +126,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var docId = DocId.From(rawId);
             if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer[docId] = entity;
+                upsertBuffer.AddOrUpdate(docId, entity);
             }
         }
 
@@ -144,7 +146,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var docId = DocId.From(rawId);
             if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer[docId] = entity;
+                upsertBuffer.AddOrUpdate(docId, entity);
             }
         }
         foreach (var entity in dirty)
@@ -155,9 +157,11 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var docId = DocId.From(rawId);
             if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer[docId] = entity;
+                upsertBuffer.AddOrUpdate(docId, entity);
             }
         }
+
+
 
         Func<TEntity, long>? versionGetter = null;
         Action<TEntity, long>? versionSetter = null;
