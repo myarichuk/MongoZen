@@ -69,7 +69,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 
-    async ValueTask IInternalDbSet<TEntity>.CommitAsync(IEnumerable<TEntity> added, IEnumerable<TEntity> removed, IEnumerable<object> removedIds, IEnumerable<TEntity> updated, Dictionary<object, TEntity> upsertBuffer, HashSet<object> removedIdBuffer, List<WriteModel<TEntity>> modelBuffer, IClientSessionHandle? session, CancellationToken cancellationToken)
+    async ValueTask IInternalDbSet<TEntity>.CommitAsync(IEnumerable<TEntity> added, IEnumerable<TEntity> removed, IEnumerable<object> removedIds, IEnumerable<TEntity> updated, IEnumerable<TEntity> dirty, Dictionary<object, TEntity> upsertBuffer, HashSet<object> removedIdBuffer, List<WriteModel<TEntity>> modelBuffer, IClientSessionHandle? session, CancellationToken cancellationToken)
     {
         modelBuffer.Clear();
         removedIdBuffer.Clear();
@@ -93,24 +93,45 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             modelBuffer.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, removedIdBuffer)));
         }
 
-        // Use the buffer to deduplicate all "Upserts" (Added + Updated).
+        // 1. Deduplicate brand-new entities
         foreach (var entity in added)
         {
             if (entity == null) continue;
             var id = entity.GetId(_idAccessor);
             if (id != null && !removedIdBuffer.Contains(id))
             {
-                upsertBuffer[id] = entity;
+                upsertBuffer[id] = entity; // last one wins
             }
         }
 
+        // 2. Add to models and mark as processed
+        foreach (var entry in upsertBuffer)
+        {
+            modelBuffer.Add(new InsertOneModel<TEntity>(entry.Value));
+            removedIdBuffer.Add(entry.Key); // Skip updates for this ID!
+        }
+        
+        upsertBuffer.Clear();
+
+        // 3. Process explicitly updated entities
         foreach (var entity in updated)
         {
             if (entity == null) continue;
             var id = entity.GetId(_idAccessor);
             if (id != null && !removedIdBuffer.Contains(id))
             {
-                upsertBuffer[id] = entity;
+                upsertBuffer[id] = entity; // last one wins
+            }
+        }
+
+        // 4. Process implicitly tracked dirty entities
+        foreach (var entity in dirty)
+        {
+            if (entity == null) continue;
+            var id = entity.GetId(_idAccessor);
+            if (id != null && !removedIdBuffer.Contains(id))
+            {
+                upsertBuffer[id] = entity; // last one wins
             }
         }
 
