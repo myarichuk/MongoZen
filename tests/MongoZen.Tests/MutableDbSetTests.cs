@@ -20,12 +20,11 @@ public class MutableDbSetTests
     [Fact]
     public async Task Can_Add_And_Save_Changes_InMemory()
     {
-        var inner = new InMemoryDbSet<User>("Users", Convention);
+        var inner = new InMemoryDbSet<User>("Users", new Conventions { IdConvention = Convention });
         var mutableSet = new MutableDbSet<User>(inner);
 
-        using var arena = new ArenaAllocator();
         mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(arena, null);
+        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.InMemory());
 
         var result = await mutableSet.QueryAsync(u => u.Name == "Charlie");
 
@@ -36,18 +35,17 @@ public class MutableDbSetTests
     [Fact]
     public async Task Can_Add_Update_Remove_InMemory()
     {
-        var inner = new InMemoryDbSet<User>("Users", Convention);
+        var inner = new InMemoryDbSet<User>("Users", new Conventions { IdConvention = Convention });
         inner.Seed(new User { Id = "1", Name = "Alice", Age = 30 });
         inner.Seed(new User { Id = "2", Name = "Bob", Age = 40 });
 
         var mutableSet = new MutableDbSet<User>(inner);
 
-        using var arena = new ArenaAllocator();
         mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
         mutableSet.Add(new User { Id = "2", Name = "Bob", Age = 99 });
         mutableSet.Remove(new User { Id = "1" });
 
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(arena, null);
+        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.InMemory());
 
         var all = (await mutableSet.QueryAsync(u => true)).ToList();
 
@@ -60,7 +58,7 @@ public class MutableDbSetTests
     [Fact]
     public async Task GetAdded_Returns_Pending_Additions()
     {
-        var inner = new InMemoryDbSet<User>("Users", Convention);
+        var inner = new InMemoryDbSet<User>("Users", new Conventions { IdConvention = Convention });
         var mutableSet = new MutableDbSet<User>(inner);
 
         var user = new User { Id = "1", Name = "Alice" };
@@ -74,12 +72,12 @@ public class MutableDbSetTests
     [Fact]
     public async Task Commit_Clears_Pending_Changes()
     {
-        var inner = new InMemoryDbSet<User>("Users", Convention);
+        var inner = new InMemoryDbSet<User>("Users", new Conventions { IdConvention = Convention });
         var mutableSet = new MutableDbSet<User>(inner);
 
-        using var arena = new ArenaAllocator();
         mutableSet.Add(new User { Id = "1", Name = "Alice" });
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(arena, null);
+        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.InMemory());
+        mutableSet.Advanced.ClearTracking();
 
         Assert.Empty(mutableSet.Advanced.GetAdded());
     }
@@ -87,14 +85,13 @@ public class MutableDbSetTests
     [Fact]
     public async Task Can_Remove_By_Id_InMemory()
     {
-        var inner = new InMemoryDbSet<User>("Users", Convention);
+        var inner = new InMemoryDbSet<User>("Users", new Conventions { IdConvention = Convention });
         inner.Seed(new User { Id = "1", Name = "Alice" });
 
         var mutableSet = new MutableDbSet<User>(inner);
 
-        using var arena = new ArenaAllocator();
         mutableSet.Remove("1");
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(arena, null);
+        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.InMemory());
 
         var result = await mutableSet.QueryAsync(u => true);
         Assert.Empty(result);

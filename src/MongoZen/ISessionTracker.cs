@@ -5,6 +5,8 @@ namespace MongoZen;
 
 public interface ISessionTracker
 {
+    SharpArena.Allocators.ArenaAllocator Arena { get; }
+
     TEntity Track<TEntity>(
         TEntity entity, 
         object id, 

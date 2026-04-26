@@ -1,4 +1,5 @@
 using MongoZen;
+using SharpArena.Allocators;
 using Xunit;
 
 namespace MongoZen.Tests;
@@ -20,16 +21,28 @@ public class InMemoryTransactionTests
     {
         public TestContextSession(TestContext dbContext) : base(dbContext)
         {
-            Users = new MutableDbSet<User>(
+            var userSet = new MutableDbSet<User>(
                 _dbContext.Users, 
                 () => Transaction, 
                 this, 
                 conventions: _dbContext.Options.Conventions);
+            Users = userSet;
+            RegisterDbSet(userSet);
         }
 
         public IMutableDbSet<User> Users { get; }
 
-        public void Remove<TEntity>(object id) where TEntity : class
+        public override void Store<TEntity>(TEntity entity) where TEntity : class
+        {
+            if (entity is User u) Users.Add(u);
+        }
+
+        public override void Delete<TEntity>(TEntity entity) where TEntity : class
+        {
+            if (entity is User u) Users.Remove(u);
+        }
+
+        public override void Delete<TEntity>(object id) where TEntity : class
         {
             if (typeof(TEntity) == typeof(User)) Users.Remove(id);
         }
@@ -46,11 +59,12 @@ public class InMemoryTransactionTests
             throw new ArgumentException();
         }
 
-        public async ValueTask SaveChangesAsync()
+        public override async Task SaveChangesAsync(System.Threading.CancellationToken cancellationToken = default)
         {
             EnsureTransactionActive();
-            await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
+            await ((IInternalMutableDbSet)Users).CommitAsync(Transaction, cancellationToken);
             await CommitTransactionAsync();
+            ClearTracking();
         }
     }
 
@@ -66,13 +80,13 @@ public class InMemoryTransactionTests
         {
             session.Users.Add(user);
             
-            // Should be findable in session via ID (if we implemented LoadAsync properly for session)
-            // But let's check the underlying collection directly
             var inMemorySet = (InMemoryDbSet<User>)ctx.Users;
-            Assert.Empty(inMemorySet.Collection);
+            var results = await inMemorySet.QueryAsync(u => true);
+            Assert.Empty(results);
 
             await session.SaveChangesAsync();
-            Assert.Single(inMemorySet.Collection);
+            results = await inMemorySet.QueryAsync(u => true);
+            Assert.Single(results);
         }
     }
 
@@ -91,6 +105,7 @@ public class InMemoryTransactionTests
         }
 
         var inMemorySet = (InMemoryDbSet<User>)ctx.Users;
-        Assert.Empty(inMemorySet.Collection);
+        var results = await inMemorySet.QueryAsync(u => true);
+        Assert.Empty(results);
     }
 }

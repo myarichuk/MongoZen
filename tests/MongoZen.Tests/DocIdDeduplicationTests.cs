@@ -164,12 +164,12 @@ public class DocIdDeduplicationTests : IntegrationTestBase
             removedIds: [], 
             updated: [], 
             dirty: [], 
-            arena: arena, 
             upsertBuffer: upsertBuf,
             dedupeBuffer: dedupeBuf,
             rawIdBuffer: rawIdBuf,
             modelBuffer: modelBuf,
-            session: null);
+            transaction: TransactionContext.InMemory(),
+            cancellationToken: default);
 
         // Assert
         var results = await collection.Find(FilterDefinition<TEntity>.Empty).ToListAsync();

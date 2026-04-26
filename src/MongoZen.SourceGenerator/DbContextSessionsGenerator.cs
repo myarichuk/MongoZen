@@ -108,16 +108,17 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         foreach (var prop in mutableProps)
         {
-        sb.Append(indent2).Append("        ").Append(prop.Name)
-        .Append(" = new MongoZen.MutableDbSet<")
-        .Append(prop.EntityType).Append(">(")
-        .Append("((").Append(ctxSymbol.ToDisplayString()).Append(")GetDbContext()).").Append(prop.Name).Append(", ")
-        .Append("() => Transaction, ")
-        .Append("this, ") // Pass the session as ISessionTracker
-        .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
-        .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
-        .Append("GetDbContext().Options.Conventions")
-        .AppendLine(");");
+            sb.Append(indent2).Append("        ").Append(prop.Name)
+                .Append(" = new MongoZen.MutableDbSet<")
+                .Append(prop.EntityType).Append(">(")
+                .Append("((").Append(ctxSymbol.ToDisplayString()).Append(")GetDbContext()).").Append(prop.Name).Append(", ")
+                .Append("() => Transaction, ")
+                .Append("this, ") // Pass the session as ISessionTracker
+                .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
+                .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
+                .Append("GetDbContext().Options.Conventions")
+                .AppendLine(");");
+            sb.Append(indent2).Append("        RegisterDbSet((MongoZen.MutableDbSet<").Append(prop.EntityType).Append(">)").Append(prop.Name).AppendLine(");");
         }
         sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
@@ -200,30 +201,6 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("public MongoZen.IMutableDbSet<TEntity> Include<TEntity, TInclude>(System.Linq.Expressions.Expression<System.Func<TEntity, object?>> path) where TEntity : class where TInclude : class");
         sb.Append(indent2).AppendLine("{");
         GenerateGenericDispatchReturnWithInclude(sb, indent2 + "    ", mutableProps, "Include", "path");
-        sb.Append(indent2).AppendLine("}");
-
-        // SaveChangesAsync
-        sb.AppendLine();
-        sb.Append(indent2).AppendLine("public override async global::System.Threading.Tasks.Task SaveChangesAsync(global::System.Threading.CancellationToken cancellationToken = default)");
-        sb.Append(indent2).AppendLine("{");
-        sb.Append(indent2).AppendLine("    EnsureTransactionActive();");
-        sb.Append(indent2).AppendLine("    using (var commitArena = new SharpArena.Allocators.ArenaAllocator())");
-        sb.Append(indent2).AppendLine("    {");
-        sb.Append(indent2).AppendLine("        var session = _session;");
-        foreach (var prop in mutableProps)
-        {
-            sb.Append(indent2).Append("        await ((MongoZen.IInternalMutableDbSet)").Append(prop.Name).AppendLine(").CommitAsync(commitArena, session, cancellationToken);");
-        }
-        sb.Append(indent2).AppendLine("    }");
-
-        sb.AppendLine();
-        sb.Append(indent2).AppendLine("    if (!_inMemoryTransaction && _session != null && _session.IsInTransaction)");
-        sb.Append(indent2).AppendLine("    {");
-        sb.Append(indent2).AppendLine("        await _session.CommitTransactionAsync(cancellationToken);");
-        sb.Append(indent2).AppendLine("        _session.StartTransaction();");
-        sb.Append(indent2).AppendLine("    }");
-        sb.AppendLine();
-        sb.Append(indent2).AppendLine("    ClearTracking();");
         sb.Append(indent2).AppendLine("}");
 
         sb.Append(indent).AppendLine("}");

@@ -37,8 +37,8 @@ public class BasicQueryTests : IntegrationTestBase
 
     private static void InsertInMemoryTestUsers(TestDbContext ctx)
     {
-        ((InMemoryDbSet<User>)ctx.Users).Collection.Add(new User { Id = "1", Name = "Alice", Age = 30 });
-        ((InMemoryDbSet<User>)ctx.Users).Collection.Add(new User { Id = "2", Name = "Bob", Age = 40 });
+        ((InMemoryDbSet<User>)ctx.Users).Seed(new User { Id = "1", Name = "Alice", Age = 30 });
+        ((InMemoryDbSet<User>)ctx.Users).Seed(new User { Id = "2", Name = "Bob", Age = 40 });
     }
 
     [Fact]

@@ -144,7 +144,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     private List<WriteModel<TEntity>>? _modelBuffer;
     private List<TEntity>? _dirtyBuffer;
 
-    ValueTask IInternalMutableDbSet.CommitAsync(SharpArena.Allocators.ArenaAllocator arena, IClientSessionHandle? session, CancellationToken cancellationToken)
+    ValueTask IInternalMutableDbSet.CommitAsync(TransactionContext transaction, CancellationToken cancellationToken)
     {
         _upsertBuffer ??= new Dictionary<DocId, TEntity>();
         _dedupeBuffer ??= new HashSet<DocId>();
@@ -166,7 +166,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
         return ((IInternalDbSet<TEntity>)_dbSet).CommitAsync(
             _added, _removed, _removedIds, _updated, _dirtyBuffer,
-            arena, _upsertBuffer, _dedupeBuffer, _rawIdBuffer, _modelBuffer, session, cancellationToken);
+            _upsertBuffer, _dedupeBuffer, _rawIdBuffer, _modelBuffer, transaction, cancellationToken);
     }
 
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default)

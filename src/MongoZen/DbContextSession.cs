@@ -51,8 +51,9 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     protected readonly ArenaAllocator _arena = new();
     protected readonly Dictionary<Type, IInternalMutableDbSet> _dbSets = new();
 
-    // Identity Map and Shadow storage. We use object for the differ to avoid per-entity closure allocations.
-    private readonly Dictionary<Type, Dictionary<object, (object Entity, IntPtr ShadowPtr, object Differ)>> _trackedEntities = new();
+    // Identity Map and Shadow storage. 
+    // Tuple: (Entity, ShadowPtr, DifferFunc, MaterializerFunc)
+    private readonly Dictionary<Type, Dictionary<object, (object Entity, IntPtr ShadowPtr, object Differ, object Materializer)>> _trackedEntities = new();
 
     protected DbContextSession(TDbContext dbContext, bool startTransaction = true)
     {
@@ -62,6 +63,9 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
             EnsureTransactionStarted();
         }
     }
+
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public ArenaAllocator Arena => _arena;
 
     [EditorBrowsable(EditorBrowsableState.Never)]
     public IClientSessionHandle? ClientSession => _session;
@@ -83,16 +87,13 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         => throw new NotSupportedException("This method must be overridden by a derived class or provided by the source generator.");
 
     public virtual async Task SaveChangesAsync(CancellationToken cancellationToken = default)
-
     {
         EnsureTransactionActive();
 
-        using (var commitArena = new ArenaAllocator())
+        var transaction = Transaction;
+        foreach (var set in _dbSets.Values)
         {
-            foreach (var set in _dbSets.Values)
-            {
-                await set.CommitAsync(commitArena, _session, cancellationToken);
-            }
+            await set.CommitAsync(transaction, cancellationToken);
         }
 
         if (!_inMemoryTransaction && _session != null && _session.IsInTransaction)
@@ -101,7 +102,47 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
             _session.StartTransaction(); // RavenDB-style multi-save: auto-start next
         }
 
-        ClearTracking();
+        AcceptChanges();
+    }
+
+    private void AcceptChanges()
+    {
+        // 1. Refresh shadows for all tracked entities.
+        // This ensures subsequent calls to SaveChangesAsync only detect NEW changes.
+        foreach (var typeEntry in _trackedEntities)
+        {
+            var entityType = typeEntry.Key;
+            var map = typeEntry.Value;
+
+            // We need to call the generic materializer.
+            // Since we stored the materializer as an object (Func<T, Arena, IntPtr>),
+            // we have to use reflection or dynamic dispatch to call it correctly if we want to be pure.
+            // But we can just use dynamic for this internal refresh.
+            foreach (var id in map.Keys.ToList())
+            {
+                var entry = map[id];
+                if (entry.ShadowPtr == IntPtr.Zero || entry.Materializer == null) continue;
+
+                // Refresh the shadow in place (or allocate new slot in Arena)
+                // Actually, the materializer(entity, arena) returns a NEW pointer.
+                // We'll update the pointer in the map.
+                var newShadowPtr = InvokeMaterializer(entry.Entity, entry.Materializer, _arena);
+                map[id] = (entry.Entity, newShadowPtr, entry.Differ, entry.Materializer);
+            }
+        }
+
+        // 2. Clear the pending lists in sets (added/removed/updated)
+        foreach (var set in _dbSets.Values)
+        {
+             set.ClearTracking();
+        }
+    }
+
+    private static IntPtr InvokeMaterializer(object entity, object materializer, ArenaAllocator arena)
+    {
+        // Use dynamic to call the Func<T, Arena, IntPtr> without knowing T
+        dynamic func = materializer;
+        return (IntPtr)func((dynamic)entity, arena);
     }
 
     protected void RegisterDbSet<TEntity>(MutableDbSet<TEntity> set) where TEntity : class
@@ -119,7 +160,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         var type = typeof(TEntity);
         if (!_trackedEntities.TryGetValue(type, out var map))
         {
-            map = new Dictionary<object, (object Entity, IntPtr ShadowPtr, object Differ)>();
+            map = new Dictionary<object, (object Entity, IntPtr ShadowPtr, object Differ, object Materializer)>();
             _trackedEntities[type] = map;
         }
 
@@ -129,23 +170,21 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         }
 
         var shadowPtr = materializer(entity, _arena);
-        map[id] = (entity, shadowPtr, differ);
+        map[id] = (entity, shadowPtr, differ, materializer);
         return entity;
     }
 
     [EditorBrowsable(EditorBrowsableState.Never)]
     public void TrackDynamic(object entity, Type entityType, object id)
     {
-        // This is a simplified dynamic tracker used by Include logic.
-        // Deep change tracking for dynamically-tracked included entities is TBD.
         if (!_trackedEntities.TryGetValue(entityType, out var map))
         {
-            map = new Dictionary<object, (object Entity, IntPtr ShadowPtr, object Differ)>();
+            map = new Dictionary<object, (object Entity, IntPtr ShadowPtr, object Differ, object Materializer)>();
             _trackedEntities[entityType] = map;
         }
         if (!map.ContainsKey(id))
         {
-            map[id] = (entity, IntPtr.Zero, null!);
+            map[id] = (entity, IntPtr.Zero, null!, null!);
         }
     }
 
@@ -190,11 +229,8 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     {
         _trackedEntities.Clear();
         _arena.Reset();
-        // Each MutableDbSet handles its own local state (added/removed lists)
         foreach (var set in _dbSets.Values)
         {
-             // We need a way to clear tracking on the set without knowing T.
-             // I'll update IInternalMutableDbSet to include ClearTracking().
              set.ClearTracking();
         }
     }

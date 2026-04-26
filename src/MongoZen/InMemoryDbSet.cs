@@ -25,12 +25,26 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
         _data[id] = entity;
     }
 
-    public InMemoryDbSet(string collectionName, IIdConvention convention)
+    public InMemoryDbSet(string collectionName, Conventions conventions)
     {
         CollectionName = collectionName;
-        _idAccessor = EntityIdAccessor<T>.GetAccessor(convention);
-        _idFieldName = convention.ResolveIdProperty<T>()?.Name ?? "_id";
+        _idAccessor = EntityIdAccessor<T>.GetAccessor(conventions.IdConvention);
+        _idFieldName = conventions.IdConvention.ResolveIdProperty<T>()?.Name ?? "_id";
     }
+
+    /// <summary>
+    /// Reflection-friendly constructor used by <see cref="DbContext.InitializeDbSets"/>.
+    /// </summary>
+    public InMemoryDbSet(IEnumerable<T> items, Conventions conventions, string collectionName)
+        : this(collectionName, conventions)
+    {
+        foreach (var item in items)
+        {
+            Seed(item);
+        }
+    }
+
+    public InMemoryDbSet() : this("Unknown", new Conventions()) { }
 
     public ValueTask<T?> LoadAsync(object id, CancellationToken cancellationToken = default)
     {
@@ -43,9 +57,9 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
 
     public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, CancellationToken cancellationToken = default)
     {
-        // Simple in-memory filtering is not implemented for FilterDefinition.
-        // Use the Expression-based QueryAsync for in-memory tests.
-        throw new NotSupportedException("FilterDefinition queries are not supported in InMemoryDbSet. Use Expression-based queries.");
+        var translator = new FilterUtils.FilterToLinqTranslator<T>();
+        var predicate = translator.GetCompiled(filter);
+        return new ValueTask<IEnumerable<T>>(_data.Values.Where(predicate).ToList());
     }
 
     public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, CancellationToken cancellationToken = default)
@@ -73,12 +87,11 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
         IEnumerable<object> removedIds, 
         IEnumerable<T> updated, 
         IEnumerable<T> dirty, 
-        SharpArena.Allocators.ArenaAllocator arena,
         Dictionary<DocId, T> upsertBuffer,
         HashSet<DocId> dedupeBuffer,
         HashSet<object> rawIdBuffer,
         List<WriteModel<T>> modelBuffer,
-        IClientSessionHandle? session, 
+        TransactionContext transaction, 
         CancellationToken cancellationToken)
     {
         // 1. Removals

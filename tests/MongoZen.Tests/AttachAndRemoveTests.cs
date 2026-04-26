@@ -76,11 +76,12 @@ public class AttachAndRemoveTests : IntegrationTestBase
             throw new ArgumentException();
         }
 
-        public async ValueTask SaveChangesAsync()
+        public override async Task SaveChangesAsync(CancellationToken cancellationToken = default)
         {
             EnsureTransactionActive();
-            await ((IInternalMutableDbSet)Products).CommitAsync(Transaction);
+            await ((IInternalMutableDbSet)Products).CommitAsync(Transaction, cancellationToken);
             await CommitTransactionAsync();
+            ClearTracking();
         }
     }
 

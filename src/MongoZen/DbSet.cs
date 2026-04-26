@@ -75,12 +75,11 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         IEnumerable<object> removedIds, 
         IEnumerable<TEntity> updated, 
         IEnumerable<TEntity> dirty, 
-        SharpArena.Allocators.ArenaAllocator arena,
         Dictionary<DocId, TEntity> upsertBuffer,
         HashSet<DocId> dedupeBuffer,
         HashSet<object> rawIdBuffer,
         List<WriteModel<TEntity>> modelBuffer,
-        IClientSessionHandle? session, 
+        TransactionContext transaction, 
         CancellationToken cancellationToken)
     {
         modelBuffer.Clear();
@@ -161,16 +160,15 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
 
         foreach (var entry in upsertBuffer)
         {
-            // We need the raw ID for the Eq filter. Since TEntity is here, we can re-extract it.
             var rawId = entry.Value.GetId(_idAccessor);
             modelBuffer.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, rawId), entry.Value) { IsUpsert = true });
         }
 
         if (modelBuffer.Count > 0)
         {
-            if (session != null)
+            if (transaction.Session != null)
             {
-                await _collection.BulkWriteAsync(session, modelBuffer, cancellationToken: cancellationToken);
+                await _collection.BulkWriteAsync(transaction.Session, modelBuffer, cancellationToken: cancellationToken);
             }
             else
             {
