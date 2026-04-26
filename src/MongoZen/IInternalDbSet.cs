@@ -9,6 +9,7 @@ internal interface IInternalDbSet<T> where T : class
         IEnumerable<T> removed, 
         IEnumerable<object> removedIds, 
         IEnumerable<T> updated, 
+        IEnumerable<T> dirty, 
         Dictionary<object, T> upsertBuffer,
         HashSet<object> removedIdBuffer,
         List<MongoDB.Driver.WriteModel<T>> modelBuffer,

@@ -32,6 +32,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     private readonly Dictionary<object, TEntity> _commitUpsertBuffer = new();
     private readonly HashSet<object> _commitRemovedIdBuffer = new();
     private readonly List<WriteModel<TEntity>> _commitModelBuffer = new();
+    private readonly List<TEntity> _dirtyBuffer = [];
 
     public IMutableDbSetAdvanced<TEntity> Advanced => this;
 
@@ -158,13 +159,21 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
             throw new InvalidOperationException("A transaction is required to commit changes.");
         }
 
-        var dirty = _tracker?.GetDirtyEntities<TEntity>() ?? Enumerable.Empty<TEntity>();
-        
-        var allUpdated = _updated.Concat(dirty.Where(d => !_updated.Contains(d) && !_added.Contains(d))).ToList();
+        _dirtyBuffer.Clear();
+        if (_tracker != null)
+        {
+            foreach (var d in _tracker.GetDirtyEntities<TEntity>())
+            {
+                if (!_updated.Contains(d) && !_added.Contains(d))
+                {
+                    _dirtyBuffer.Add(d);
+                }
+            }
+        }
 
         if (_baseSet is IInternalDbSet<TEntity> internalSet)
         {
-            await internalSet.CommitAsync(_added, _removed, _removedIds, allUpdated, _commitUpsertBuffer, _commitRemovedIdBuffer, _commitModelBuffer, transaction.Session, cancellationToken);
+            await internalSet.CommitAsync(_added, _removed, _removedIds, _updated, _dirtyBuffer, _commitUpsertBuffer, _commitRemovedIdBuffer, _commitModelBuffer, transaction.Session, cancellationToken);
         }
         else
         {
@@ -175,6 +184,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _removed.Clear();
         _removedIds.Clear();
         _updated.Clear();
+        _dirtyBuffer.Clear();
     }
 
     public void ClearTracking()
