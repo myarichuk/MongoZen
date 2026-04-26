@@ -50,8 +50,6 @@ public interface IMutableDbSetAdvanced<T> where T : class
 
     IEnumerable<T> GetUpdated();
 
-    Task CommitAsync(TransactionContext transaction, CancellationToken cancellationToken = default);
-
     /// <summary>
     /// Clears all tracked adds, removes, and updates.
     /// Called after a successful transaction commit to reset tracking state.

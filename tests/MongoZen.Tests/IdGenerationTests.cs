@@ -28,7 +28,7 @@ public class IdGenerationTests : IntegrationTestBase
         public async ValueTask SaveChangesAsync()
         {
             EnsureTransactionActive();
-            await Users.Advanced.CommitAsync(Transaction);
+            await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
             await CommitTransactionAsync();
         }
     }

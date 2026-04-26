@@ -47,8 +47,8 @@ public class IncludeTests : IntegrationTestBase
         public async ValueTask SaveChangesAsync()
         {
             EnsureTransactionActive();
-            await Customers.Advanced.CommitAsync(Transaction);
-            await Orders.Advanced.CommitAsync(Transaction);
+            await ((IInternalMutableDbSet)Customers).CommitAsync(Transaction);
+            await ((IInternalMutableDbSet)Orders).CommitAsync(Transaction);
             await CommitTransactionAsync();
         }
     }

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -53,27 +54,52 @@ public sealed class DbContextExtensionsGenerator : IIncrementalGenerator
         sb.AppendLine("#nullable enable");
         sb.AppendLine("using MongoZen;");
         sb.AppendLine();
-        sb.AppendLine("public static class DbContextSessionExtensions");
-        sb.AppendLine("{");
 
-        foreach (var type in dbContextTypes)
+        // Group by namespace so contexts in the same namespace share one static class.
+        // Each group is wrapped in its own namespace block to avoid global-namespace pollution
+        // and CS0433 collisions when two projects both define DbContext subclasses.
+        var byNamespace = dbContextTypes
+            .GroupBy(t => t.ContainingNamespace.IsGlobalNamespace
+                ? null
+                : t.ContainingNamespace.ToDisplayString());
+
+        foreach (var group in byNamespace)
         {
-            var contextFullName = type.ToDisplayString();
-            var sessionFullName = $"{contextFullName}Session";
+            var ns = group.Key;
+            if (ns is not null)
+            {
+                sb.Append("namespace ").AppendLine(ns);
+                sb.AppendLine("{");
+            }
 
-            sb.Append("    public static ").Append(sessionFullName)
-              .Append(" StartSession(this ").Append(contextFullName)
-              .AppendLine(" context)");
-            sb.AppendLine($"        => new {sessionFullName}(context);");
-            sb.AppendLine();
-            sb.Append("    public static ").Append(sessionFullName)
-              .Append(" StartSession(this ").Append(contextFullName)
-              .AppendLine(" context, bool startTransaction)");
-            sb.AppendLine($"        => new {sessionFullName}(context, startTransaction);");
+            var indent = ns is null ? string.Empty : "    ";
+            sb.Append(indent).AppendLine("public static class DbContextSessionExtensions");
+            sb.Append(indent).AppendLine("{");
+
+            foreach (var type in group)
+            {
+                var contextFullName = type.ToDisplayString();
+                var sessionFullName = $"{contextFullName}Session";
+
+                sb.Append(indent).Append("    public static ").Append(sessionFullName)
+                  .Append(" StartSession(this ").Append(contextFullName)
+                  .AppendLine(" context)");
+                sb.AppendLine($"{indent}        => new {sessionFullName}(context);");
+                sb.AppendLine();
+                sb.Append(indent).Append("    public static ").Append(sessionFullName)
+                  .Append(" StartSession(this ").Append(contextFullName)
+                  .AppendLine(" context, bool startTransaction)");
+                sb.AppendLine($"{indent}        => new {sessionFullName}(context, startTransaction);");
+                sb.AppendLine();
+            }
+
+            sb.Append(indent).AppendLine("}");
+            if (ns is not null)
+            {
+                sb.AppendLine("}");
+            }
             sb.AppendLine();
         }
-
-        sb.AppendLine("}");
 
         return sb.ToString();
     }

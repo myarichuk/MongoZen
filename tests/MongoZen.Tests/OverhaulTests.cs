@@ -63,7 +63,7 @@ public class OverhaulTests : IntegrationTestBase
         public async Task SaveChangesAsync()
         {
             EnsureTransactionActive();
-            await Users.Advanced.CommitAsync(Transaction);
+            await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
             await CommitTransactionAsync();
             Users.Advanced.ClearTracking();
         }

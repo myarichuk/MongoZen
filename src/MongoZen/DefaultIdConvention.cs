@@ -3,7 +3,7 @@ using MongoDB.Bson.Serialization.Attributes;
 
 namespace MongoZen;
 
-internal sealed class DefaultIdConvention : IIdConvention
+internal sealed record DefaultIdConvention : IIdConvention
 {
     public PropertyInfo? ResolveIdProperty<TEntity>()
     {

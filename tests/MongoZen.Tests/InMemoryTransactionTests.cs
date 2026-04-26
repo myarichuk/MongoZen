@@ -49,7 +49,7 @@ public class InMemoryTransactionTests
         public async ValueTask SaveChangesAsync()
         {
             EnsureTransactionActive();
-            await Users.Advanced.CommitAsync(Transaction);
+            await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
             await CommitTransactionAsync();
         }
     }
@@ -57,8 +57,7 @@ public class InMemoryTransactionTests
     [Fact]
     public async Task InMemory_ChangesAreNotPersisted_UntilSaveChangesAsync()
     {
-        var options = new DbContextOptions();
-        options.UseInMemory = true;
+        var options = new DbContextOptions { UseInMemory = true };
         var ctx = new TestContext(options);
 
         var user = new User { Name = "Initial" };
@@ -80,8 +79,7 @@ public class InMemoryTransactionTests
     [Fact]
     public async Task InMemory_AbortTransaction_DoesNotPersistChanges()
     {
-        var options = new DbContextOptions();
-        options.UseInMemory = true;
+        var options = new DbContextOptions { UseInMemory = true };
         var ctx = new TestContext(options);
 
         var user = new User { Name = "Aborted" };

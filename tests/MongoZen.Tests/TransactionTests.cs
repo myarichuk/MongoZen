@@ -1,5 +1,6 @@
 using MongoDB.Driver;
 using MongoZen;
+using Xunit;
 
 namespace MongoZen.Tests;
 
@@ -11,8 +12,6 @@ public class TransactionTests : IntegrationTestBase
 
         public string Name { get; set; } = string.Empty;
     }
-
-
 
     private class TestDbContext(DbContextOptions options) : DbContext(options)
     {
@@ -39,7 +38,7 @@ public class TransactionTests : IntegrationTestBase
             EnsureTransactionActive();
             try
             {
-                await Users.Advanced.CommitAsync(Transaction);
+                await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
 
                 await CommitTransactionAsync();
                 await DisposeAsync();
@@ -97,7 +96,7 @@ public class TransactionTests : IntegrationTestBase
         // Removing a non-existent entity with an invalid ID structure shouldn't cause a failure, but we want to simulate some "dirty" work
         mutableSet.Remove("non-existent-id");
 
-        await mutableSet.Advanced.CommitAsync(TransactionContext.FromSession(clientSession));
+        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.FromSession(clientSession));
         await clientSession.AbortTransactionAsync();
 
         var saved = await ctx.Users.QueryAsync(u => u.Id == "1");
@@ -113,7 +112,7 @@ public class TransactionTests : IntegrationTestBase
         session.Users.Add(new User { Id = "2", Name = "Bob" });
 
         // Force commit to the underlying collection within the transaction
-        await session.Users.Advanced.CommitAsync(session.Transaction);
+        await ((IInternalMutableDbSet)session.Users).CommitAsync(session.Transaction);
 
         // Query inside the session (should see the change)
         var inside = await session.Users.QueryAsync(u => u.Id == "2");
@@ -137,7 +136,7 @@ public class TransactionTests : IntegrationTestBase
         await using (var session = new TestDbContextSession(ctx))
         {
             session.Users.Add(new User { Id = "1", Name = "Alice" });
-            await session.Users.Advanced.CommitAsync(session.Transaction);
+            await ((IInternalMutableDbSet)session.Users).CommitAsync(session.Transaction);
         }
 
         var saved = await ctx.Users.QueryAsync(u => u.Id == "1");
