@@ -215,7 +215,7 @@ namespace MongoZen.Tests
             // Use a Mongo DbSet to trigger QueryWithIncludesAsync
             var mongoCollection = Database!.GetCollection<Person>("People");
             var dbSet = new DbSet<Person>(mongoCollection, new Conventions());
-            var mutableSet = new MutableDbSet<Person>(dbSet); // No session tracker
+            var mutableSet = new MutableDbSet<Person>(dbSet, new Conventions()); // No session tracker
             
             await Assert.ThrowsAsync<InvalidOperationException>(async () => 
                 await mutableSet.Include(x => x.Id).QueryAsync(x => true));

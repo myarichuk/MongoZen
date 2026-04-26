@@ -84,7 +84,7 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
     /// <returns>An expression tree corresponding to the parsed filter.</returns>
     private Expression ParseDocument(BsonDocument doc, ParameterExpression param)
     {
-        var expressions = new List<Expression>();
+        using var expressions = new MongoZen.Collections.PooledList<Expression>(doc.ElementCount);
 
         foreach (var elem in doc.Elements)
         {
@@ -98,7 +98,7 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
                     throw new NotSupportedException($"Logical operator '{key}' must be an array but was {value?.BsonType}.\nOffending value: {value}");
                 }
 
-                var subExprs = new List<Expression>();
+                using var subExprs = new MongoZen.Collections.PooledList<Expression>(array.Count);
                 foreach (var subDoc in array.Cast<BsonDocument>())
                 {
                     var subExpr = ParseDocument(subDoc, param);
