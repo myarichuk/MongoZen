@@ -40,11 +40,12 @@ public struct DocId : IEquatable<DocId>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void WriteHash128(ReadOnlySpan<byte> data)
     {
+        // XxHash128 returns a UInt128. Write each 64-bit half into the two
+        // explicit fields rather than using a raw pointer cast, which would
+        // rely on undocumented struct layout aliasing across _part1 and _part2.
         var hash = XxHash128.HashToUInt128(data);
-        unsafe
-        {
-            *(UInt128*)Unsafe.AsPointer(ref _part1) = hash;
-        }
+        _part1 = (ulong)(hash & ulong.MaxValue);
+        _part2 = (ulong)(hash >> 64);
     }
 
     public static DocId FromObjectId(ObjectId oid)
