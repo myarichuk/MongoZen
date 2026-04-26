@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Data.Common;
 using System.Linq.Expressions;
+using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 
@@ -158,22 +159,93 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             }
         }
 
+        var versionGetter = ConcurrencyVersionAccessor<TEntity>.GetGetter(_conventions.ConcurrencyPropertyName);
+        var versionSetter = ConcurrencyVersionAccessor<TEntity>.GetSetter(_conventions.ConcurrencyPropertyName);
+        var updateCount = 0;
+        var versionMap = (versionGetter != null) ? new Dictionary<object, long>() : null;
+
         foreach (var entry in upsertBuffer)
         {
-            var rawId = entry.Value.GetId(_idAccessor);
-            modelBuffer.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, rawId), entry.Value) { IsUpsert = true });
+            var entity = entry.Value;
+            var rawId = entity.GetId(_idAccessor);
+            var filter = Builders<TEntity>.Filter.Eq(_idFieldName, rawId);
+
+            if (versionGetter != null && versionSetter != null)
+            {
+                var currentVersion = versionGetter(entity);
+                versionMap![rawId] = currentVersion;
+
+                filter = Builders<TEntity>.Filter.And(filter, Builders<TEntity>.Filter.Eq(_conventions.ConcurrencyPropertyName, currentVersion));
+                versionSetter(entity, currentVersion + 1);
+                
+                modelBuffer.Add(new ReplaceOneModel<TEntity>(filter, entity) { IsUpsert = false });
+                updateCount++;
+            }
+            else
+            {
+                modelBuffer.Add(new ReplaceOneModel<TEntity>(filter, entity) { IsUpsert = true });
+            }
         }
 
         if (modelBuffer.Count > 0)
         {
+            BulkWriteResult result;
             if (transaction.Session != null)
             {
-                await _collection.BulkWriteAsync(transaction.Session, modelBuffer, cancellationToken: cancellationToken);
+                result = await _collection.BulkWriteAsync(transaction.Session, modelBuffer, cancellationToken: cancellationToken);
             }
             else
             {
-                await _collection.BulkWriteAsync(modelBuffer, cancellationToken: cancellationToken);
+                result = await _collection.BulkWriteAsync(modelBuffer, cancellationToken: cancellationToken);
+            }
+
+            if (updateCount > 0 && result.MatchedCount < updateCount)
+            {
+                var failedIds = await FindConcurrencyConflictsAsync(versionMap!, transaction.Session, cancellationToken);
+                throw new ConcurrencyException($"Optimistic concurrency check failed. Expected {updateCount} matches, but got {result.MatchedCount}.", failedIds);
             }
         }
+    }
+
+    private async Task<List<object>> FindConcurrencyConflictsAsync(Dictionary<object, long> versionMap, IClientSessionHandle? session, CancellationToken ct)
+    {
+        var ids = versionMap.Keys.ToList();
+        var projection = Builders<TEntity>.Projection.Include(_idFieldName).Include(_conventions.ConcurrencyPropertyName!);
+        
+        List<BsonDocument> docs;
+        var filter = Builders<TEntity>.Filter.In(_idFieldName, ids);
+        if (session != null)
+            docs = await _collection.Find(session, filter).Project(projection).ToListAsync(ct);
+        else
+            docs = await _collection.Find(filter).Project(projection).ToListAsync(ct);
+
+        var foundIds = new HashSet<object>();
+        var conflicts = new List<object>();
+
+        foreach (var doc in docs)
+        {
+            var id = BsonTypeMapper.MapToDotNetValue(doc["_id"]);
+            foundIds.Add(id);
+
+            if (versionMap.TryGetValue(id, out var expectedVersion))
+            {
+                var actualVersion = BsonTypeMapper.MapToDotNetValue(doc[_conventions.ConcurrencyPropertyName!]);
+                if (Convert.ToInt64(actualVersion) != expectedVersion)
+                {
+                    conflicts.Add(id);
+                }
+            }
+        }
+
+        // Also include IDs that were completely missing (deleted)
+        foreach (var id in ids)
+        {
+            if (!foundIds.Contains(id))
+            {
+                conflicts.Add(id);
+            }
+        }
+
+        return conflicts;
     }
 }
