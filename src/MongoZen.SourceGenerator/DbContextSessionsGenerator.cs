@@ -108,16 +108,17 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         foreach (var prop in mutableProps)
         {
-        sb.Append(indent2).Append("        ").Append(prop.Name)
-        .Append(" = new MongoZen.MutableDbSet<")
-        .Append(prop.EntityType).Append(">(")
-        .Append("((").Append(ctxSymbol.ToDisplayString()).Append(")GetDbContext()).").Append(prop.Name).Append(", ")
-        .Append("() => Transaction, ")
-        .Append("this, ") // Pass the session as ISessionTracker
-        .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
-        .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
-        .Append("GetDbContext().Options.Conventions")
-        .AppendLine(");");
+            sb.Append(indent2).Append("        ").Append(prop.Name)
+                .Append(" = new MongoZen.MutableDbSet<")
+                .Append(prop.EntityType).Append(">(")
+                .Append("((").Append(ctxSymbol.ToDisplayString()).Append(")GetDbContext()).").Append(prop.Name).Append(", ")
+                .Append("() => Transaction, ")
+                .Append("this, ") // Pass the session as ISessionTracker
+                .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
+                .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
+                .Append("GetDbContext().Options.Conventions")
+                .AppendLine(");");
+            sb.Append(indent2).Append("        RegisterDbSet((MongoZen.MutableDbSet<").Append(prop.EntityType).Append(">)").Append(prop.Name).AppendLine(");");
         }
         sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
@@ -200,42 +201,6 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("public MongoZen.IMutableDbSet<TEntity> Include<TEntity, TInclude>(System.Linq.Expressions.Expression<System.Func<TEntity, object?>> path) where TEntity : class where TInclude : class");
         sb.Append(indent2).AppendLine("{");
         GenerateGenericDispatchReturnWithInclude(sb, indent2 + "    ", mutableProps, "Include", "path");
-        sb.Append(indent2).AppendLine("}");
-
-        // SaveChangesAsync
-        sb.AppendLine();
-        sb.Append(indent2).AppendLine("public async ValueTask SaveChangesAsync(System.Threading.CancellationToken cancellationToken = default)");
-        sb.Append(indent2).AppendLine("{");
-        sb.Append(indent2).AppendLine("    EnsureTransactionActive();");
-        sb.Append(indent2).AppendLine("    try");
-        sb.Append(indent2).AppendLine("    {");
-        foreach (var prop in mutableProps)
-        {
-            sb.Append(indent2).Append("        await ((MongoZen.IInternalMutableDbSet)").Append(prop.Name).AppendLine(").CommitAsync(Transaction, cancellationToken);");
-        }
-
-        sb.AppendLine();
-        sb.Append(indent2).AppendLine("        await CommitTransactionAsync();");
-        sb.AppendLine();
-
-        // Clear tracking only after successful commit
-        foreach (var prop in mutableProps)
-        {
-            sb.Append(indent2).Append("        ").Append(prop.Name).AppendLine(".Advanced.ClearTracking();");
-        }
-        sb.Append(indent2).AppendLine("        ClearTracking();");
-
-        sb.Append(indent2).AppendLine("    }");
-        sb.Append(indent2).AppendLine("    catch");
-        sb.Append(indent2).AppendLine("    {");
-        sb.Append(indent2).AppendLine("        if (Transaction.IsActive)");
-        sb.Append(indent2).AppendLine("        {");
-        sb.Append(indent2).AppendLine("            await AbortTransactionAsync();");
-        sb.Append(indent2).AppendLine("        }");
-        sb.AppendLine();
-        sb.Append(indent2).AppendLine("        await DisposeAsync();");
-        sb.Append(indent2).AppendLine("        throw;");
-        sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
 
         sb.Append(indent).AppendLine("}");

@@ -74,7 +74,10 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
     {
         unsafe {
             Blogs = new MongoZen.MutableDbSet<Blog>(((BloggingContext)GetDbContext()).Blogs, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Blog_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.IsDirty(entity); }, GetDbContext().Options.Conventions);
-            Posts = new MongoZen.MutableDbSet<Post>(((BloggingContext)GetDbContext()).Posts, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Post_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.IsDirty(entity); }, GetDbContext().Options.Conventions);        }
+            RegisterDbSet((MongoZen.MutableDbSet<Blog>)Blogs);
+            Posts = new MongoZen.MutableDbSet<Post>(((BloggingContext)GetDbContext()).Posts, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Post_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.IsDirty(entity); }, GetDbContext().Options.Conventions);
+            RegisterDbSet((MongoZen.MutableDbSet<Post>)Posts);
+        }
     }
 
     public MongoZen.IMutableDbSet<Blog> Blogs { get; }
@@ -226,32 +229,6 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
             throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
         }
     }
-
-    public async ValueTask SaveChangesAsync(System.Threading.CancellationToken cancellationToken = default)
-    {
-        EnsureTransactionActive();
-        try
-        {
-            await ((MongoZen.IInternalMutableDbSet)Blogs).CommitAsync(Transaction, cancellationToken);
-            await ((MongoZen.IInternalMutableDbSet)Posts).CommitAsync(Transaction, cancellationToken);
-
-            await CommitTransactionAsync();
-
-            Blogs.Advanced.ClearTracking();
-            Posts.Advanced.ClearTracking();
-            ClearTracking();
-        }
-        catch
-        {
-            if (Transaction.IsActive)
-            {
-                await AbortTransactionAsync();
-            }
-
-            await DisposeAsync();
-            throw;
-        }
-    }
 }
 ";
 
@@ -312,6 +289,7 @@ namespace MyNamespace
         {
             unsafe {
                 Users = new MongoZen.MutableDbSet<MyNamespace.User>(((MyNamespace.MyContext)GetDbContext()).Users, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<MyNamespace.User_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.IsDirty(entity); }, GetDbContext().Options.Conventions);
+                RegisterDbSet((MongoZen.MutableDbSet<MyNamespace.User>)Users);
             }
         }
 
@@ -429,30 +407,6 @@ namespace MyNamespace
             else
             {
                 throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
-            }
-        }
-
-        public async ValueTask SaveChangesAsync(System.Threading.CancellationToken cancellationToken = default)
-        {
-            EnsureTransactionActive();
-            try
-            {
-                await ((MongoZen.IInternalMutableDbSet)Users).CommitAsync(Transaction, cancellationToken);
-
-                await CommitTransactionAsync();
-
-                Users.Advanced.ClearTracking();
-                ClearTracking();
-            }
-            catch
-            {
-                if (Transaction.IsActive)
-                {
-                    await AbortTransactionAsync();
-                }
-
-                await DisposeAsync();
-                throw;
             }
         }
     }

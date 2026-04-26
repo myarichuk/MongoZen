@@ -155,7 +155,21 @@ public class DocIdDeduplicationTests : IntegrationTestBase
         typeof(TEntity).GetProperty("Name")!.SetValue(e2, "Second");
 
         // Act: Commit both. Deduplication should take the last one ("Second").
-        await internalSet.CommitAsync(new[] { e1, e2 }, [], [], [], [], arena, upsertBuf, removedBuf, modelBuf, null);
+        // Dirty list is empty for this test.
+        var dedupeBuf = new HashSet<DocId>();
+        var rawIdBuf = new HashSet<object>();
+        await ((IInternalDbSet<TEntity>)dbSet).CommitAsync(
+            added: new[] { e1, e2 }, 
+            removed: [], 
+            removedIds: [], 
+            updated: [], 
+            dirty: [], 
+            upsertBuffer: upsertBuf,
+            dedupeBuffer: dedupeBuf,
+            rawIdBuffer: rawIdBuf,
+            modelBuffer: modelBuf,
+            transaction: TransactionContext.InMemory(),
+            cancellationToken: default);
 
         // Assert
         var results = await collection.Find(FilterDefinition<TEntity>.Empty).ToListAsync();

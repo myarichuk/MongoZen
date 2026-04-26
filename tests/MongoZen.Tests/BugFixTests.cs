@@ -33,9 +33,10 @@ namespace MongoZen.Tests
                     context.People,
                     () => Transaction,
                     this,
-                    (p, a) => IntPtr.Zero, 
+                    (p, a) => (IntPtr)1, 
                     (p, ptr) => true, // Treat as always dirty for these simple tests
                     context.Options.Conventions);
+                RegisterDbSet((MutableDbSet<Person>)People);
             }
 
             public async Task SaveChangesAsync()
@@ -45,6 +46,7 @@ namespace MongoZen.Tests
                 {
                     await CommitTransactionAsync();
                 }
+                ClearTracking();
             }
         }
 

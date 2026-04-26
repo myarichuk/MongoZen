@@ -10,9 +10,10 @@ internal interface IInternalDbSet<T> where T : class
         IEnumerable<object> removedIds, 
         IEnumerable<T> updated, 
         IEnumerable<T> dirty, 
-        Dictionary<object, T> upsertBuffer,
-        HashSet<object> removedIdBuffer,
+        Dictionary<DocId, T> upsertBuffer,
+        HashSet<DocId> dedupeBuffer,
+        HashSet<object> rawIdBuffer,
         List<MongoDB.Driver.WriteModel<T>> modelBuffer,
-        IClientSessionHandle? session, 
+        TransactionContext transaction, 
         CancellationToken cancellationToken = default);
 }

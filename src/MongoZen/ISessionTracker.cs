@@ -5,6 +5,8 @@ namespace MongoZen;
 
 public interface ISessionTracker
 {
+    SharpArena.Allocators.ArenaAllocator Arena { get; }
+
     TEntity Track<TEntity>(
         TEntity entity, 
         object id, 
@@ -15,7 +17,7 @@ public interface ISessionTracker
     
     bool TryGetEntity<TEntity>(object id, out TEntity? entity) where TEntity : class;
 
-    void Untrack<TEntity>(object id);
+    void Untrack<TEntity>(object id) where TEntity : class;
     
     void ClearTracking();
 
