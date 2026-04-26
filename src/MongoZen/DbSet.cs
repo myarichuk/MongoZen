@@ -69,32 +69,38 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 
-    async ValueTask IInternalDbSet<TEntity>.CommitAsync(IEnumerable<TEntity> added, IEnumerable<TEntity> removed, IEnumerable<object> removedIds, IEnumerable<TEntity> updated, IClientSessionHandle? session, CancellationToken cancellationToken)
+    async ValueTask IInternalDbSet<TEntity>.CommitAsync(IEnumerable<TEntity> added, IEnumerable<TEntity> removed, IEnumerable<object> removedIds, IEnumerable<TEntity> updated, Dictionary<object, TEntity> upsertBuffer, HashSet<object> removedIdBuffer, List<WriteModel<TEntity>> modelBuffer, IClientSessionHandle? session, CancellationToken cancellationToken)
     {
-        var models = new List<WriteModel<TEntity>>();
+        modelBuffer.Clear();
+        removedIdBuffer.Clear();
+        upsertBuffer.Clear();
 
         // Track IDs being removed for O(1) exclusion check.
-        var removedIdSet = new HashSet<object>(removed
-            .Where(e => e is not null)
-            .Select(e => e!.GetId(_idAccessor)!)
-            .Concat(removedIds));
-
-        if (removedIdSet.Count > 0)
+        foreach (var entity in removed)
         {
-            models.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, removedIdSet)));
+            if (entity == null) continue;
+            var id = entity.GetId(_idAccessor);
+            if (id != null) removedIdBuffer.Add(id);
         }
 
-        // Use a single dictionary to deduplicate all "Upserts" (Added + Updated).
-        // If an ID appears multiple times, the last one wins, matching the previous behavior.
-        var upserts = new Dictionary<object, TEntity>();
-        
+        foreach (var id in removedIds)
+        {
+            if (id != null) removedIdBuffer.Add(id);
+        }
+
+        if (removedIdBuffer.Count > 0)
+        {
+            modelBuffer.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, removedIdBuffer)));
+        }
+
+        // Use the buffer to deduplicate all "Upserts" (Added + Updated).
         foreach (var entity in added)
         {
             if (entity == null) continue;
             var id = entity.GetId(_idAccessor);
-            if (id != null && !removedIdSet.Contains(id))
+            if (id != null && !removedIdBuffer.Contains(id))
             {
-                upserts[id] = entity;
+                upsertBuffer[id] = entity;
             }
         }
 
@@ -102,28 +108,26 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         {
             if (entity == null) continue;
             var id = entity.GetId(_idAccessor);
-            if (id != null && !removedIdSet.Contains(id))
+            if (id != null && !removedIdBuffer.Contains(id))
             {
-                upserts[id] = entity;
+                upsertBuffer[id] = entity;
             }
         }
 
-        foreach (var entry in upserts)
+        foreach (var entry in upsertBuffer)
         {
-            // We use ReplaceOne + IsUpsert=true because it handles both brand-new 
-            // entities and existing ones correctly in a single operation.
-            models.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, entry.Key), entry.Value) { IsUpsert = true });
+            modelBuffer.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, entry.Key), entry.Value) { IsUpsert = true });
         }
 
-        if (models.Count > 0)
+        if (modelBuffer.Count > 0)
         {
             if (session != null)
             {
-                await _collection.BulkWriteAsync(session, models, cancellationToken: cancellationToken);
+                await _collection.BulkWriteAsync(session, modelBuffer, cancellationToken: cancellationToken);
             }
             else
             {
-                await _collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
+                await _collection.BulkWriteAsync(modelBuffer, cancellationToken: cancellationToken);
             }
         }
     }

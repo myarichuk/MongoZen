@@ -28,6 +28,11 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     private readonly HashSet<TEntity> _updated = new(ReferenceEqualityComparer.Instance);
     private readonly List<(LambdaExpression Path, Type IncludeType)> _includes = [];
 
+    // Pooled buffers to eliminate GC pressure during CommitAsync.
+    private readonly Dictionary<object, TEntity> _commitUpsertBuffer = new();
+    private readonly HashSet<object> _commitRemovedIdBuffer = new();
+    private readonly List<WriteModel<TEntity>> _commitModelBuffer = new();
+
     public IMutableDbSetAdvanced<TEntity> Advanced => this;
 
     public MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
@@ -159,7 +164,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
         if (_baseSet is IInternalDbSet<TEntity> internalSet)
         {
-            await internalSet.CommitAsync(_added, _removed, _removedIds, allUpdated, transaction.Session, cancellationToken);
+            await internalSet.CommitAsync(_added, _removed, _removedIds, allUpdated, _commitUpsertBuffer, _commitRemovedIdBuffer, _commitModelBuffer, transaction.Session, cancellationToken);
         }
         else
         {
