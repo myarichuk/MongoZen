@@ -108,16 +108,20 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDb
         // No-op for InMemoryDbSet as it doesn't track local changes.
     }
 
-    void IInternalMutableDbSet.RevertVersions()
-    {
-        // No-op for InMemoryDbSet because its CommitAsync implementation is atomic.
-    }
-
     async ValueTask IInternalMutableDbSet.CommitAsync(TransactionContext transaction, CancellationToken cancellationToken)
     {
-        // This is called by DbContextSession if the underlying set IS an InMemoryDbSet.
-        // But in MongoZen, DbContextSession always wraps IDbSet in a MutableDbSet.
-        // So this will likely not be called, but we implement it for completeness.
+        var versionGetter = ConcurrencyVersionAccessor<T>.GetGetter(_conventions.ConcurrencyPropertyName);
+        var versionSetter = ConcurrencyVersionAccessor<T>.GetSetter(_conventions.ConcurrencyPropertyName);
+
+        if (versionGetter != null && versionSetter != null)
+        {
+            foreach (var kvp in _data)
+            {
+                var currentVersion = versionGetter(kvp.Value);
+                _versions[kvp.Key] = currentVersion + 1;
+                versionSetter(kvp.Value, currentVersion + 1);
+            }
+        }
         await Task.Yield();
     }
 

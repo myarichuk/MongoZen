@@ -10,24 +10,20 @@ namespace MongoZen;
 /// </summary>
 internal static class EntityIdAccessor<TEntity>
 {
-    private static readonly ConcurrentDictionary<IIdConvention, Lazy<Func<TEntity, object?>>> GetterCache = new();
-    private static readonly ConcurrentDictionary<IIdConvention, Lazy<Action<TEntity, object?>>> SetterCache = new();
+    private static readonly ConcurrentDictionary<IIdConvention, Func<TEntity, object?>> GetterCache = new();
+    private static readonly ConcurrentDictionary<IIdConvention, Action<TEntity, object?>> SetterCache = new();
 
     /// <summary>
     /// Returns the compiled Id‑accessor for the given convention.
     /// </summary>
     internal static Func<TEntity, object?> GetAccessor(IIdConvention convention) =>
-        GetterCache.GetOrAdd(
-            convention,
-            c => new Lazy<Func<TEntity, object?>>(() => BuildGetter(c))).Value;
+        GetterCache.GetOrAdd(convention, BuildGetter);
 
     /// <summary>
     /// Returns the compiled Id‑setter for the given convention.
     /// </summary>
     internal static Action<TEntity, object?> GetSetter(IIdConvention convention) =>
-        SetterCache.GetOrAdd(
-            convention,
-            c => new Lazy<Action<TEntity, object?>>(() => BuildSetter(c))).Value;
+        SetterCache.GetOrAdd(convention, BuildSetter);
 
     private static Func<TEntity, object?> BuildGetter(IIdConvention convention)
     {

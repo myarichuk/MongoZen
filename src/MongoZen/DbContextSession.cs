@@ -8,6 +8,106 @@ using SharpArena.Allocators;
 
 namespace MongoZen;
 
+internal interface IEntityTracker : IDisposable
+{
+    void RefreshShadows(ArenaAllocator arena, int generation);
+    void TrackDynamic(object entity, object id);
+    bool TryGetEntity(object id, out object? entity);
+    void Untrack(object id);
+}
+
+internal class EntityTracker<TEntity> : IEntityTracker where TEntity : class
+{
+    private readonly Func<TEntity, IntPtr, bool>? _differ;
+    private readonly Func<TEntity, ArenaAllocator, IntPtr>? _materializer;
+    public MongoZen.Collections.PooledDictionary<object, (TEntity Entity, ShadowPtr ShadowPtr)> Map;
+
+    public EntityTracker()
+    {
+        Map = new MongoZen.Collections.PooledDictionary<object, (TEntity Entity, ShadowPtr ShadowPtr)>(16);
+    }
+
+    public EntityTracker(Func<TEntity, IntPtr, bool>? differ, Func<TEntity, ArenaAllocator, IntPtr>? materializer)
+        : this()
+    {
+        _differ = differ;
+        _materializer = materializer;
+    }
+
+    public void RefreshShadows(ArenaAllocator arena, int generation)
+    {
+        if (_materializer == null) return;
+
+        foreach (var kvp in Map)
+        {
+            var entry = kvp.Value;
+            var newShadowPtr = new ShadowPtr(_materializer(entry.Entity, arena), generation);
+            Map[kvp.Key] = (entry.Entity, newShadowPtr);
+        }
+    }
+
+    public void TrackDynamic(object entity, object id)
+    {
+        if (!Map.ContainsKey(id))
+        {
+            Map[id] = ((TEntity)entity, ShadowPtr.Zero);
+        }
+    }
+
+    public bool TryGetEntity(object id, out object? entity)
+    {
+        if (Map.TryGetValue(id, out var entry))
+        {
+            entity = entry.Entity;
+            return true;
+        }
+        entity = null;
+        return false;
+    }
+
+    public void Untrack(object id) => Map.Remove(id);
+
+    public IEnumerable<TEntity> GetDirtyEntities(int currentGeneration)
+    {
+        if (_differ == null) yield break;
+
+        foreach (var kvp in Map)
+        {
+            var entry = kvp.Value;
+            if (entry.ShadowPtr.IsZero) continue;
+#if DEBUG
+            if (entry.ShadowPtr.Generation != currentGeneration)
+            {
+                throw new InvalidOperationException("Attempted to access a shadow pointer from a previous arena generation. This pointer is stale and unsafe to use.");
+            }
+#endif
+            if (_differ(entry.Entity, entry.ShadowPtr))
+            {
+                yield return entry.Entity;
+            }
+        }
+    }
+
+    public TEntity Track(TEntity entity, object id, bool forceShadow, ArenaAllocator arena, int generation)
+    {
+        if (Map.TryGetValue(id, out var existing))
+        {
+            return existing.Entity;
+        }
+
+        ShadowPtr shadowPtr = ShadowPtr.Zero;
+        if (forceShadow)
+        {
+            shadowPtr = new ShadowPtr(_materializer(entity, arena), generation);
+        }
+
+        Map[id] = (entity, shadowPtr);
+        return entity;
+    }
+
+    public void Dispose() => Map.Dispose();
+}
+
 /// <summary>
 /// Non-generic interface for session tracking and access to the context.
 /// </summary>
@@ -49,29 +149,11 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     protected bool _inMemoryTransaction;
 
     protected readonly ArenaAllocator _arena = new();
+    protected int _arenaGeneration = 0;
     protected readonly Dictionary<Type, IInternalMutableDbSet> _dbSets = new();
 
-    private class TypeTrackingInfo : IDisposable
-    {
-        public readonly object Differ;
-        public readonly object Materializer;
-        public MongoZen.Collections.PooledDictionary<object, (object Entity, IntPtr ShadowPtr)> Map;
-
-        public TypeTrackingInfo(object differ, object materializer)
-        {
-            Differ = differ;
-            Materializer = materializer;
-            Map = new MongoZen.Collections.PooledDictionary<object, (object Entity, IntPtr ShadowPtr)>(16);
-        }
-
-        public void Dispose()
-        {
-            Map.Dispose();
-        }
-    }
-
     // Identity Map and Shadow storage. 
-    private readonly Dictionary<Type, TypeTrackingInfo> _trackedEntities = new();
+    private readonly Dictionary<Type, IEntityTracker> _trackedEntities = new();
 
     protected DbContextSession(TDbContext dbContext, bool startTransaction = true)
     {
@@ -95,12 +177,21 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
 
     public IDbContextSessionAdvanced Advanced => this;
 
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
     public virtual void Store<TEntity>(TEntity entity) where TEntity : class
         => throw new NotSupportedException("This method must be overridden by a derived class or provided by the source generator.");
 
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
     public virtual void Delete<TEntity>(TEntity entity) where TEntity : class
         => throw new NotSupportedException("This method must be overridden by a derived class or provided by the source generator.");
 
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
     public virtual void Delete<TEntity>(object id) where TEntity : class
         => throw new NotSupportedException("This method must be overridden by a derived class or provided by the source generator.");
 
@@ -119,8 +210,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         catch (ConcurrencyException)
         {
             // If we fail, we MUST NOT refresh shadows.
-            // Revert version numbers in the entities because DbSet.CommitAsync already incremented them.
-            RevertVersions();
+            // Version numbers are reverted in DbSet.CommitAsync locally.
             throw;
         }
 
@@ -140,14 +230,6 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         AcceptChanges();
     }
 
-    private void RevertVersions()
-    {
-        foreach (var set in _dbSets.Values)
-        {
-            set.RevertVersions();
-        }
-    }
-
     private void AcceptChanges()
     {
         // 1. Refresh shadows for all tracked entities.
@@ -165,6 +247,9 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         _dbSets[typeof(TEntity)] = set;
     }
 
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
     public void RefreshShadows<TEntity>(
         Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr> materializer,
@@ -172,20 +257,12 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     {
         if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) return;
 
-        // Updating values in-place while iterating is safe for Dictionary in .NET.
-        foreach (var kvp in info.Map)
-        {
-            var entry = kvp.Value;
-            var entity = (TEntity)entry.Entity;
-            
-            // Only increment version if we are actually refreshing (AcceptChanges)
-            versionIncrementer?.Invoke(entity);
-
-            var newShadowPtr = materializer(entity, _arena);
-            info.Map[kvp.Key] = (entity, newShadowPtr);
-        }
+        info.RefreshShadows(_arena, _arenaGeneration);
     }
 
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
     public TEntity Track<TEntity>(
         TEntity entity,
@@ -194,6 +271,9 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         Func<TEntity, IntPtr, bool> differ) where TEntity : class
         => Track(entity, id, materializer, differ, true);
 
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
     public TEntity Track<TEntity>(
         TEntity entity,
@@ -205,78 +285,69 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         var type = typeof(TEntity);
         if (!_trackedEntities.TryGetValue(type, out var info))
         {
-            info = new TypeTrackingInfo(differ, materializer);
+            info = new EntityTracker<TEntity>(differ, materializer);
             _trackedEntities[type] = info;
         }
 
-        if (info.Map.TryGetValue(id, out var existing))
-        {
-            return (TEntity)existing.Entity;
-        }
-
-        IntPtr shadowPtr = IntPtr.Zero;
-        if (forceShadow)
-        {
-            shadowPtr = materializer(entity, _arena);
-        }
-
-        info.Map[id] = (entity, shadowPtr);
-        return entity;
+        return ((EntityTracker<TEntity>)info).Track(entity, id, forceShadow, _arena, _arenaGeneration);
     }
 
 
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
     public void TrackDynamic(object entity, Type entityType, object id)
     {
         if (!_trackedEntities.TryGetValue(entityType, out var info))
         {
-            info = new TypeTrackingInfo(null!, null!);
+            // Fallback for types not known at compile time - limited tracking
+            // Since we don't have differ/materializer, we can't do full tracking
+            // but we can at least put it in the identity map.
+            // This is used for Includes.
+            var trackerType = typeof(EntityTracker<>).MakeGenericType(entityType);
+            info = (IEntityTracker)Activator.CreateInstance(trackerType, null!, null!)!;
             _trackedEntities[entityType] = info;
         }
-        if (!info.Map.ContainsKey(id))
-        {
-            info.Map[id] = (entity, IntPtr.Zero);
-        }
+        info.TrackDynamic(entity, id);
     }
 
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
     public void Untrack<TEntity>(object id) where TEntity : class
     {
         if (_trackedEntities.TryGetValue(typeof(TEntity), out var info))
         {
-            info.Map.Remove(id);
+            info.Untrack(id);
         }
     }
 
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
     public bool TryGetEntity<TEntity>(object id, out TEntity? entity) where TEntity : class
     {
-        if (_trackedEntities.TryGetValue(typeof(TEntity), out var info) && info.Map.TryGetValue(id, out var entry))
+        if (_trackedEntities.TryGetValue(typeof(TEntity), out var info) && info.TryGetEntity(id, out var obj))
         {
-            entity = (TEntity)entry.Entity;
+            entity = (TEntity?)obj;
             return true;
         }
         entity = null;
         return false;
     }
 
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
     public IEnumerable<TEntity> GetDirtyEntities<TEntity>() where TEntity : class
     {
-        if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) yield break;
+        if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) return Enumerable.Empty<TEntity>();
 
-        var differ = (Func<TEntity, IntPtr, bool>)info.Differ;
-        if (differ == null) yield break;
-
-        foreach (var kvp in info.Map)
-        {
-            var entry = kvp.Value;
-            if (entry.ShadowPtr == IntPtr.Zero) continue;
-            if (differ((TEntity)entry.Entity, entry.ShadowPtr))
-            {
-                yield return (TEntity)entry.Entity;
-            }
-        }
+        return ((EntityTracker<TEntity>)info).GetDirtyEntities(_arenaGeneration);
     }
 
 
@@ -296,6 +367,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
              set.ClearTracking();
         }
         _arena.Reset();
+        _arenaGeneration++;
     }
 
     public async Task CommitTransactionAsync()
@@ -312,7 +384,6 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         }
 
         await _session.CommitTransactionAsync();
-        _session.StartTransaction();
     }
 
     public async Task AbortTransactionAsync()

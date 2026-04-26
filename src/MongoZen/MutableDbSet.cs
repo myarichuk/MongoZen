@@ -21,6 +21,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
     private readonly Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr>? _materializer;
     private readonly Func<TEntity, IntPtr, bool>? _differ;
+    private readonly Func<TEntity, TEntity> _trackSingleDelegate;
 
     private PooledHashSet<TEntity> _added;
     private PooledList<TEntity> _removed;
@@ -35,12 +36,13 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
     public IMutableDbSetAdvanced<TEntity> Advanced => this;
 
-    public MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
+    public MutableDbSet(IDbSet<TEntity> baseSet, Conventions conventions)
     {
-        _dbSet = baseSet;
-        _conventions = conventions ?? new();
+        _dbSet = baseSet ?? throw new ArgumentNullException(nameof(baseSet));
+        _conventions = conventions ?? throw new ArgumentNullException(nameof(conventions));
         _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
         _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
+        _trackSingleDelegate = TrackSingle;
         
         // Initialize pooled collections with reference equality where needed
         _added = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
@@ -62,7 +64,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr>? materializer = null,
         Func<TEntity, IntPtr, bool>? differ = null,
         Conventions? conventions = null)
-        : this(baseSet, conventions)
+        : this(baseSet, conventions ?? new Conventions())
     {
         _transactionProvider = transactionProvider;
         _tracker = tracker;
@@ -151,7 +153,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     {
         var memberExpr = path.Body as MemberExpression;
         if (memberExpr == null && path.Body is UnaryExpression unary) memberExpr = unary.Operand as MemberExpression;
-        return memberExpr?.Type ?? typeof(object);
+        return memberExpr?.Type ?? throw new ArgumentException("Could not resolve include type from expression. Ensure it is a simple property access.");
     }
 
     IDbSet<TEntity> IDbSet<TEntity>.Include(Expression<Func<TEntity, object?>> path) => Include(path);
@@ -168,7 +170,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _removedIds.Dispose();
         _updated.Dispose();
         _includes.Dispose();
-        
+
         _upsertBuffer.Dispose();
         _rawIdBuffer.Dispose();
         _modelBuffer.Dispose();
@@ -176,10 +178,11 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
         // Re-initialize for next use
         _added = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
-        _updated = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
         _removed = new PooledList<TEntity>(8);
         _removedIds = new PooledList<object>(8);
+        _updated = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
         _includes = new PooledList<(LambdaExpression Path, Type IncludeType)>(4);
+
         _upsertBuffer = new PooledDictionary<DocId, TEntity>(16);
         _rawIdBuffer = new PooledHashSet<object>(16);
         _modelBuffer = new PooledList<WriteModel<TEntity>>(16);
@@ -192,22 +195,6 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         if (_materializer != null)
         {
             tracker.RefreshShadows<TEntity>(_materializer);
-        }
-    }
-
-    void IInternalMutableDbSet.RevertVersions()
-    {
-        if (_upsertBuffer.Count == 0) return;
-
-        var versionSetter = ConcurrencyVersionAccessor<TEntity>.GetSetter(_conventions.ConcurrencyPropertyName);
-        var versionGetter = ConcurrencyVersionAccessor<TEntity>.GetGetter(_conventions.ConcurrencyPropertyName);
-
-        if (versionSetter == null || versionGetter == null) return;
-
-        foreach (var entry in _upsertBuffer)
-        {
-            var current = versionGetter(entry.Value);
-            versionSetter(entry.Value, current - 1);
         }
     }
 
@@ -284,8 +271,10 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
     private async Task<IEnumerable<TEntity>> QueryWithIncludesAsync(DbSet<TEntity> mongoSet, FilterDefinition<TEntity> filter, IClientSessionHandle? session, CancellationToken cancellationToken)
     {
-        var pipeline = new List<BsonDocument> { new BsonDocument("$match", filter.Render(new RenderArgs<TEntity>(mongoSet.Collection.DocumentSerializer, mongoSet.Collection.Settings.SerializerRegistry))) };
-        var includeMaps = new List<(string LocalField, string ForeignCollection, string AsField, Type ForeignType)>();
+        using var pipeline = new PooledList<BsonDocument>(16);
+        pipeline.Add(new BsonDocument("$match", filter.Render(new RenderArgs<TEntity>(mongoSet.Collection.DocumentSerializer, mongoSet.Collection.Settings.SerializerRegistry))));
+        
+        using var includeMaps = new PooledList<(string LocalField, string ForeignCollection, string AsField, Type ForeignType)>(8);
 
         foreach (var (path, includeType) in _includes)
         {
@@ -361,6 +350,6 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     private IEnumerable<TEntity> TrackResults(IEnumerable<TEntity> entities)
     {
         if (_tracker == null) return entities;
-        return entities.Select(TrackSingle);
+        return entities.Select(_trackSingleDelegate);
     }
 }

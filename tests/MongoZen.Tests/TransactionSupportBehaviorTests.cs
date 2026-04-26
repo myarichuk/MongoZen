@@ -55,7 +55,7 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
         var ctx = new TestDbContext(new DbContextOptions(Database!, new Conventions { DisableTransactions = true }));
 
         var ex = Assert.Throws<InvalidOperationException>(() => new TestDbContextSession(ctx));
-        Assert.Contains("Transactions not supported", ex.Message);
+        Assert.Contains("Transactions not supported.", ex.Message);
     }
 
     [Fact]

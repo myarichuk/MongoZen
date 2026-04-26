@@ -169,7 +169,8 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         var versionAccessorsResolved = false;
 
         var updateCount = 0;
-        Dictionary<object, long>? versionMap = null;
+        bool hasVersionMap = false;
+        var versionMap = new MongoZen.Collections.PooledDictionary<DocId, (object RawId, long Version)>();
 
         foreach (var entry in upsertBuffer)
         {
@@ -185,11 +186,16 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
                 versionAccessorsResolved = true;
             }
 
-            if (versionGetter != null && versionSetter != null && concurrencyElementName != null)
+            if (versionGetter != null && versionSetter != null && concurrencyElementName != null && rawId != null)
             {
+                if (!hasVersionMap)
+                {
+                    versionMap = new MongoZen.Collections.PooledDictionary<DocId, (object RawId, long Version)>(upsertBuffer.Count);
+                    hasVersionMap = true;
+                }
+                
                 var currentVersion = versionGetter(entity);
-                versionMap ??= new Dictionary<object, long>();
-                versionMap[rawId] = currentVersion;
+                versionMap[DocId.From(rawId)] = (rawId, currentVersion);
 
                 filter = Builders<TEntity>.Filter.And(filter, Builders<TEntity>.Filter.Eq(concurrencyElementName, currentVersion));
                 
@@ -206,27 +212,55 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
 
         if (modelBuffer.Count > 0)
         {
-            BulkWriteResult result;
-            if (transaction.Session != null)
+            try
             {
-                result = await _collection.BulkWriteAsync(transaction.Session, modelBuffer, cancellationToken: cancellationToken);
-            }
-            else
-            {
-                result = await _collection.BulkWriteAsync(modelBuffer, cancellationToken: cancellationToken);
-            }
+                BulkWriteResult result;
+                if (transaction.Session != null)
+                {
+                    result = await _collection.BulkWriteAsync(transaction.Session, modelBuffer, cancellationToken: cancellationToken);
+                }
+                else
+                {
+                    result = await _collection.BulkWriteAsync(modelBuffer, cancellationToken: cancellationToken);
+                }
 
-            if (updateCount > 0 && result.MatchedCount < updateCount)
+                if (updateCount > 0 && result.MatchedCount < updateCount)
+                {
+                    var failedIds = await FindConcurrencyConflictsAsync(versionMap, concurrencyElementName!, transaction.Session, cancellationToken);
+                    throw new ConcurrencyException($"Optimistic concurrency check failed. Expected {updateCount} matches, but got {result.MatchedCount}.", failedIds);
+                }
+            }
+            catch
             {
-                var failedIds = await FindConcurrencyConflictsAsync(versionMap!, concurrencyElementName!, transaction.Session, cancellationToken);
-                throw new ConcurrencyException($"Optimistic concurrency check failed. Expected {updateCount} matches, but got {result.MatchedCount}.", failedIds);
+                // Revert versions if bulk write failed or if concurrency conflict was thrown
+                if (hasVersionMap && versionSetter != null)
+                {
+                    foreach (var entry in upsertBuffer)
+                    {
+                        var rawId = entry.Value.GetId(_idAccessor);
+                        if (rawId != null && versionMap.TryGetValue(DocId.From(rawId), out var original))
+                        {
+                            versionSetter(entry.Value, original.Version);
+                        }
+                    }
+                }
+                throw;
+            }
+            finally
+            {
+                if (hasVersionMap) versionMap.Dispose();
             }
         }
     }
 
-    private async Task<List<object>> FindConcurrencyConflictsAsync(Dictionary<object, long> versionMap, string concurrencyElementName, IClientSessionHandle? session, CancellationToken ct)
+    private async Task<List<object>> FindConcurrencyConflictsAsync(MongoZen.Collections.PooledDictionary<DocId, (object RawId, long Version)> versionMap, string concurrencyElementName, IClientSessionHandle? session, CancellationToken ct)
     {
-        var ids = versionMap.Keys.ToList();
+        var ids = new List<object>(versionMap.Count);
+        foreach (var entry in versionMap)
+        {
+            ids.Add(entry.Value.RawId);
+        }
+
         var projection = Builders<TEntity>.Projection.Include(_idFieldName).Include(concurrencyElementName);
         
         List<BsonDocument> docs;
@@ -236,33 +270,34 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         else
             docs = await _collection.Find(filter).Project(projection).ToListAsync(ct);
 
-        var foundIds = new HashSet<object>();
-        var conflicts = new List<object>();
+        using var foundIds = new MongoZen.Collections.PooledHashSet<DocId>(docs.Count);
+        using var conflicts = new MongoZen.Collections.PooledList<object>(ids.Count);
 
         foreach (var doc in docs)
         {
-            var id = BsonTypeMapper.MapToDotNetValue(doc["_id"]);
-            foundIds.Add(id);
+            var rawIdFromDb = BsonTypeMapper.MapToDotNetValue(doc["_id"]);
+            var docId = DocId.From(rawIdFromDb);
+            foundIds.Add(docId);
 
-            if (versionMap.TryGetValue(id, out var expectedVersion))
+            if (versionMap.TryGetValue(docId, out var expected))
             {
                 var actualVersion = BsonTypeMapper.MapToDotNetValue(doc[concurrencyElementName]);
-                if (Convert.ToInt64(actualVersion) != expectedVersion)
+                if (Convert.ToInt64(actualVersion) != expected.Version)
                 {
-                    conflicts.Add(id);
+                    conflicts.Add(expected.RawId);
                 }
             }
         }
 
         // Also include IDs that were completely missing (deleted)
-        foreach (var id in ids)
+        foreach (var entry in versionMap)
         {
-            if (!foundIds.Contains(id))
+            if (!foundIds.Contains(entry.Key))
             {
-                conflicts.Add(id);
+                conflicts.Add(entry.Value.RawId);
             }
         }
 
-        return conflicts;
+        return conflicts.ToList();
     }
 }

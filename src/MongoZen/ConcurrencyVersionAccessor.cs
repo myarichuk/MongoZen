@@ -9,22 +9,22 @@ namespace MongoZen;
 
 internal static class ConcurrencyVersionAccessor<TEntity>
 {
-    private static readonly ConcurrentDictionary<string, Lazy<Func<TEntity, long>?>> GetterCache = new();
-    private static readonly ConcurrentDictionary<string, Lazy<Action<TEntity, long>?>> SetterCache = new();
+    private static readonly ConcurrentDictionary<string, Func<TEntity, long>?> GetterCache = new();
+    private static readonly ConcurrentDictionary<string, Action<TEntity, long>?> SetterCache = new();
     private static readonly ConcurrentDictionary<string, string?> ElementNameCache = new();
 
     internal static Func<TEntity, long>? GetGetter(string? propertyName)
     {
         if (string.IsNullOrEmpty(propertyName)) return null;
 
-        return GetterCache.GetOrAdd(propertyName, name => new Lazy<Func<TEntity, long>?>(() => BuildGetter(name))).Value;
+        return GetterCache.GetOrAdd(propertyName, BuildGetter);
     }
 
     internal static Action<TEntity, long>? GetSetter(string? propertyName)
     {
         if (string.IsNullOrEmpty(propertyName)) return null;
 
-        return SetterCache.GetOrAdd(propertyName, name => new Lazy<Action<TEntity, long>?>(() => BuildSetter(name))).Value;
+        return SetterCache.GetOrAdd(propertyName, BuildSetter);
     }
 
     internal static string? GetElementName(string? propertyName)

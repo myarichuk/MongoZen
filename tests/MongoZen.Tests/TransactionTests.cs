@@ -91,7 +91,7 @@ public class TransactionTests : IntegrationTestBase
         using var clientSession = Client.StartSession();
         clientSession.StartTransaction();
 
-        var mutableSet = new MutableDbSet<User>(ctx.Users);
+        var mutableSet = new MutableDbSet<User>(ctx.Users, new Conventions());
         mutableSet.Add(new User { Id = "1", Name = "Alice" });
         // Removing a non-existent entity with an invalid ID structure shouldn't cause a failure, but we want to simulate some "dirty" work
         mutableSet.Remove("non-existent-id");
