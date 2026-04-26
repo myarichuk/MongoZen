@@ -8,9 +8,8 @@ using MongoDB.Driver;
 
 namespace MongoZen;
 
-public class DbSet<TEntity> : IDbSet<TEntity> where TEntity : class
+public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEntity : class
 {
-    private readonly IQueryable<TEntity> _collectionAsQueryable;
     private readonly Func<TEntity, object?> _idAccessor;
     private readonly string _idFieldName;
     private readonly Conventions _conventions;
@@ -24,7 +23,6 @@ public class DbSet<TEntity> : IDbSet<TEntity> where TEntity : class
         _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
         _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
         _collection = collection;
-        _collectionAsQueryable = _collection.AsQueryable();
     }
 
     public async ValueTask<TEntity?> LoadAsync(object id, CancellationToken cancellationToken = default)
@@ -57,22 +55,12 @@ public class DbSet<TEntity> : IDbSet<TEntity> where TEntity : class
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default) =>
         await (await _collection.FindAsync(session, Builders<TEntity>.Filter.Where(filter), cancellationToken: cancellationToken)).ToListAsync(cancellationToken);
 
-    public IEnumerator<TEntity> GetEnumerator() => throw new NotSupportedException("Use QueryAsync for asynchronous execution instead of synchronous LINQ evaluation.");
-
-    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
-
-    public Type ElementType => _collectionAsQueryable.ElementType;
-
-    public Expression Expression => _collectionAsQueryable.Expression;
-
-    public IQueryProvider Provider => _collectionAsQueryable.Provider;
-
     internal IMongoCollection<TEntity> Collection => _collection;
 
     public async Task Remove(TEntity entity)
     {
         var id = _idAccessor(entity) ?? throw new InvalidOperationException($"Entity of type {typeof(TEntity).Name} doesn't expose an Id.");
-        var filter = Builders<TEntity>.Filter.Eq("_id", id);
+        var filter = Builders<TEntity>.Filter.Eq(_idFieldName, id);
         var result = await _collection.DeleteOneAsync(filter);
 
         if (result.DeletedCount != 1)
@@ -80,4 +68,54 @@ public class DbSet<TEntity> : IDbSet<TEntity> where TEntity : class
             throw new InvalidOperationException($"Delete failed for entity with Id '{id}'.");
         }
     }
+
+    async ValueTask IInternalDbSet<TEntity>.CommitAsync(IEnumerable<TEntity> added, IEnumerable<TEntity> removed, IEnumerable<object> removedIds, IEnumerable<TEntity> updated, IClientSessionHandle? session, CancellationToken cancellationToken)
+    {
+        var models = new List<WriteModel<TEntity>>();
+
+        // Use a HashSet for efficient O(1) skip checks. 
+        // We track IDs that are being removed so we don't try to upsert/update them.
+        var removedIdSet = new HashSet<object>(removed
+            .Where(e => e is not null)
+            .Select(e => e!.GetId(_idAccessor)!)
+            .Concat(removedIds));
+
+        if (removedIdSet.Count > 0)
+        {
+            models.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, removedIdSet)));
+        }
+
+        // Add brand-new entities using InsertOneModel (zero filter allocation overhead)
+        foreach (var entity in added)
+        {
+            if (entity == null) continue;
+            var id = entity.GetId(_idAccessor);
+            if (id == null || removedIdSet.Contains(id)) continue;
+
+            models.Add(new InsertOneModel<TEntity>(entity));
+        }
+
+        // Add modified entities using ReplaceOneModel
+        foreach (var entity in updated)
+        {
+            if (entity == null) continue;
+            var id = entity.GetId(_idAccessor);
+            if (id == null || removedIdSet.Contains(id)) continue;
+
+            models.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, id), entity));
+        }
+
+        if (models.Count > 0)
+        {
+            if (session != null)
+            {
+                await _collection.BulkWriteAsync(session, models, cancellationToken: cancellationToken);
+            }
+            else
+            {
+                await _collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
+            }
+        }
+    }
 }
+

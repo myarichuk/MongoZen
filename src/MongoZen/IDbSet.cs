@@ -3,7 +3,7 @@ using MongoDB.Driver;
 
 namespace MongoZen;
 
-public interface IDbSet<T> : IQueryable<T> where T : class
+public interface IDbSet<T> where T : class
 {
     string CollectionName { get; }
 
