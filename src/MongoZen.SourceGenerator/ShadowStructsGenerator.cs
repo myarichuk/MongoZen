@@ -168,7 +168,7 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
     private static string GetShadowTypeName(ITypeSymbol type, Queue<INamedTypeSymbol> queue)
     {
         if (type.SpecialType == SpecialType.System_String)
-            return "SharpArena.Collections.ArenaString";
+            return "global::MongoZen.Collections.ArenaString";
 
         if (IsPrimitive(type))
             return type.ToDisplayString();
@@ -279,7 +279,7 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
     {
         if (type.SpecialType == SpecialType.System_String)
         {
-            sb.Append(indent).Append(targetExpr).Append(" = SharpArena.Collections.ArenaString.Clone(").Append(sourceExpr).AppendLine(", arena);");
+            sb.Append(indent).Append(targetExpr).Append(" = global::MongoZen.Collections.ArenaString.Clone(").Append(sourceExpr).AppendLine(", arena);");
         }
         else if (IsPrimitive(type))
         {

@@ -51,9 +51,27 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     protected readonly ArenaAllocator _arena = new();
     protected readonly Dictionary<Type, IInternalMutableDbSet> _dbSets = new();
 
+    private class TypeTrackingInfo : IDisposable
+    {
+        public readonly object Differ;
+        public readonly object Materializer;
+        public MongoZen.Collections.PooledDictionary<object, (object Entity, IntPtr ShadowPtr)> Map;
+
+        public TypeTrackingInfo(object differ, object materializer)
+        {
+            Differ = differ;
+            Materializer = materializer;
+            Map = new MongoZen.Collections.PooledDictionary<object, (object Entity, IntPtr ShadowPtr)>(16);
+        }
+
+        public void Dispose()
+        {
+            Map.Dispose();
+        }
+    }
+
     // Identity Map and Shadow storage. 
-    // Tuple: (Entity, ShadowPtr, DifferFunc, MaterializerFunc)
-    private readonly Dictionary<Type, Dictionary<object, (object Entity, IntPtr ShadowPtr, object Differ, object Materializer)>> _trackedEntities = new();
+    private readonly Dictionary<Type, TypeTrackingInfo> _trackedEntities = new();
 
     protected DbContextSession(TDbContext dbContext, bool startTransaction = true)
     {
@@ -152,25 +170,19 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr> materializer,
         Action<TEntity>? versionIncrementer = null) where TEntity : class
     {
-        if (!_trackedEntities.TryGetValue(typeof(TEntity), out var map)) return;
+        if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) return;
 
-        // NOTE: each RefreshShadows call allocates new shadow blocks from the arena
-        // without reclaiming the old ones (standard arena behavior). This ensures
-        // the session stays consistent but means arena memory grows on every save
-        // for long-lived sessions.
         // Updating values in-place while iterating is safe for Dictionary in .NET.
-        foreach (var kvp in map)
+        foreach (var kvp in info.Map)
         {
             var entry = kvp.Value;
-            if (entry.ShadowPtr == IntPtr.Zero || entry.Materializer == null) continue;
-
             var entity = (TEntity)entry.Entity;
             
             // Only increment version if we are actually refreshing (AcceptChanges)
             versionIncrementer?.Invoke(entity);
 
             var newShadowPtr = materializer(entity, _arena);
-            map[kvp.Key] = (entity, newShadowPtr, entry.Differ, entry.Materializer);
+            info.Map[kvp.Key] = (entity, newShadowPtr);
         }
     }
 
@@ -180,51 +192,66 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         object id,
         Func<TEntity, ArenaAllocator, IntPtr> materializer,
         Func<TEntity, IntPtr, bool> differ) where TEntity : class
+        => Track(entity, id, materializer, differ, true);
+
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public TEntity Track<TEntity>(
+        TEntity entity,
+        object id,
+        Func<TEntity, ArenaAllocator, IntPtr> materializer,
+        Func<TEntity, IntPtr, bool> differ,
+        bool forceShadow) where TEntity : class
     {
         var type = typeof(TEntity);
-        if (!_trackedEntities.TryGetValue(type, out var map))
+        if (!_trackedEntities.TryGetValue(type, out var info))
         {
-            map = new Dictionary<object, (object Entity, IntPtr ShadowPtr, object Differ, object Materializer)>();
-            _trackedEntities[type] = map;
+            info = new TypeTrackingInfo(differ, materializer);
+            _trackedEntities[type] = info;
         }
 
-        if (map.TryGetValue(id, out var existing))
+        if (info.Map.TryGetValue(id, out var existing))
         {
             return (TEntity)existing.Entity;
         }
 
-        var shadowPtr = materializer(entity, _arena);
-        map[id] = (entity, shadowPtr, differ, materializer);
+        IntPtr shadowPtr = IntPtr.Zero;
+        if (forceShadow)
+        {
+            shadowPtr = materializer(entity, _arena);
+        }
+
+        info.Map[id] = (entity, shadowPtr);
         return entity;
     }
+
 
     [EditorBrowsable(EditorBrowsableState.Never)]
     public void TrackDynamic(object entity, Type entityType, object id)
     {
-        if (!_trackedEntities.TryGetValue(entityType, out var map))
+        if (!_trackedEntities.TryGetValue(entityType, out var info))
         {
-            map = new Dictionary<object, (object Entity, IntPtr ShadowPtr, object Differ, object Materializer)>();
-            _trackedEntities[entityType] = map;
+            info = new TypeTrackingInfo(null!, null!);
+            _trackedEntities[entityType] = info;
         }
-        if (!map.ContainsKey(id))
+        if (!info.Map.ContainsKey(id))
         {
-            map[id] = (entity, IntPtr.Zero, null!, null!);
+            info.Map[id] = (entity, IntPtr.Zero);
         }
     }
 
     [EditorBrowsable(EditorBrowsableState.Never)]
     public void Untrack<TEntity>(object id) where TEntity : class
     {
-        if (_trackedEntities.TryGetValue(typeof(TEntity), out var map))
+        if (_trackedEntities.TryGetValue(typeof(TEntity), out var info))
         {
-            map.Remove(id);
+            info.Map.Remove(id);
         }
     }
 
     [EditorBrowsable(EditorBrowsableState.Never)]
     public bool TryGetEntity<TEntity>(object id, out TEntity? entity) where TEntity : class
     {
-        if (_trackedEntities.TryGetValue(typeof(TEntity), out var map) && map.TryGetValue(id, out var entry))
+        if (_trackedEntities.TryGetValue(typeof(TEntity), out var info) && info.Map.TryGetValue(id, out var entry))
         {
             entity = (TEntity)entry.Entity;
             return true;
@@ -236,12 +263,15 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     [EditorBrowsable(EditorBrowsableState.Never)]
     public IEnumerable<TEntity> GetDirtyEntities<TEntity>() where TEntity : class
     {
-        if (!_trackedEntities.TryGetValue(typeof(TEntity), out var map)) yield break;
+        if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) yield break;
 
-        foreach (var entry in map.Values)
+        var differ = (Func<TEntity, IntPtr, bool>)info.Differ;
+        if (differ == null) yield break;
+
+        foreach (var kvp in info.Map)
         {
-            if (entry.ShadowPtr == IntPtr.Zero || entry.Differ == null) continue;
-            var differ = (Func<TEntity, IntPtr, bool>)entry.Differ;
+            var entry = kvp.Value;
+            if (entry.ShadowPtr == IntPtr.Zero) continue;
             if (differ((TEntity)entry.Entity, entry.ShadowPtr))
             {
                 yield return (TEntity)entry.Entity;
@@ -249,12 +279,18 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         }
     }
 
+
     public void ClearTracking()
     {
         // IMPORTANT: clear the identity map BEFORE resetting the arena.
         // Any code that reads a ShadowPtr after Reset() dereferences freed memory.
         // Clearing the map first ensures no stale pointers can be reached.
+        foreach (var info in _trackedEntities.Values)
+        {
+            info.Dispose();
+        }
         _trackedEntities.Clear();
+
         foreach (var set in _dbSets.Values)
         {
              set.ClearTracking();
@@ -301,6 +337,18 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
 
     public async ValueTask DisposeAsync()
     {
+        foreach (var info in _trackedEntities.Values)
+        {
+            info.Dispose();
+        }
+        _trackedEntities.Clear();
+
+        foreach (var set in _dbSets.Values)
+        {
+            set.Dispose();
+        }
+        _dbSets.Clear();
+
         if (_session != null)
         {
             if (_session.IsInTransaction && _ownsSession)
@@ -316,6 +364,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         _arena.Dispose();
         GC.SuppressFinalize(this);
     }
+
 
     protected void EnsureTransactionActive()
     {

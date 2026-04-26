@@ -8,6 +8,7 @@ namespace MongoZen.Collections;
 
 /// <summary>
 /// Append-only open-addressed dictionary backed by an <see cref="ArenaAllocator"/>.
+/// Uses a separate linear item buffer and a disposable sparse index for zero-copy growth.
 /// </summary>
 public unsafe struct ArenaDictionary<TKey, TValue>
     where TKey : unmanaged, IEquatable<TKey>
@@ -23,10 +24,11 @@ public unsafe struct ArenaDictionary<TKey, TValue>
         public TValue Value;
     }
 
-    private Entry* _entries;
-    private byte* _occupied;
-    private int _capacityMask;
-    private int _count;
+    private Entry* _entries;    // Linear buffer of items (never moves)
+    private int* _buckets;      // Sparse index (disposable/leaked on growth)
+    private int _capacityMask;  // Mask for _buckets
+    private int _count;         // Number of items in _entries
+    private int _entriesCapacity; // Allocated size of _entries
     private ArenaAllocator _arena;
 
     public ArenaDictionary(ArenaAllocator arena, int initialCapacity = 128)
@@ -37,10 +39,15 @@ public unsafe struct ArenaDictionary<TKey, TValue>
         _count = 0;
 
         int cap = NextPowerOfTwo(Math.Max(initialCapacity, MinCapacity));
-        _entries = null;
-        _occupied = null;
-        _capacityMask = 0;
-        AllocateArrays(cap);
+        _capacityMask = cap - 1;
+        
+        _entriesCapacity = initialCapacity;
+        _entries = (Entry*)_arena.Alloc((nuint)(_entriesCapacity * sizeof(Entry)));
+        
+        _buckets = (int*)_arena.Alloc((nuint)(cap * sizeof(int)));
+        NativeMemory.Clear(_buckets, (nuint)(cap * sizeof(int)));
+        // Use -1 to indicate empty bucket, but NativeMemory.Clear sets to 0. 
+        // We'll use 1-based indexing for buckets: 0 = empty, i+1 = index in _entries.
     }
 
     public readonly int Count => _count;
@@ -49,26 +56,44 @@ public unsafe struct ArenaDictionary<TKey, TValue>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void AddOrUpdate(TKey key, TValue value)
     {
-        if (_count * 100 >= Capacity * 72)
-            Grow();
-
+        // 1. Check if key exists and update it
         int mask = _capacityMask;
-        int slot = key.GetHashCode() & mask;
+        int hashCode = key.GetHashCode();
+        int slot = hashCode & mask;
 
-        while (_occupied[slot] != 0)
+        while (true)
         {
-            if (_entries[slot].Key.Equals(key))
+            int entryIndexPlusOne = _buckets[slot];
+            if (entryIndexPlusOne == 0) break; // Empty slot found
+
+            int entryIndex = entryIndexPlusOne - 1;
+            if (_entries[entryIndex].Key.Equals(key))
             {
-                _entries[slot].Value = value;
+                _entries[entryIndex].Value = value;
                 return;
             }
             slot = (slot + 1) & mask;
         }
 
-        _entries[slot].Key = key;
-        _entries[slot].Value = value;
-        _occupied[slot] = 1;
-        _count++;
+        // 2. Not found, add new entry
+        if (_count * 100 >= Capacity * 72)
+        {
+            GrowIndex();
+            mask = _capacityMask;
+            slot = hashCode & mask;
+            while (_buckets[slot] != 0)
+                slot = (slot + 1) & mask;
+        }
+
+        if (_count >= _entriesCapacity)
+        {
+            GrowEntries();
+        }
+
+        int newIndex = _count++;
+        _entries[newIndex].Key = key;
+        _entries[newIndex].Value = value;
+        _buckets[slot] = newIndex + 1;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -83,11 +108,15 @@ public unsafe struct ArenaDictionary<TKey, TValue>
         int mask = _capacityMask;
         int slot = key.GetHashCode() & mask;
 
-        while (_occupied[slot] != 0)
+        while (true)
         {
-            if (_entries[slot].Key.Equals(key))
+            int entryIndexPlusOne = _buckets[slot];
+            if (entryIndexPlusOne == 0) break;
+
+            int entryIndex = entryIndexPlusOne - 1;
+            if (_entries[entryIndex].Key.Equals(key))
             {
-                value = _entries[slot].Value;
+                value = _entries[entryIndex].Value;
                 return true;
             }
             slot = (slot + 1) & mask;
@@ -101,86 +130,71 @@ public unsafe struct ArenaDictionary<TKey, TValue>
     {
         if (Capacity > 0)
         {
-            NativeMemory.Clear(_occupied, (nuint)(Capacity * sizeof(byte)));
+            NativeMemory.Clear(_buckets, (nuint)(Capacity * sizeof(int)));
         }
         _count = 0;
     }
 
-    public readonly Enumerator GetEnumerator() => new(_entries, _occupied, Capacity);
+    public readonly Enumerator GetEnumerator() => new(_entries, _count);
 
     public ref struct Enumerator
     {
         private readonly Entry* _entries;
-        private readonly byte* _occupied;
-        private readonly int _capacity;
+        private readonly int _count;
         private int _index;
 
-        internal Enumerator(Entry* entries, byte* occupied, int capacity)
+        internal Enumerator(Entry* entries, int count)
         {
             _entries = entries;
-            _occupied = occupied;
-            _capacity = capacity;
+            _count = count;
             _index = -1;
         }
 
         public bool MoveNext()
         {
-            while (++_index < _capacity)
-            {
-                if (_occupied[_index] != 0)
-                    return true;
-            }
-            return false;
+            return ++_index < _count;
         }
 
         public readonly TKey Key => _entries[_index].Key;
         public readonly TValue Value => _entries[_index].Value;
     }
 
-    private void Grow()
+    private void GrowIndex()
     {
         int oldCap = Capacity;
         int newCap = oldCap * 2;
 
-        Entry* oldEntries = _entries;
-        byte* oldOccupied = _occupied;
+        int* newBuckets = (int*)_arena.Alloc((nuint)(newCap * sizeof(int)));
+        NativeMemory.Clear(newBuckets, (nuint)(newCap * sizeof(int)));
+        
+        int newMask = newCap - 1;
 
-        AllocateArrays(newCap);
-        int newMask = _capacityMask;
-        int newCount = 0;
-
-        for (int i = 0; i < oldCap; i++)
+        for (int i = 0; i < _count; i++)
         {
-            if (oldOccupied[i] == 0) continue;
-
-            TKey key = oldEntries[i].Key;
-            TValue val = oldEntries[i].Value;
-
+            TKey key = _entries[i].Key;
             int slot = key.GetHashCode() & newMask;
-            while (_occupied[slot] != 0)
+            while (newBuckets[slot] != 0)
                 slot = (slot + 1) & newMask;
 
-            _entries[slot].Key = key;
-            _entries[slot].Value = val;
-            _occupied[slot] = 1;
-            newCount++;
+            newBuckets[slot] = i + 1;
         }
-        _count = newCount;
+
+        _buckets = newBuckets;
+        _capacityMask = newMask;
     }
 
-    private void AllocateArrays(int capacity)
+    private void GrowEntries()
     {
-        nuint entryBytes = (nuint)(capacity * sizeof(Entry));
-        nuint occupiedBytes = (nuint)(capacity * sizeof(byte));
+        int oldCap = _entriesCapacity;
+        int newCap = oldCap * 2;
 
-        _entries = (Entry*)_arena.Alloc(entryBytes);
-        _occupied = (byte*)_arena.Alloc(occupiedBytes);
+        Entry* newEntries = (Entry*)_arena.Alloc((nuint)(newCap * sizeof(Entry)));
+        NativeMemory.Copy(_entries, newEntries, (nuint)(oldCap * sizeof(Entry)));
 
-        NativeMemory.Clear(_entries, entryBytes);
-        NativeMemory.Clear(_occupied, occupiedBytes);
-
-        _capacityMask = capacity - 1;
+        _entries = newEntries;
+        _entriesCapacity = newCap;
     }
+
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int NextPowerOfTwo(int n)

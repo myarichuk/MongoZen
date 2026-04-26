@@ -11,7 +11,8 @@ public interface ISessionTracker
         TEntity entity, 
         object id, 
         Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr> materializer, 
-        Func<TEntity, IntPtr, bool> differ) where TEntity : class;
+        Func<TEntity, IntPtr, bool> differ,
+        bool forceShadow = true) where TEntity : class;
 
     IEnumerable<TEntity> GetDirtyEntities<TEntity>() where TEntity : class;
     

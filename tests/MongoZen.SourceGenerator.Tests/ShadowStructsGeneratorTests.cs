@@ -72,8 +72,8 @@ public class Person {
         
         var code = personShadow.SourceText.ToString();
         Assert.Contains("public struct Person_Shadow", code);
-        Assert.Contains("public SharpArena.Collections.ArenaString Id;", code);
-        Assert.Contains("public SharpArena.Collections.ArenaString Name;", code);
+        Assert.Contains("public global::MongoZen.Collections.ArenaString Id;", code);
+        Assert.Contains("public global::MongoZen.Collections.ArenaString Name;", code);
         Assert.Contains("public int Age;", code);
     }
 
@@ -221,7 +221,7 @@ public class Post {
         var result = driver.GetRunResult();
         
         var blogCode = result.Results[0].GeneratedSources.First(s => s.HintName == "Blog_Shadow.g.cs").SourceText.ToString();
-        Assert.Contains("public SharpArena.Collections.ArenaList<SharpArena.Collections.ArenaString> Tags;", blogCode);
+        Assert.Contains("public SharpArena.Collections.ArenaList<global::MongoZen.Collections.ArenaString> Tags;", blogCode);
         Assert.Contains("public SharpArena.Collections.ArenaList<Post_Shadow> Posts;", blogCode);
     }
 

@@ -7,117 +7,92 @@ namespace MongoZen.Benchmarks;
 [MemoryDiagnoser]
 public class ArenaCollectionBenchmarks
 {
-    private const int Size = 1000;
-    private readonly int[] _data = new int[Size];
-    private readonly DocId[] _docIds = new DocId[Size];
+    private const int ItemCount = 1000;
+    private readonly ArenaAllocator _arena = new();
+    private int[] _data = null!;
+    private string[] _stringData = null!;
 
     [GlobalSetup]
     public void Setup()
     {
-        var random = new Random(42);
-        for (int i = 0; i < Size; i++)
-        {
-            _data[i] = random.Next();
-            _docIds[i] = DocId.From(Guid.NewGuid());
-        }
+        _data = Enumerable.Range(0, ItemCount).ToArray();
+        _stringData = Enumerable.Range(0, ItemCount).Select(i => $"Key-{i}").ToArray();
     }
+
+    [GlobalCleanup]
+    public void Cleanup() => _arena.Dispose();
+
+    [IterationCleanup]
+    public void IterationCleanup() => _arena.Reset();
+
+    // -------------------------------------------------------------------------
+    // HashSet Benchmarks
+    // -------------------------------------------------------------------------
 
     [Benchmark(Baseline = true)]
-    public int HashSet_Standard()
+    public int ManagedHashSet_Int()
     {
         var set = new HashSet<int>();
-        for (int i = 0; i < Size; i++)
-        {
-            set.Add(_data[i]);
-        }
+        foreach (var i in _data) set.Add(i);
         int count = 0;
-        for (int i = 0; i < Size; i++)
-        {
-            if (set.Contains(_data[i])) count++;
-        }
+        foreach (var i in _data) if (set.Contains(i)) count++;
         return count;
     }
 
     [Benchmark]
-    public int HashSet_Arena()
+    public int ArenaHashSet_Int()
     {
-        using var arena = new ArenaAllocator();
-        var set = new ArenaHashSet<int>(arena, Size);
-        for (int i = 0; i < Size; i++)
-        {
-            set.Add(_data[i]);
-        }
+        var set = new ArenaHashSet<int>(_arena, ItemCount);
+        foreach (var i in _data) set.Add(i);
         int count = 0;
-        for (int i = 0; i < Size; i++)
-        {
-            if (set.Contains(_data[i])) count++;
-        }
+        foreach (var i in _data) if (set.Contains(i)) count++;
         return count;
     }
 
-    [Benchmark]
-    public int Dictionary_Standard()
+    // -------------------------------------------------------------------------
+    // Dictionary Benchmarks
+    // -------------------------------------------------------------------------
+
+    [Benchmark(Baseline = true)]
+    public int ManagedDictionary_Int()
     {
         var dict = new Dictionary<int, int>();
-        for (int i = 0; i < Size; i++)
-        {
-            dict[_data[i]] = i;
-        }
+        foreach (var i in _data) dict[i] = i;
         int sum = 0;
-        for (int i = 0; i < Size; i++)
-        {
-            if (dict.TryGetValue(_data[i], out var val)) sum += val;
-        }
+        foreach (var i in _data) if (dict.TryGetValue(i, out var val)) sum += val;
         return sum;
     }
 
     [Benchmark]
-    public int Dictionary_Arena()
+    public int ArenaDictionary_Int()
     {
-        using var arena = new ArenaAllocator();
-        var dict = new ArenaDictionary<int, int>(arena, Size);
-        for (int i = 0; i < Size; i++)
-        {
-            dict.AddOrUpdate(_data[i], i);
-        }
+        var dict = new ArenaDictionary<int, int>(_arena, ItemCount);
+        foreach (var i in _data) dict.AddOrUpdate(i, i);
         int sum = 0;
-        for (int i = 0; i < Size; i++)
-        {
-            if (dict.TryGetValue(_data[i], out var val)) sum += val;
-        }
+        foreach (var i in _data) if (dict.TryGetValue(i, out var val)) sum += val;
         return sum;
     }
 
-    [Benchmark]
-    public int DocId_HashSet_Standard()
-    {
-        var set = new HashSet<DocId>();
-        for (int i = 0; i < Size; i++)
-        {
-            set.Add(_docIds[i]);
-        }
-        int count = 0;
-        for (int i = 0; i < Size; i++)
-        {
-            if (set.Contains(_docIds[i])) count++;
-        }
-        return count;
-    }
+    // -------------------------------------------------------------------------
+    // ArenaString Benchmarks
+    // -------------------------------------------------------------------------
 
     [Benchmark]
-    public int DocId_HashSet_Arena()
+    public int ArenaDictionary_ArenaString()
     {
-        using var arena = new ArenaAllocator();
-        var set = new ArenaHashSet<DocId>(arena, Size);
-        for (int i = 0; i < Size; i++)
+        var dict = new ArenaDictionary<ArenaString, int>(_arena, ItemCount);
+        var arenaStrings = new ArenaString[_stringData.Length];
+        for (int i = 0; i < _stringData.Length; i++)
         {
-            set.Add(_docIds[i]);
+            arenaStrings[i] = ArenaString.Clone(_stringData[i], _arena);
+            dict.AddOrUpdate(arenaStrings[i], i);
         }
-        int count = 0;
-        for (int i = 0; i < Size; i++)
+
+        int sum = 0;
+        for (int i = 0; i < arenaStrings.Length; i++)
         {
-            if (set.Contains(_docIds[i])) count++;
+            if (dict.TryGetValue(arenaStrings[i], out var val)) sum += val;
         }
-        return count;
+        return sum;
     }
 }

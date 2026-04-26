@@ -1,7 +1,9 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq.Expressions;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using MongoZen.Collections;
 
 // ReSharper disable ComplexConditionExpression
 // ReSharper disable MethodTooLong
@@ -20,11 +22,16 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     private readonly Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr>? _materializer;
     private readonly Func<TEntity, IntPtr, bool>? _differ;
 
-    private readonly HashSet<TEntity> _added = new(ReferenceEqualityComparer.Instance);
-    private readonly List<TEntity> _removed = [];
-    private readonly List<object> _removedIds = [];
-    private readonly HashSet<TEntity> _updated = new(ReferenceEqualityComparer.Instance);
-    private readonly List<(LambdaExpression Path, Type IncludeType)> _includes = [];
+    private PooledHashSet<TEntity> _added;
+    private PooledList<TEntity> _removed;
+    private PooledList<object> _removedIds;
+    private PooledHashSet<TEntity> _updated;
+    private PooledList<(LambdaExpression Path, Type IncludeType)> _includes;
+
+    private PooledDictionary<DocId, TEntity> _upsertBuffer;
+    private PooledHashSet<object> _rawIdBuffer;
+    private PooledList<WriteModel<TEntity>> _modelBuffer;
+    private PooledList<TEntity> _dirtyBuffer;
 
     public IMutableDbSetAdvanced<TEntity> Advanced => this;
 
@@ -34,6 +41,18 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _conventions = conventions ?? new();
         _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
         _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
+        
+        // Initialize pooled collections with reference equality where needed
+        _added = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
+        _removed = new PooledList<TEntity>(8);
+        _removedIds = new PooledList<object>(8);
+        _updated = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
+        _includes = new PooledList<(LambdaExpression Path, Type IncludeType)>(4);
+
+        _upsertBuffer = new PooledDictionary<DocId, TEntity>(16);
+        _rawIdBuffer = new PooledHashSet<object>(16);
+        _modelBuffer = new PooledList<WriteModel<TEntity>>(16);
+        _dirtyBuffer = new PooledList<TEntity>(16);
     }
 
     public MutableDbSet(
@@ -51,6 +70,19 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _differ = differ;
     }
 
+    public void Dispose()
+    {
+        _added.Dispose();
+        _removed.Dispose();
+        _removedIds.Dispose();
+        _updated.Dispose();
+        _includes.Dispose();
+        _upsertBuffer.Dispose();
+        _rawIdBuffer.Dispose();
+        _modelBuffer.Dispose();
+        _dirtyBuffer.Dispose();
+    }
+
     public string CollectionName => _dbSet.CollectionName;
 
     public void Add(TEntity entity)
@@ -60,7 +92,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         var id = _idAccessor(entity);
         if (id != null && _materializer != null && _differ != null)
         {
-            _tracker?.Track(entity, id, _materializer, _differ);
+            _tracker?.Track(entity, id, _materializer, _differ, forceShadow: false);
         }
     }
 
@@ -131,12 +163,29 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
     public void ClearTracking()
     {
-        _added.Clear();
-        _removed.Clear();
-        _removedIds.Clear();
-        _updated.Clear();
-        _includes.Clear();
+        _added.Dispose();
+        _removed.Dispose();
+        _removedIds.Dispose();
+        _updated.Dispose();
+        _includes.Dispose();
+        
+        _upsertBuffer.Dispose();
+        _rawIdBuffer.Dispose();
+        _modelBuffer.Dispose();
+        _dirtyBuffer.Dispose();
+
+        // Re-initialize for next use
+        _added = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
+        _updated = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
+        _removed = new PooledList<TEntity>(8);
+        _removedIds = new PooledList<object>(8);
+        _includes = new PooledList<(LambdaExpression Path, Type IncludeType)>(4);
+        _upsertBuffer = new PooledDictionary<DocId, TEntity>(16);
+        _rawIdBuffer = new PooledHashSet<object>(16);
+        _modelBuffer = new PooledList<WriteModel<TEntity>>(16);
+        _dirtyBuffer = new PooledList<TEntity>(16);
     }
+
 
     void IInternalMutableDbSet.RefreshShadows(ISessionTracker tracker)
     {
@@ -148,34 +197,22 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
     void IInternalMutableDbSet.RevertVersions()
     {
-        if (_upsertBuffer == null || _upsertBuffer.Count == 0) return;
+        if (_upsertBuffer.Count == 0) return;
 
         var versionSetter = ConcurrencyVersionAccessor<TEntity>.GetSetter(_conventions.ConcurrencyPropertyName);
         var versionGetter = ConcurrencyVersionAccessor<TEntity>.GetGetter(_conventions.ConcurrencyPropertyName);
 
         if (versionSetter == null || versionGetter == null) return;
 
-        foreach (var entry in _upsertBuffer.Values)
+        foreach (var entry in _upsertBuffer)
         {
-            var current = versionGetter(entry);
-            versionSetter(entry, current - 1);
+            var current = versionGetter(entry.Value);
+            versionSetter(entry.Value, current - 1);
         }
     }
 
-    private Dictionary<DocId, TEntity>? _upsertBuffer;
-    private HashSet<DocId>? _dedupeBuffer;
-    private HashSet<object>? _rawIdBuffer;
-    private List<WriteModel<TEntity>>? _modelBuffer;
-    private List<TEntity>? _dirtyBuffer;
-
-    ValueTask IInternalMutableDbSet.CommitAsync(TransactionContext transaction, CancellationToken cancellationToken)
+    async ValueTask IInternalMutableDbSet.CommitAsync(TransactionContext transaction, CancellationToken cancellationToken)
     {
-        _upsertBuffer ??= new Dictionary<DocId, TEntity>();
-        _dedupeBuffer ??= new HashSet<DocId>();
-        _rawIdBuffer ??= new HashSet<object>();
-        _modelBuffer ??= new List<WriteModel<TEntity>>();
-        _dirtyBuffer ??= new List<TEntity>();
-
         _dirtyBuffer.Clear();
         if (_tracker != null)
         {
@@ -188,10 +225,34 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
             }
         }
 
-        return ((IInternalDbSet<TEntity>)_dbSet).CommitAsync(
-            _added, _removed, _removedIds, _updated, _dirtyBuffer,
-            _upsertBuffer, _dedupeBuffer, _rawIdBuffer, _modelBuffer, transaction, cancellationToken);
+        var arena = _tracker?.Arena;
+        bool ownsArena = false;
+        if (arena == null)
+        {
+            arena = new SharpArena.Allocators.ArenaAllocator();
+            ownsArena = true;
+        }
+
+        try
+        {
+            await ((IInternalDbSet<TEntity>)_dbSet).CommitAsync(
+                _added, 
+                _removed, 
+                _removedIds, 
+                _updated, 
+                _dirtyBuffer,
+                _upsertBuffer,
+                _rawIdBuffer,
+                _modelBuffer,
+                transaction, arena, cancellationToken);
+        }
+        finally
+        {
+            if (ownsArena) arena.Dispose();
+        }
     }
+
+
 
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default)
     {
@@ -214,6 +275,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
         return TrackResults(results);
     }
+
 
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(Expression<Func<TEntity, bool>> filter, CancellationToken cancellationToken = default)
     {
