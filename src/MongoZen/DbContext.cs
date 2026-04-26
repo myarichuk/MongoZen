@@ -31,9 +31,8 @@ public abstract partial class DbContext : IDisposable
     /// the DbContext's IDbSet&lt;T&gt; properties via reflection.
     /// </summary>
     /// <remarks>
-    /// TODO (perf): this scans all properties via reflection on every call.
-    /// The source generator already produces a <c>{DbContextName}Session</c> class;
-    /// it should also emit an override of this method that resolves names with a
+    /// This base implementation uses reflection. The source generator 
+    /// produces an override of this method that resolves names with a
     /// simple switch expression — O(1), zero allocation, no reflection.
     /// </remarks>
     public virtual string GetCollectionName(Type entityType)
