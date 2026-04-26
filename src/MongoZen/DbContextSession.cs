@@ -109,45 +109,33 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     {
         // 1. Refresh shadows for all tracked entities.
         // This ensures subsequent calls to SaveChangesAsync only detect NEW changes.
-        foreach (var typeEntry in _trackedEntities)
-        {
-            var entityType = typeEntry.Key;
-            var map = typeEntry.Value;
-
-            // We need to call the generic materializer.
-            // Since we stored the materializer as an object (Func<T, Arena, IntPtr>),
-            // we have to use reflection or dynamic dispatch to call it correctly if we want to be pure.
-            // But we can just use dynamic for this internal refresh.
-            foreach (var id in map.Keys.ToList())
-            {
-                var entry = map[id];
-                if (entry.ShadowPtr == IntPtr.Zero || entry.Materializer == null) continue;
-
-                // Refresh the shadow in place (or allocate new slot in Arena)
-                // Actually, the materializer(entity, arena) returns a NEW pointer.
-                // We'll update the pointer in the map.
-                var newShadowPtr = InvokeMaterializer(entry.Entity, entry.Materializer, _arena);
-                map[id] = (entry.Entity, newShadowPtr, entry.Differ, entry.Materializer);
-            }
-        }
-
-        // 2. Clear the pending lists in sets (added/removed/updated)
+        // We iterate over the registered dbSets because they know their TEntity.
         foreach (var set in _dbSets.Values)
         {
-             set.ClearTracking();
+            set.RefreshShadows(this);
+            set.ClearTracking();
         }
-    }
-
-    private static IntPtr InvokeMaterializer(object entity, object materializer, ArenaAllocator arena)
-    {
-        // Use dynamic to call the Func<T, Arena, IntPtr> without knowing T
-        dynamic func = materializer;
-        return (IntPtr)func((dynamic)entity, arena);
     }
 
     protected void RegisterDbSet<TEntity>(MutableDbSet<TEntity> set) where TEntity : class
     {
         _dbSets[typeof(TEntity)] = set;
+    }
+
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public void RefreshShadows<TEntity>(Func<TEntity, ArenaAllocator, IntPtr> materializer) where TEntity : class
+    {
+        if (!_trackedEntities.TryGetValue(typeof(TEntity), out var map)) return;
+
+        // Updating values in-place while iterating is safe for Dictionary in .NET.
+        foreach (var kvp in map)
+        {
+            var entry = kvp.Value;
+            if (entry.ShadowPtr == IntPtr.Zero || entry.Materializer == null) continue;
+
+            var newShadowPtr = materializer((TEntity)entry.Entity, _arena);
+            map[kvp.Key] = (entry.Entity, newShadowPtr, entry.Differ, entry.Materializer);
+        }
     }
 
     [EditorBrowsable(EditorBrowsableState.Never)]

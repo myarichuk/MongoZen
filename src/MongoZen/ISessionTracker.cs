@@ -22,4 +22,6 @@ public interface ISessionTracker
     void ClearTracking();
 
     void TrackDynamic(object entity, Type entityType, object id);
+
+    void RefreshShadows<TEntity>(Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr> materializer) where TEntity : class;
 }

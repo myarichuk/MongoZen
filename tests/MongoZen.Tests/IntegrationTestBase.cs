@@ -10,7 +10,11 @@ namespace MongoZen.Tests;
 /// </summary>
 public abstract class IntegrationTestBase : IAsyncLifetime
 {
-    private static readonly Lazy<Task<IMongoRunner>> RunnerLazy = new(async () =>
+    /// <summary>
+    /// Shared runner and client to avoid expensive startup and discovery costs per test.
+    /// xUnit runs tests in parallel across classes, so they share this instance.
+    /// </summary>
+    private static readonly Lazy<Task<(IMongoRunner Runner, MongoClient Client)>> RunnerLazy = new(async () =>
     {
         var options = new MongoRunnerOptions
         {
@@ -21,7 +25,18 @@ public abstract class IntegrationTestBase : IAsyncLifetime
             ConnectionTimeout = TimeSpan.FromSeconds(10),
             DataDirectoryLifetime = TimeSpan.FromMinutes(30),
         };
-        return await MongoRunner.RunAsync(options);
+        var runner = await MongoRunner.RunAsync(options);
+        var client = new MongoClient(runner.ConnectionString);
+        
+        // One-time check for replica set readiness to avoid per-test ping overhead.
+        try
+        {
+            await client.GetDatabase("admin")
+                .RunCommandAsync<BsonDocument>(new BsonDocument("replSetGetStatus", 1));
+        }
+        catch { }
+        
+        return (runner, client);
     });
 
     private string? _databaseName;
@@ -40,36 +55,20 @@ public abstract class IntegrationTestBase : IAsyncLifetime
     /// <inheritdoc/>
     public async Task InitializeAsync()
     {
-        var runner = await RunnerLazy.Value;
-        _mongoClient = new MongoClient(runner.ConnectionString);
+        var (runner, client) = await RunnerLazy.Value;
+        _mongoClient = client;
+        
+        // Each test gets a unique database to ensure isolation during parallel execution.
+        // We avoid dropping databases in DisposeAsync because it's an expensive metadata operation;
+        // EphemeralMongo cleans up the entire data directory at the end of the run.
         _databaseName = $"test_{Guid.NewGuid():N}";
         Database = _mongoClient.GetDatabase(_databaseName);
-
-        // Ensure replica set is ready if needed (though usually RunAsync handles it)
-        try
-        {
-            await _mongoClient.GetDatabase("admin")
-                .RunCommandAsync<BsonDocument>(new BsonDocument("replSetGetStatus", 1));
-        }
-        catch
-        {
-            // Ignore if not a replica set or not ready
-        }
     }
 
     /// <inheritdoc/>
-    public async Task DisposeAsync()
+    public Task DisposeAsync()
     {
-        if (_databaseName != null && _mongoClient != null)
-        {
-            try
-            {
-                await _mongoClient.DropDatabaseAsync(_databaseName);
-            }
-            catch
-            {
-            }
-        }
-        _mongoClient?.Dispose();
+        // No-op for performance. Database dropping is the primary bottleneck in integration tests.
+        return Task.CompletedTask;
     }
 }
