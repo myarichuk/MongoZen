@@ -44,6 +44,34 @@ public sealed class DbContextInitializerGenerator : IIncrementalGenerator
 
             foreach (var ctxSymbol in classes)
             {
+                var isPartial = false;
+                foreach (var syntaxRef in ctxSymbol.DeclaringSyntaxReferences)
+                {
+                    if (syntaxRef.GetSyntax() is ClassDeclarationSyntax cds)
+                    {
+                        if (cds.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword)))
+                        {
+                            isPartial = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!isPartial)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        new DiagnosticDescriptor(
+                            "MZ001",
+                            "DbContext must be partial",
+                            "The class '{0}' must be declared as partial to use MongoZen source generation.",
+                            "Usage",
+                            DiagnosticSeverity.Error,
+                            true),
+                        ctxSymbol.Locations.FirstOrDefault(),
+                        ctxSymbol.Name));
+                    continue;
+                }
+
                 spc.AddSource(
                     $"{ctxSymbol.Name}.Initializer.g.cs",
                     SourceText.From(GenerateInitializer(ctxSymbol), Encoding.UTF8));
