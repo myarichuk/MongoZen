@@ -23,5 +23,7 @@ public interface ISessionTracker
 
     void TrackDynamic(object entity, Type entityType, object id);
 
-    void RefreshShadows<TEntity>(Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr> materializer) where TEntity : class;
+    void RefreshShadows<TEntity>(
+        Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr> materializer,
+        Action<TEntity>? versionIncrementer = null) where TEntity : class;
 }

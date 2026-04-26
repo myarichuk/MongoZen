@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
 using MongoDB.Bson;
@@ -7,6 +8,8 @@ namespace MongoZen.FilterUtils.ExpressionTranslators;
 
 public class ElemMatchFilterElementTranslator: FilterElementTranslatorBase
 {
+    private static readonly ConcurrentDictionary<Type, MethodInfo> AnyMethodCache = new();
+
     public override string Operator => "$elemMatch";
 
     public override Expression Handle(string field, BsonValue value, ParameterExpression param)
@@ -29,11 +32,11 @@ public class ElemMatchFilterElementTranslator: FilterElementTranslatorBase
         // lambda: element => [innerPredicate]
         var lambda = Expression.Lambda(innerPredicate, elementParam);
 
-        // TODO: consider caching this (if proves a bottleneck)ß
-        var anyMethod = typeof(Enumerable)
-            .GetMethods(BindingFlags.Static | BindingFlags.Public)
-            .First(m => m.Name == nameof(Enumerable.Any) && m.GetParameters().Length == 2)
-            .MakeGenericMethod(elementType);
+        var anyMethod = AnyMethodCache.GetOrAdd(elementType, t => 
+            typeof(Enumerable)
+                .GetMethods(BindingFlags.Static | BindingFlags.Public)
+                .First(m => m.Name == nameof(Enumerable.Any) && m.GetParameters().Length == 2)
+                .MakeGenericMethod(t));
 
         var anyCall = Expression.Call(anyMethod, member, lambda);
 

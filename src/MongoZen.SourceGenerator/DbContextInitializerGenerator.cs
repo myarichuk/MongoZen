@@ -138,8 +138,8 @@ public sealed class DbContextInitializerGenerator : IIncrementalGenerator
         
         sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
-        sb.AppendLine();
 
+        sb.AppendLine();
         sb.Append(indent2).AppendLine("public override string GetCollectionName(System.Type entityType)");
         sb.Append(indent2).AppendLine("{");
         sb.Append(indent2).AppendLine("    return entityType switch");

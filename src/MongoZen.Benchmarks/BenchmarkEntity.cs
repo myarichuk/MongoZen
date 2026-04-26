@@ -18,4 +18,6 @@ public class BenchmarkEntity
     public List<string> Tags { get; set; } = [];
 
     public Dictionary<string, string> Metadata { get; set; } = [];
+
+    public int Version { get; set; }
 }
