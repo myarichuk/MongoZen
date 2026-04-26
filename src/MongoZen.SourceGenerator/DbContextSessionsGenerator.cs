@@ -204,38 +204,26 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
 
         // SaveChangesAsync
         sb.AppendLine();
-        sb.Append(indent2).AppendLine("public async ValueTask SaveChangesAsync(System.Threading.CancellationToken cancellationToken = default)");
+        sb.Append(indent2).AppendLine("public override async global::System.Threading.Tasks.Task SaveChangesAsync(global::System.Threading.CancellationToken cancellationToken = default)");
         sb.Append(indent2).AppendLine("{");
         sb.Append(indent2).AppendLine("    EnsureTransactionActive();");
-        sb.Append(indent2).AppendLine("    try");
+        sb.Append(indent2).AppendLine("    using (var commitArena = new SharpArena.Allocators.ArenaAllocator())");
         sb.Append(indent2).AppendLine("    {");
+        sb.Append(indent2).AppendLine("        var session = _session;");
         foreach (var prop in mutableProps)
         {
-            sb.Append(indent2).Append("        await ((MongoZen.IInternalMutableDbSet)").Append(prop.Name).AppendLine(").CommitAsync(Transaction, cancellationToken);");
+            sb.Append(indent2).Append("        await ((MongoZen.IInternalMutableDbSet)").Append(prop.Name).AppendLine(").CommitAsync(commitArena, session, cancellationToken);");
         }
-
-        sb.AppendLine();
-        sb.Append(indent2).AppendLine("        await CommitTransactionAsync();");
-        sb.AppendLine();
-
-        // Clear tracking only after successful commit
-        foreach (var prop in mutableProps)
-        {
-            sb.Append(indent2).Append("        ").Append(prop.Name).AppendLine(".Advanced.ClearTracking();");
-        }
-        sb.Append(indent2).AppendLine("        ClearTracking();");
-
         sb.Append(indent2).AppendLine("    }");
-        sb.Append(indent2).AppendLine("    catch");
+
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("    if (!_inMemoryTransaction && _session != null && _session.IsInTransaction)");
         sb.Append(indent2).AppendLine("    {");
-        sb.Append(indent2).AppendLine("        if (Transaction.IsActive)");
-        sb.Append(indent2).AppendLine("        {");
-        sb.Append(indent2).AppendLine("            await AbortTransactionAsync();");
-        sb.Append(indent2).AppendLine("        }");
-        sb.AppendLine();
-        sb.Append(indent2).AppendLine("        await DisposeAsync();");
-        sb.Append(indent2).AppendLine("        throw;");
+        sb.Append(indent2).AppendLine("        await _session.CommitTransactionAsync(cancellationToken);");
+        sb.Append(indent2).AppendLine("        _session.StartTransaction();");
         sb.Append(indent2).AppendLine("    }");
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("    ClearTracking();");
         sb.Append(indent2).AppendLine("}");
 
         sb.Append(indent).AppendLine("}");

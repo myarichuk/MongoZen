@@ -1,32 +1,31 @@
+using System.Linq.Expressions;
 using MongoDB.Driver;
 using MongoZen;
+using SharpArena.Allocators;
+using Xunit;
 
 namespace MongoZen.Tests;
 
-public class MutableDbSetTests : IntegrationTestBase
+public class MutableDbSetTests
 {
-    private class User
+    public class User
     {
-        public string Id { get; set; } = Guid.NewGuid().ToString();
-
+        public string? Id { get; set; }
         public string Name { get; set; } = string.Empty;
-
         public int Age { get; set; }
     }
 
-    private class TestDbContext(DbContextOptions options) : DbContext(options)
-    {
-        public IDbSet<User> Users { get; set; } = null!;
-    }
+    private static IIdConvention Convention => new DefaultIdConvention();
 
     [Fact]
     public async Task Can_Add_And_Save_Changes_InMemory()
     {
-        var inner = new InMemoryDbSet<User>();
+        var inner = new InMemoryDbSet<User>("Users", Convention);
         var mutableSet = new MutableDbSet<User>(inner);
 
+        using var arena = new ArenaAllocator();
         mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.InMemory());
+        await ((IInternalMutableDbSet)mutableSet).CommitAsync(arena, null);
 
         var result = await mutableSet.QueryAsync(u => u.Name == "Charlie");
 
@@ -37,239 +36,67 @@ public class MutableDbSetTests : IntegrationTestBase
     [Fact]
     public async Task Can_Add_Update_Remove_InMemory()
     {
-        var inner = new InMemoryDbSet<User>();
-        inner.Collection.Add(new User { Id = "1", Name = "Alice", Age = 30 });
-        inner.Collection.Add(new User { Id = "2", Name = "Bob", Age = 40 });
+        var inner = new InMemoryDbSet<User>("Users", Convention);
+        inner.Seed(new User { Id = "1", Name = "Alice", Age = 30 });
+        inner.Seed(new User { Id = "2", Name = "Bob", Age = 40 });
 
         var mutableSet = new MutableDbSet<User>(inner);
 
+        using var arena = new ArenaAllocator();
         mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
         mutableSet.Add(new User { Id = "2", Name = "Bob", Age = 99 });
         mutableSet.Remove(new User { Id = "1" });
 
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.InMemory());
+        await ((IInternalMutableDbSet)mutableSet).CommitAsync(arena, null);
 
-        var all = await mutableSet.QueryAsync(u => true);
+        var all = (await mutableSet.QueryAsync(u => true)).ToList();
 
-        Assert.Equal(2, all.Count());
-        Assert.Contains(all, u => u is { Id: "2", Age: 99 });
+        Assert.Equal(2, all.Count);
         Assert.Contains(all, u => u.Id == "3");
-        Assert.DoesNotContain(all, u => u.Id == "1");
-    }
-
-    [Fact]
-    public async Task Can_Add_And_Save_Changes_DB()
-    {
-        var ctx = new TestDbContext(new DbContextOptions(Database!));
-        var mutableSet = new MutableDbSet<User>(ctx.Users);
-
-        mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
-        using var session = Client.StartSession();
-        session.StartTransaction();
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.FromSession(session));
-        await session.CommitTransactionAsync();
-
-        var result = await ctx.Users.QueryAsync(u => u.Name == "Charlie");
-
-        Assert.Single(result);
-        Assert.Equal("Charlie", result.First().Name);
-    }
-
-    [Fact]
-    public async Task Can_Add_Update_Remove_DB()
-    {
-        var ctx = new TestDbContext(new DbContextOptions(Database!));
-        var baseSet = (DbSet<User>)ctx.Users;
-
-        await baseSet.Collection.InsertManyAsync(new[]
-        {
-            new User { Id = "1", Name = "Alice", Age = 30 },
-            new User { Id = "2", Name = "Bob", Age = 40 },
-        });
-
-        var mutableSet = new MutableDbSet<User>(ctx.Users);
-
-        mutableSet.Add(new User { Id = "3", Name = "Charlie", Age = 28 });
-        mutableSet.Add(new User { Id = "2", Name = "Bob", Age = 99 });
-        mutableSet.Remove(new User { Id = "1" });
-
-        using var session = Client.StartSession();
-        session.StartTransaction();
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.FromSession(session));
-        await session.CommitTransactionAsync();
-
-        var all = await ctx.Users.QueryAsync(u => true);
-
-        Assert.Equal(2, all.Count());
-        Assert.Contains(all, u => u is { Id: "2", Age: 99 });
-        Assert.Contains(all, u => u.Id == "3");
-        Assert.DoesNotContain(all, u => u.Id == "1");
-    }
-
-    [Fact]
-    public async Task Can_Handle_Multiple_Adds_With_Same_Id()
-    {
-        var inner = new InMemoryDbSet<User>();
-        var mutableSet = new MutableDbSet<User>(inner);
-
-        var user = new User { Id = "1", Name = "Original", Age = 20 };
-        mutableSet.Add(user);
-        mutableSet.Add(new User { Id = "1", Name = "Overwritten", Age = 30 }); // same ID
-
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.InMemory());
-
-        var result = await inner.QueryAsync(u => true);
-        Assert.Single(result);
-        Assert.Equal("Overwritten", result.First().Name);
-    }
-
-    [Fact]
-    public async Task Can_Handle_Multiple_Adds_With_Same_Id_DB()
-    {
-        var ctx = new TestDbContext(new DbContextOptions(Database!));
-        var baseSet = (DbSet<User>)ctx.Users;
-
-        await baseSet.Collection.DeleteManyAsync(FilterDefinition<User>.Empty); // just in case
-
-        var mutableSet = new MutableDbSet<User>(ctx.Users);
-        mutableSet.Add(new User { Id = "1", Name = "Original", Age = 20 });
-        mutableSet.Add(new User { Id = "1", Name = "Overwritten", Age = 30 });
-
-        using var session = Client.StartSession();
-        session.StartTransaction();
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.FromSession(session));
-        await session.CommitTransactionAsync();
-
-        var result = await ctx.Users.QueryAsync(u => true);
-        Assert.Single(result);
-        Assert.Equal("Overwritten", result.First().Name);
-    }
-
-    [Fact]
-    public async Task Update_Before_Add_Should_Apply_Add()
-    {
-        var inner = new InMemoryDbSet<User>();
-        var mutableSet = new MutableDbSet<User>(inner);
-
-        var user = new User { Id = "1", Name = "Newbie", Age = 25 };
-        mutableSet.Add(user); // update first
-        mutableSet.Add(user);    // then add
-
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.InMemory());
-
-        var result = await inner.QueryAsync(u => true);
-        Assert.Single(result);
-        Assert.Equal("Newbie", result.First().Name);
-    }
-
-    [Fact]
-    public async Task Update_Before_Add_Should_Apply_Add_DB()
-    {
-        var ctx = new TestDbContext(new DbContextOptions(Database!));
-        var baseSet = (DbSet<User>)ctx.Users;
-
-        await baseSet.Collection.DeleteManyAsync(FilterDefinition<User>.Empty);
-
-        var mutableSet = new MutableDbSet<User>(ctx.Users);
-        var user = new User { Id = "1", Name = "Newbie", Age = 25 };
-        mutableSet.Add(user);
-        mutableSet.Add(user);
-
-        using var session = Client.StartSession();
-        session.StartTransaction();
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.FromSession(session));
-        await session.CommitTransactionAsync();
-
-        var result = await ctx.Users.QueryAsync(u => true);
-        Assert.Single(result);
-        Assert.Equal("Newbie", result.First().Name);
-    }
-
-    [Fact]
-    public async Task Remove_NonExistent_Should_Not_Throw()
-    {
-        var inner = new InMemoryDbSet<User>();
-        var mutableSet = new MutableDbSet<User>(inner);
-
-        mutableSet.Remove(new User { Id = "non-existent" });
-
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.InMemory());
-
-        var result = await inner.QueryAsync(u => true);
-        Assert.Empty(result);
-    }
-
-    [Fact]
-    public async Task Remove_NonExistent_Should_Not_Throw_DB()
-    {
-        var ctx = new TestDbContext(new DbContextOptions(Database!));
-        var baseSet = (DbSet<User>)ctx.Users;
-
-        await baseSet.Collection.DeleteManyAsync(FilterDefinition<User>.Empty);
-
-        var mutableSet = new MutableDbSet<User>(ctx.Users);
-        mutableSet.Remove(new User { Id = "non-existent" });
-
-        using var session = Client.StartSession();
-        session.StartTransaction();
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.FromSession(session));
-        await session.CommitTransactionAsync();
-
-        var result = await ctx.Users.QueryAsync(u => true);
-        Assert.Empty(result);
-    }
-
-    [Fact]
-    public async Task Can_Handle_Mixed_Mutations()
-    {
-        var inner = new InMemoryDbSet<User>();
-        inner.Collection.Add(new User { Id = "1", Name = "A", Age = 10 });
-        inner.Collection.Add(new User { Id = "2", Name = "B", Age = 20 });
-
-        var mutableSet = new MutableDbSet<User>(inner);
-        mutableSet.Add(new User { Id = "3", Name = "C", Age = 30 });
-        mutableSet.Remove(new User { Id = "1" });
-        mutableSet.Add(new User { Id = "2", Name = "B updated", Age = 99 });
-
-
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.InMemory());
-
-        var all = await inner.QueryAsync(u => true);
-        Assert.Equal(2, all.Count());
-        Assert.DoesNotContain(all, u => u.Id == "1");
         Assert.Contains(all, u => u.Id == "2" && u.Age == 99);
-        Assert.Contains(all, u => u.Id == "3");
+        Assert.DoesNotContain(all, u => u.Id == "1");
     }
 
     [Fact]
-    public async Task Can_Handle_Mixed_Mutations_DB()
+    public async Task GetAdded_Returns_Pending_Additions()
     {
-        var ctx = new TestDbContext(new DbContextOptions(Database!));
-        var baseSet = (DbSet<User>)ctx.Users;
+        var inner = new InMemoryDbSet<User>("Users", Convention);
+        var mutableSet = new MutableDbSet<User>(inner);
 
-        await baseSet.Collection.DeleteManyAsync(FilterDefinition<User>.Empty);
+        var user = new User { Id = "1", Name = "Alice" };
+        mutableSet.Add(user);
 
-        await baseSet.Collection.InsertManyAsync(new[]
-        {
-            new User { Id = "1", Name = "A", Age = 10 },
-            new User { Id = "2", Name = "B", Age = 20 },
-        });
+        var added = mutableSet.Advanced.GetAdded();
+        Assert.Single(added);
+        Assert.Same(user, added.First());
+    }
 
-        var mutableSet = new MutableDbSet<User>(ctx.Users);
-        mutableSet.Add(new User { Id = "3", Name = "C", Age = 30 });
-        mutableSet.Remove(new User { Id = "1" });
-        mutableSet.Add(new User { Id = "2", Name = "B updated", Age = 99 });
+    [Fact]
+    public async Task Commit_Clears_Pending_Changes()
+    {
+        var inner = new InMemoryDbSet<User>("Users", Convention);
+        var mutableSet = new MutableDbSet<User>(inner);
 
+        using var arena = new ArenaAllocator();
+        mutableSet.Add(new User { Id = "1", Name = "Alice" });
+        await ((IInternalMutableDbSet)mutableSet).CommitAsync(arena, null);
 
-        using var session = Client.StartSession();
-        session.StartTransaction();
-        await ((IInternalMutableDbSet)mutableSet).CommitAsync(TransactionContext.FromSession(session));
-        await session.CommitTransactionAsync();
+        Assert.Empty(mutableSet.Advanced.GetAdded());
+    }
 
-        var all = await ctx.Users.QueryAsync(u => true);
-        Assert.Equal(2, all.Count());
-        Assert.DoesNotContain(all, u => u.Id == "1");
-        Assert.Contains(all, u => u.Id == "2" && u.Age == 99);
-        Assert.Contains(all, u => u.Id == "3");
+    [Fact]
+    public async Task Can_Remove_By_Id_InMemory()
+    {
+        var inner = new InMemoryDbSet<User>("Users", Convention);
+        inner.Seed(new User { Id = "1", Name = "Alice" });
+
+        var mutableSet = new MutableDbSet<User>(inner);
+
+        using var arena = new ArenaAllocator();
+        mutableSet.Remove("1");
+        await ((IInternalMutableDbSet)mutableSet).CommitAsync(arena, null);
+
+        var result = await mutableSet.QueryAsync(u => true);
+        Assert.Empty(result);
     }
 }

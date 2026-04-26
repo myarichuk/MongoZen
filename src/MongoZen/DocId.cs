@@ -1,4 +1,5 @@
 using System;
+using System.IO.Hashing;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using MongoDB.Bson;
@@ -12,8 +13,10 @@ namespace MongoZen;
 [StructLayout(LayoutKind.Explicit, Size = 20)]
 public struct DocId : IEquatable<DocId>
 {
+    // Offset  0      : Kind (1 byte)
+    // Offset  4..19  : identity payload (16 bytes)
+    
     [FieldOffset(0)] public byte Kind;
-    // offsets 1-3 are reserved/padding
     [FieldOffset(4)] private ulong _part1;
     [FieldOffset(12)] private ulong _part2;
 
@@ -34,15 +37,31 @@ public struct DocId : IEquatable<DocId>
     public static bool operator ==(DocId a, DocId b) => a.Equals(b);
     public static bool operator !=(DocId a, DocId b) => !a.Equals(b);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void WriteHash128(ReadOnlySpan<byte> data)
+    {
+        var hash = XxHash128.HashToUInt128(data);
+        unsafe
+        {
+            *(UInt128*)Unsafe.AsPointer(ref _part1) = hash;
+        }
+    }
+
     public static DocId FromObjectId(ObjectId oid)
     {
         var id = default(DocId);
         id.Kind = 0;
-        // ObjectId is 12 bytes. We copy it into our 16-byte buffer.
-        unsafe 
+        var oidSpan = MemoryMarshal.CreateReadOnlySpan(ref oid, 1);
+        var oidBytes = MemoryMarshal.AsBytes(oidSpan);
+
+        unsafe
         {
-            var p = (byte*)Unsafe.AsPointer(ref id._part1);
-            Unsafe.WriteUnaligned(p, oid);
+            var dst = (byte*)Unsafe.AsPointer(ref id._part1);
+            fixed (byte* src = oidBytes)
+            {
+                *(long*)dst = *(long*)src;           
+                *(int*)(dst + 8) = *(int*)(src + 8);
+            }
         }
         return id;
     }
@@ -51,10 +70,9 @@ public struct DocId : IEquatable<DocId>
     {
         var id = default(DocId);
         id.Kind = 1;
-        unsafe 
+        unsafe
         {
-            var p = (Guid*)Unsafe.AsPointer(ref id._part1);
-            *p = g;
+            *(Guid*)Unsafe.AsPointer(ref id._part1) = g;
         }
         return id;
     }
@@ -79,13 +97,7 @@ public struct DocId : IEquatable<DocId>
     {
         var id = default(DocId);
         id.Kind = 4;
-        // 64-bit FNV-1a hash
-        ulong hash = 14695981039346656037UL;
-        foreach (char c in s)
-        {
-            hash = (hash ^ c) * 1099511628211UL;
-        }
-        id._part1 = hash;
+        id.WriteHash128(MemoryMarshal.AsBytes(s.AsSpan()));
         return id;
     }
 
@@ -95,13 +107,7 @@ public struct DocId : IEquatable<DocId>
         id.Kind = 5;
         Span<byte> buf = stackalloc byte[256];
         int written = hashable.WriteIdBytes(buf);
-        
-        ulong hash = 14695981039346656037UL;
-        foreach (byte b in buf[..written])
-        {
-            hash = (hash ^ b) * 1099511628211UL;
-        }
-        id._part1 = hash;
+        id.WriteHash128(buf[..written]);
         return id;
     }
 
@@ -110,30 +116,24 @@ public struct DocId : IEquatable<DocId>
         var id = default(DocId);
         id.Kind = 6;
         var bytes = obj.ToBson(obj.GetType());
-        
-        ulong hash = 14695981039346656037UL;
-        foreach (byte b in bytes)
-        {
-            hash = (hash ^ b) * 1099511628211UL;
-        }
-        id._part1 = hash;
+        id.WriteHash128(bytes);
         return id;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DocId From(object? rawId)
     {
-        if (rawId == null) return default;
+        ArgumentNullException.ThrowIfNull(rawId);
 
         return rawId switch
         {
-            ObjectId oid => FromObjectId(oid),
-            Guid g => FromGuid(g),
-            int i => FromInt32(i),
-            long l => FromInt64(l),
-            string s => FromString(s),
-            IDocIdHashable h => FromHashable(h),
-            _ => FromBson(rawId)
+            ObjectId oid         => FromObjectId(oid),
+            Guid g               => FromGuid(g),
+            int i                => FromInt32(i),
+            long l               => FromInt64(l),
+            string s             => FromString(s),
+            IDocIdHashable h     => FromHashable(h),
+            _                    => FromBson(rawId)
         };
     }
 }

@@ -69,75 +69,101 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 
-    async ValueTask IInternalDbSet<TEntity>.CommitAsync(IEnumerable<TEntity> added, IEnumerable<TEntity> removed, IEnumerable<object> removedIds, IEnumerable<TEntity> updated, IEnumerable<TEntity> dirty, Dictionary<object, TEntity> upsertBuffer, HashSet<object> removedIdBuffer, List<WriteModel<TEntity>> modelBuffer, IClientSessionHandle? session, CancellationToken cancellationToken)
+    async ValueTask IInternalDbSet<TEntity>.CommitAsync(
+        IEnumerable<TEntity> added, 
+        IEnumerable<TEntity> removed, 
+        IEnumerable<object> removedIds, 
+        IEnumerable<TEntity> updated, 
+        IEnumerable<TEntity> dirty, 
+        SharpArena.Allocators.ArenaAllocator arena,
+        Dictionary<DocId, TEntity> upsertBuffer,
+        HashSet<DocId> dedupeBuffer,
+        HashSet<object> rawIdBuffer,
+        List<WriteModel<TEntity>> modelBuffer,
+        IClientSessionHandle? session, 
+        CancellationToken cancellationToken)
     {
         modelBuffer.Clear();
-        removedIdBuffer.Clear();
+        dedupeBuffer.Clear();
         upsertBuffer.Clear();
+        rawIdBuffer.Clear();
 
-        // Track IDs being removed for O(1) exclusion check.
+        // 1. Process Removals (Deduplicate via DocId, store raw for filter)
         foreach (var entity in removed)
         {
             if (entity == null) continue;
-            var id = entity.GetId(_idAccessor);
-            if (id != null) removedIdBuffer.Add(id);
+            var rawId = entity.GetId(_idAccessor);
+            if (rawId == null) continue;
+            var docId = DocId.From(rawId);
+            if (dedupeBuffer.Add(docId))
+            {
+                rawIdBuffer.Add(rawId);
+            }
         }
-
-        foreach (var id in removedIds)
+        foreach (var rawId in removedIds)
         {
-            if (id != null) removedIdBuffer.Add(id);
+            if (rawId == null) continue;
+            var docId = DocId.From(rawId);
+            if (dedupeBuffer.Add(docId))
+            {
+                rawIdBuffer.Add(rawId);
+            }
         }
 
-        if (removedIdBuffer.Count > 0)
+        if (rawIdBuffer.Count > 0)
         {
-            modelBuffer.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, removedIdBuffer)));
+            modelBuffer.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, rawIdBuffer)));
         }
 
-        // 1. Deduplicate brand-new entities
+        // 2. Process Added (Deduplicate via DocId, skip if removed)
         foreach (var entity in added)
         {
             if (entity == null) continue;
-            var id = entity.GetId(_idAccessor);
-            if (id != null && !removedIdBuffer.Contains(id))
+            var rawId = entity.GetId(_idAccessor);
+            if (rawId == null) continue;
+            var docId = DocId.From(rawId);
+            if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer[id] = entity; // last one wins
+                upsertBuffer[docId] = entity;
             }
         }
 
-        // 2. Add to models and mark as processed
         foreach (var entry in upsertBuffer)
         {
             modelBuffer.Add(new InsertOneModel<TEntity>(entry.Value));
-            removedIdBuffer.Add(entry.Key); // Skip updates for this ID!
+            dedupeBuffer.Add(entry.Key); // Prevent updates for this ID
         }
-        
         upsertBuffer.Clear();
 
-        // 3. Process explicitly updated entities
+        // 3. Process Updated/Dirty (Last one wins)
         foreach (var entity in updated)
         {
             if (entity == null) continue;
-            var id = entity.GetId(_idAccessor);
-            if (id != null && !removedIdBuffer.Contains(id))
+            var rawId = entity.GetId(_idAccessor);
+            if (rawId == null) continue;
+            var docId = DocId.From(rawId);
+            if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer[id] = entity; // last one wins
+                upsertBuffer[docId] = entity;
             }
         }
-
-        // 4. Process implicitly tracked dirty entities
         foreach (var entity in dirty)
         {
             if (entity == null) continue;
-            var id = entity.GetId(_idAccessor);
-            if (id != null && !removedIdBuffer.Contains(id))
+            var rawId = entity.GetId(_idAccessor);
+            if (rawId == null) continue;
+            var docId = DocId.From(rawId);
+            if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer[id] = entity; // last one wins
+                upsertBuffer[docId] = entity;
             }
         }
 
         foreach (var entry in upsertBuffer)
         {
-            modelBuffer.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, entry.Key), entry.Value) { IsUpsert = true });
+            // We need the raw ID for the Eq filter. Since TEntity is here, we can re-extract it.
+            var rawId = entry.Value.GetId(_idAccessor);
+            modelBuffer.Add(new ReplaceOneModel<TEntity>(Builders<TEntity>.Filter.Eq(_idFieldName, rawId), entry.Value) { IsUpsert = true });
         }
 
         if (modelBuffer.Count > 0)
@@ -153,4 +179,3 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 }
-

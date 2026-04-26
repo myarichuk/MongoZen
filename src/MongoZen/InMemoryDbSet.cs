@@ -1,103 +1,57 @@
 using System.Collections;
 using System.Linq.Expressions;
-using System.Text.Json;
-using MongoDB.Bson;
 using MongoDB.Driver;
-using MongoZen.FilterUtils;
 
 namespace MongoZen;
 
+/// <summary>
+/// A test-friendly implementation of IDbSet that stores entities in a local dictionary.
+/// Does NOT perform deep cloning by default — changes to entities are immediate.
+/// </summary>
 public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
 {
-    private readonly List<T> _items;
+    private readonly Dictionary<object, T> _data = new();
     private readonly Func<T, object?> _idAccessor;
-    private readonly Conventions _conventions;
-    private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly string _idFieldName;
 
     public string CollectionName { get; }
 
-    private readonly FilterToLinqTranslator<T> _translator =
-        FilterToLinqTranslatorFactory.Create<T>();
+    internal IMongoCollection<T> Collection => null!; // For tests that check the collection namespace/name
 
-    internal IList<T> Collection => _items;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="InMemoryDbSet{T}"/> class.
-    /// </summary>
-    /// <param name="items">Initial items for the in-memory collection</param>
-    /// <param name="conventions">Conventions to use for ID mapping</param>
-    /// <param name="collectionName">Optional name for the collection</param>
-    public InMemoryDbSet(IEnumerable<T> items, Conventions? conventions = null, string? collectionName = null)
+    // Helper for seeding tests
+    public void Seed(T entity)
     {
-        _items = [..items];
-        _conventions = conventions ?? new();
-        _idAccessor = EntityIdAccessor<T>.GetAccessor(_conventions.IdConvention);
-        CollectionName = collectionName ?? typeof(T).Name;
+        var id = _idAccessor(entity) ?? throw new InvalidOperationException("Entity has no ID.");
+        _data[id] = entity;
     }
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="InMemoryDbSet{T}"/> class.
-    /// </summary>
-    public InMemoryDbSet(Conventions? conventions = null)
-        : this([], conventions, null)
+    public InMemoryDbSet(string collectionName, IIdConvention convention)
     {
+        CollectionName = collectionName;
+        _idAccessor = EntityIdAccessor<T>.GetAccessor(convention);
+        _idFieldName = convention.ResolveIdProperty<T>()?.Name ?? "_id";
     }
 
-    public async ValueTask<T?> LoadAsync(object id, CancellationToken cancellationToken = default)
+    public ValueTask<T?> LoadAsync(object id, CancellationToken cancellationToken = default)
     {
-        await _lock.WaitAsync(cancellationToken);
-        try
-        {
-            var item = _items.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
-            return item != null ? Clone(item) : null;
-        }
-        finally
-        {
-            _lock.Release();
-        }
+        _data.TryGetValue(id, out var entity);
+        return new ValueTask<T?>(entity);
     }
 
-    public IDbSet<T> Include(Expression<Func<T, object?>> path)
+    public IDbSet<T> Include(Expression<Func<T, object?>> path) => this;
+    public IDbSet<T> Include<TInclude>(Expression<Func<T, object?>> path) where TInclude : class => this;
+
+    public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, CancellationToken cancellationToken = default)
     {
-        return this;
+        // Simple in-memory filtering is not implemented for FilterDefinition.
+        // Use the Expression-based QueryAsync for in-memory tests.
+        throw new NotSupportedException("FilterDefinition queries are not supported in InMemoryDbSet. Use Expression-based queries.");
     }
 
-    public IDbSet<T> Include<TInclude>(Expression<Func<T, object?>> path) where TInclude : class
+    public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, CancellationToken cancellationToken = default)
     {
-        return this;
-    }
-
-    public async ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, CancellationToken cancellationToken = default)
-    {
-        await _lock.WaitAsync(cancellationToken);
-        try
-        {
-            var compiled = _translator.GetCompiled(filter);
-            var result = _items.Where(compiled).Select(Clone).ToList();
-            return result;
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    public async ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, CancellationToken cancellationToken = default)
-    {
-        await _lock.WaitAsync(cancellationToken);
-        try
-        {
-            var result = _items.AsQueryable()
-                .Where(filter)
-                .AsEnumerable()
-                .Select(Clone)
-                .ToList();
-            return result;
-        }
-        finally
-        {
-            _lock.Release();
-        }
+        var predicate = filter.Compile();
+        return new ValueTask<IEnumerable<T>>(_data.Values.Where(predicate).ToList());
     }
 
     public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
@@ -106,62 +60,57 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
     public ValueTask<IEnumerable<T>> QueryAsync(Expression<Func<T, bool>> filter, IClientSessionHandle session, CancellationToken cancellationToken = default)
         => QueryAsync(filter, cancellationToken);
 
-    async ValueTask IInternalDbSet<T>.CommitAsync(IEnumerable<T> added, IEnumerable<T> removed, IEnumerable<object> removedIds, IEnumerable<T> updated, IEnumerable<T> dirty, Dictionary<object, T> upsertBuffer, HashSet<object> removedIdBuffer, List<WriteModel<T>> modelBuffer, IClientSessionHandle? session, CancellationToken cancellationToken)
+    public Task Remove(T entity)
     {
-        // Simulate atomic update
-        await _lock.WaitAsync(cancellationToken);
-        try
-        {
-            foreach (var entity in added)
-            {
-                var id = _idAccessor(entity);
-                if (id != null)
-                {
-                    var existing = _items.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
-                    if (existing != null) _items.Remove(existing);
-                }
-                _items.Add(Clone(entity));
-            }
-
-            foreach (var entity in removed)
-            {
-                var id = _idAccessor(entity);
-                if (id != null)
-                {
-                    var existing = _items.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
-                    if (existing != null) _items.Remove(existing);
-                }
-            }
-
-            foreach (var id in removedIds)
-            {
-                var existing = _items.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
-                if (existing != null) _items.Remove(existing);
-            }
-
-            foreach (var entity in updated)
-            {
-                var id = _idAccessor(entity);
-                if (id != null)
-                {
-                    var existing = _items.FirstOrDefault(x => _idAccessor(x)?.Equals(id) == true);
-                    if (existing != null)
-                    {
-                        _items.Remove(existing);
-                        _items.Add(Clone(entity));
-                    }
-                }
-            }
-        }
-        finally
-        {
-            _lock.Release();
-        }
+        var id = _idAccessor(entity) ?? throw new InvalidOperationException("Entity has no ID.");
+        _data.Remove(id);
+        return Task.CompletedTask;
     }
 
-    private static T Clone(T source)
+    async ValueTask IInternalDbSet<T>.CommitAsync(
+        IEnumerable<T> added, 
+        IEnumerable<T> removed, 
+        IEnumerable<object> removedIds, 
+        IEnumerable<T> updated, 
+        IEnumerable<T> dirty, 
+        SharpArena.Allocators.ArenaAllocator arena,
+        Dictionary<DocId, T> upsertBuffer,
+        HashSet<DocId> dedupeBuffer,
+        HashSet<object> rawIdBuffer,
+        List<WriteModel<T>> modelBuffer,
+        IClientSessionHandle? session, 
+        CancellationToken cancellationToken)
     {
-        var bson = source.ToBson();
-        return MongoDB.Bson.Serialization.BsonSerializer.Deserialize<T>(bson);
+        // 1. Removals
+        foreach (var entity in removed)
+        {
+            var id = _idAccessor(entity);
+            if (id != null) _data.Remove(id);
+        }
+        foreach (var id in removedIds)
+        {
+            if (id != null) _data.Remove(id);
+        }
+
+        // 2. Added
+        foreach (var entity in added)
+        {
+            var id = _idAccessor(entity);
+            if (id != null) _data[id] = entity;
+        }
+
+        // 3. Updated/Dirty
+        foreach (var entity in updated)
+        {
+            var id = _idAccessor(entity);
+            if (id != null) _data[id] = entity;
+        }
+        foreach (var entity in dirty)
+        {
+            var id = _idAccessor(entity);
+            if (id != null) _data[id] = entity;
+        }
+
+        await Task.Yield();
     }
 }

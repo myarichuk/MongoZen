@@ -5,5 +5,6 @@ namespace MongoZen;
 [EditorBrowsable(EditorBrowsableState.Never)]
 public interface IInternalMutableDbSet
 {
-    Task CommitAsync(TransactionContext transaction, CancellationToken cancellationToken = default);
+    ValueTask CommitAsync(SharpArena.Allocators.ArenaAllocator arena, MongoDB.Driver.IClientSessionHandle? session, CancellationToken cancellationToken = default);
+    void ClearTracking();
 }

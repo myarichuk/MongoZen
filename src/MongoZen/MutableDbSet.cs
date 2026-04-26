@@ -10,7 +10,7 @@ namespace MongoZen;
 
 public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanced<TEntity>, IInternalMutableDbSet where TEntity : class
 {
-    private readonly IDbSet<TEntity> _baseSet;
+    private readonly IDbSet<TEntity> _dbSet;
     private readonly Func<TransactionContext>? _transactionProvider;
     private readonly ISessionTracker? _tracker;
     private readonly Func<TEntity, object?> _idAccessor;
@@ -20,25 +20,17 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     private readonly Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr>? _materializer;
     private readonly Func<TEntity, IntPtr, bool>? _differ;
 
-    // HashSet gives O(1) Contains — critical for the dirty-entity dedup in CommitAsync.
-    // Reference equality is intentional: we track object identity, not value equality.
     private readonly HashSet<TEntity> _added = new(ReferenceEqualityComparer.Instance);
     private readonly List<TEntity> _removed = [];
     private readonly List<object> _removedIds = [];
     private readonly HashSet<TEntity> _updated = new(ReferenceEqualityComparer.Instance);
     private readonly List<(LambdaExpression Path, Type IncludeType)> _includes = [];
 
-    // Pooled buffers to eliminate GC pressure during CommitAsync.
-    private readonly Dictionary<object, TEntity> _commitUpsertBuffer = new();
-    private readonly HashSet<object> _commitRemovedIdBuffer = new();
-    private readonly List<WriteModel<TEntity>> _commitModelBuffer = new();
-    private readonly List<TEntity> _dirtyBuffer = [];
-
     public IMutableDbSetAdvanced<TEntity> Advanced => this;
 
     public MutableDbSet(IDbSet<TEntity> baseSet, Conventions? conventions = null)
     {
-        _baseSet = baseSet;
+        _dbSet = baseSet;
         _conventions = conventions ?? new();
         _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
         _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
@@ -59,11 +51,11 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _differ = differ;
     }
 
-    public string CollectionName => _baseSet.CollectionName;
+    public string CollectionName => _dbSet.CollectionName;
 
     public void Add(TEntity entity)
     {
-        _conventions.IdGenerator.AssignId(entity, _baseSet.CollectionName, _conventions.IdConvention);
+        _conventions.IdGenerator.AssignId(entity, _dbSet.CollectionName, _conventions.IdConvention);
         _added.Add(entity);
         var id = _idAccessor(entity);
         if (id != null && _materializer != null && _differ != null)
@@ -75,11 +67,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     public void Attach(TEntity entity)
     {
         var id = _idAccessor(entity);
-        if (id == null)
-        {
-            throw new InvalidOperationException("Cannot attach an entity without an ID.");
-        }
-
+        if (id == null) throw new InvalidOperationException("Cannot attach an entity without an ID.");
         if (_materializer != null && _differ != null)
         {
             _tracker?.Track(entity, id, _materializer, _differ);
@@ -90,10 +78,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     {
         _removed.Add(entity);
         var id = _idAccessor(entity);
-        if (id != null)
-        {
-            _tracker?.Untrack<TEntity>(id);
-        }
+        if (id != null) _tracker?.Untrack<TEntity>(id);
     }
 
     public void Remove(object id)
@@ -103,19 +88,14 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     }
 
     public void Store(TEntity entity) => Add(entity);
-
     public void Delete(TEntity entity) => Remove(entity);
-
     public void Delete(object id) => Remove(id);
 
     public async ValueTask<TEntity?> LoadAsync(object id, CancellationToken cancellationToken = default)
     {
-        if (_tracker != null && _tracker.TryGetEntity<TEntity>(id, out var tracked))
-        {
-            return tracked;
-        }
+        if (_tracker != null && _tracker.TryGetEntity<TEntity>(id, out var tracked)) return tracked;
 
-        var entity = await _baseSet.LoadAsync(id, cancellationToken);
+        var entity = await _dbSet.LoadAsync(id, cancellationToken);
         if (entity != null && _tracker != null && _materializer != null && _differ != null)
         {
             return _tracker.Track(entity, id, _materializer, _differ);
@@ -146,18 +126,31 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     IDbSet<TEntity> IDbSet<TEntity>.Include<TInclude>(Expression<Func<TEntity, object?>> path) where TInclude : class => Include<TInclude>(path);
 
     public IEnumerable<TEntity> GetAdded() => _added;
-
     public IEnumerable<TEntity> GetRemoved() => _removed;
-
     public IEnumerable<TEntity> GetUpdated() => _updated;
 
-
-    async Task IInternalMutableDbSet.CommitAsync(TransactionContext transaction, CancellationToken cancellationToken)
+    public void ClearTracking()
     {
-        if (!transaction.IsActive)
-        {
-            throw new InvalidOperationException("A transaction is required to commit changes.");
-        }
+        _added.Clear();
+        _removed.Clear();
+        _removedIds.Clear();
+        _updated.Clear();
+        _includes.Clear();
+    }
+
+    private Dictionary<DocId, TEntity>? _upsertBuffer;
+    private HashSet<DocId>? _dedupeBuffer;
+    private HashSet<object>? _rawIdBuffer;
+    private List<WriteModel<TEntity>>? _modelBuffer;
+    private List<TEntity>? _dirtyBuffer;
+
+    ValueTask IInternalMutableDbSet.CommitAsync(SharpArena.Allocators.ArenaAllocator arena, IClientSessionHandle? session, CancellationToken cancellationToken)
+    {
+        _upsertBuffer ??= new Dictionary<DocId, TEntity>();
+        _dedupeBuffer ??= new HashSet<DocId>();
+        _rawIdBuffer ??= new HashSet<object>();
+        _modelBuffer ??= new List<WriteModel<TEntity>>();
+        _dirtyBuffer ??= new List<TEntity>();
 
         _dirtyBuffer.Clear();
         if (_tracker != null)
@@ -171,43 +164,22 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
             }
         }
 
-        if (_baseSet is IInternalDbSet<TEntity> internalSet)
-        {
-            await internalSet.CommitAsync(_added, _removed, _removedIds, _updated, _dirtyBuffer, _commitUpsertBuffer, _commitRemovedIdBuffer, _commitModelBuffer, transaction.Session, cancellationToken);
-        }
-        else
-        {
-            throw new NotSupportedException($"The type {_baseSet.GetType()} does not support internal commit contract.");
-        }
-
-        _added.Clear();
-        _removed.Clear();
-        _removedIds.Clear();
-        _updated.Clear();
-        _dirtyBuffer.Clear();
+        return ((IInternalDbSet<TEntity>)_dbSet).CommitAsync(
+            _added, _removed, _removedIds, _updated, _dirtyBuffer,
+            arena, _upsertBuffer, _dedupeBuffer, _rawIdBuffer, _modelBuffer, session, cancellationToken);
     }
-
-    public void ClearTracking()
-    {
-        _added.Clear();
-        _removed.Clear();
-        _removedIds.Clear();
-        _updated.Clear();
-        _includes.Clear();
-    }
-
 
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default)
     {
         var session = _transactionProvider?.Invoke().Session;
-        if (_includes.Count > 0 && _baseSet is DbSet<TEntity> mongoSet)
+        if (_includes.Count > 0 && _dbSet is DbSet<TEntity> mongoSet)
         {
             return await QueryWithIncludesAsync(mongoSet, filter, session, cancellationToken);
         }
 
-        var results = session != null && _baseSet is DbSet<TEntity> ds
+        var results = session != null && _dbSet is DbSet<TEntity> ds
             ? await ds.QueryAsync(filter, session, cancellationToken)
-            : await _baseSet.QueryAsync(filter, cancellationToken);
+            : await _dbSet.QueryAsync(filter, cancellationToken);
 
         return TrackResults(results);
     }
@@ -226,7 +198,6 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         {
             var memberExpr = path.Body as MemberExpression;
             if (memberExpr == null && path.Body is UnaryExpression unary) memberExpr = unary.Operand as MemberExpression;
-            
             if (memberExpr == null) continue;
 
             var localField = memberExpr.Member.Name;
@@ -236,15 +207,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
             {
                 var foreignCollection = sessionTyped.GetDbContext().GetCollectionName(foreignType);
                 var asField = $"_included_{localField}";
-                
-                pipeline.Add(new BsonDocument("$lookup", new BsonDocument
-                {
-                    { "from", foreignCollection },
-                    { "localField", localField },
-                    { "foreignField", "_id" },
-                    { "as", asField }
-                }));
-                
+                pipeline.Add(new BsonDocument("$lookup", new BsonDocument { { "from", foreignCollection }, { "localField", localField }, { "foreignField", "_id" }, { "as", asField } }));
                 includeMaps.Add((localField, foreignCollection, asField, foreignType));
             }
             else
@@ -276,7 +239,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
                             _tracker?.TrackDynamic(foreignEntity, map.ForeignType, idValue);
                         }
                     }
-                    doc.Remove(map.AsField); // Clean up for deserialization of the base entity
+                    doc.Remove(map.AsField);
                 }
             }
 
