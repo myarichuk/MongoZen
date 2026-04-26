@@ -30,6 +30,11 @@ public class ShadowStructsGeneratorTests
         }
 
         references.Add(MetadataReference.CreateFromFile(typeof(object).Assembly.Location));
+
+        // MongoDB.Bson — needed so ObjectId resolves as a value type (IsValueType == true)
+        references.Add(MetadataReference.CreateFromFile(typeof(MongoDB.Bson.ObjectId).Assembly.Location));
+        // MongoZen — needed so DbContext resolves for the ShadowStructsGenerator pipeline
+        references.Add(MetadataReference.CreateFromFile(typeof(MongoZen.DbContext).Assembly.Location));
         
         var tree = CSharpSyntaxTree.ParseText(source);
         return CSharpCompilation.Create(
@@ -114,6 +119,80 @@ public class Address {
     }
 
     [Fact]
+    public void BsonReferenceTypes_AreNotTreatedAsPrimitives()
+    {
+        // BsonDocument is in the MongoDB.Bson namespace but is a reference type.
+        // The shadow generator must NOT treat it as a primitive — doing so would copy
+        // the reference instead of the value, making dirty-checking silently fail.
+        var source = @"
+using MongoZen;
+using MongoDB.Bson;
+
+public class MyContext : DbContext {
+    public IDbSet<Thing> Things { get; set; }
+}
+
+public class Thing {
+    public string Id { get; set; }
+    public BsonDocument ExtraData { get; set; }
+}";
+
+        var generator = new ShadowStructsGenerator();
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(generator);
+        var compilation = CreateCompilation(source);
+
+        driver = driver.RunGenerators(compilation);
+        var result = driver.GetRunResult();
+
+        // The generator should still produce Thing_Shadow.g.cs even though BsonDocument
+        // is an unshadowable reference type — the property is simply skipped.
+        var thingSource = result.Results[0].GeneratedSources
+            .FirstOrDefault(s => s.HintName == "Thing_Shadow.g.cs");
+        Assert.NotEqual(default, thingSource);
+        var thingCode = thingSource.SourceText.ToString();
+
+        // BsonDocument must NOT appear as a direct field: that would copy the reference
+        // and make dirty-checking silently fail. The generator skips unshadowable properties.
+        Assert.DoesNotContain("BsonDocument ExtraData", thingCode);
+        // The Id property (a string) should still be in the shadow.
+        Assert.Contains("ArenaString Id", thingCode);
+    }
+
+    [Fact]
+    public void BsonValueTypes_AreTreatedAsPrimitives()
+    {
+        // ObjectId is a struct in MongoDB.Bson — it should be a primitive (direct copy safe).
+        var source = @"
+using MongoZen;
+using MongoDB.Bson;
+
+public class MyContext : DbContext {
+    public IDbSet<Thing> Things { get; set; }
+}
+
+public class Thing {
+    public ObjectId Id { get; set; }
+    public string Name { get; set; }
+}";
+
+        var generator = new ShadowStructsGenerator();
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(generator);
+        var compilation = CreateCompilation(source);
+
+        driver = driver.RunGenerators(compilation);
+        var result = driver.GetRunResult();
+
+        var thingCode = result.Results[0].GeneratedSources
+            .First(s => s.HintName == "Thing_Shadow.g.cs").SourceText.ToString();
+
+        // ObjectId is a value type — should be copied directly (primitive).
+        // The generator emits the full metadata name as returned by the symbol display.
+        Assert.Contains("ObjectId Id;", thingCode);
+        // Must NOT have a HasValue_ companion (that's only for reference-type properties).
+        Assert.DoesNotContain("HasValue_Id", thingCode);
+    }
+
+    [Fact]
     public void GeneratesShadowStructWithCollections()
     {
         var source = @"
@@ -144,6 +223,45 @@ public class Post {
         var blogCode = result.Results[0].GeneratedSources.First(s => s.HintName == "Blog_Shadow.g.cs").SourceText.ToString();
         Assert.Contains("public SharpArena.Collections.ArenaList<SharpArena.Collections.ArenaString> Tags;", blogCode);
         Assert.Contains("public SharpArena.Collections.ArenaList<Post_Shadow> Posts;", blogCode);
+    }
+
+    [Fact]
+    public void GeneratesShadowStructWithDictionaryAndBlockScopes()
+    {
+        var source = @"
+using MongoZen;
+using System.Collections.Generic;
+
+public class MyContext : DbContext {
+    public IDbSet<User> Users { get; set; }
+}
+
+public class User {
+    public string Id { get; set; }
+    public Dictionary<string, string> Settings { get; set; }
+    public List<int> Scores { get; set; }
+}";
+
+        var generator = new ShadowStructsGenerator();
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(generator);
+        var compilation = CreateCompilation(source);
+        
+        driver = driver.RunGenerators(compilation);
+        var result = driver.GetRunResult();
+        
+        var userCode = result.Results[0].GeneratedSources.First(s => s.HintName == "User_Shadow.g.cs").SourceText.ToString();
+        
+        // Verify block scopes in From method for collections/dictionaries
+        Assert.Contains("{", userCode); 
+        // We look for the pattern where shadowItem/shadowPair is assigned within a block
+        Assert.Contains("foreach (var item in source.Scores)", userCode);
+        Assert.Contains("var shadowItem", userCode);
+        
+        // Verify Dictionary dirty check is order-independent (contains nested loop and foundKey flag)
+        Assert.Contains("foreach (var kvp in current.Settings)", userCode);
+        Assert.Contains("bool foundKey = false;", userCode);
+        Assert.Contains("for (int j = 0; j < shadow.Settings.Length; j++)", userCode);
+        Assert.Contains("if (shadowPair.Key.Equals(kvp.Key))", userCode);
     }
 
     private static string Normalize(string s) => s.Replace("\r\n", "\n");

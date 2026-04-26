@@ -31,7 +31,7 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
             EnsureTransactionActive();
             try
             {
-                await Users.Advanced.CommitAsync(Transaction);
+                await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
 
                 await CommitTransactionAsync();
                 await DisposeAsync();

@@ -79,7 +79,7 @@ public class AttachAndRemoveTests : IntegrationTestBase
         public async ValueTask SaveChangesAsync()
         {
             EnsureTransactionActive();
-            await Products.Advanced.CommitAsync(Transaction);
+            await ((IInternalMutableDbSet)Products).CommitAsync(Transaction);
             await CommitTransactionAsync();
         }
     }

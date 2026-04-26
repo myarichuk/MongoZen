@@ -58,7 +58,7 @@ public class DbContextSessionTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task CommitTransactionAsync_SetsIsActiveToFalse_ForInMemory()
+    public async Task CommitTransactionAsync_RestartsTransaction_ForInMemory()
     {
         var ctx = new TestDbContext(new DbContextOptions());
         await using var session = new TestDbContextSession(ctx);
@@ -66,17 +66,23 @@ public class DbContextSessionTests : IntegrationTestBase
         Assert.True(session.Transaction.IsActive);
         await session.CommitTransactionAsync();
 
+        // For in-memory, we currently just set _inMemoryTransaction = false.
+        // It restarts on next EnsureTransactionActive() call.
         Assert.False(session.Transaction.IsActive);
+        session.ExposeEnsureTransactionActive();
+        Assert.True(session.Transaction.IsActive);
     }
 
     [Fact]
-    public async Task EnsureTransactionActive_ThrowsAfterCommit()
+    public async Task EnsureTransactionActive_WorksAfterCommit()
     {
         var ctx = new TestDbContext(new DbContextOptions());
         await using var session = new TestDbContextSession(ctx);
 
         await session.CommitTransactionAsync();
 
-        Assert.Throws<InvalidOperationException>(() => session.ExposeEnsureTransactionActive());
+        // Should NOT throw anymore as we support session reuse
+        session.ExposeEnsureTransactionActive();
+        Assert.True(session.Transaction.IsActive);
     }
 }

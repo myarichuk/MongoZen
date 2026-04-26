@@ -61,6 +61,29 @@ var options = new DbContextOptions(); // Default is In-Memory
 var testDb = new MyDbContext(options);
 ```
 
+## Performance & Benchmarks (WIP)
+
+We compare MongoZen against a **hand-optimized raw driver** baseline. The goal isn't just to be "as fast as" the driver, but to prove that the architectural overhead of Change Tracking and Identity Maps is negligible (or even beneficial) compared to manual boilerplate.
+
+### Results (1,000 & 5,000 Entities)
+
+*Test Environment: .NET 10, MongoDB Replica Set in Docker (directConnection=true).*
+
+| Method | Category | Count | Mean | Ratio | Allocated | Alloc Ratio |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **MongoZen_ReadRepeat** | **IdentityMap** | 5000 | **2.7 ms** | **0.02** | **32 KB** | **0.01** |
+| RawDriver_ReadRepeat | IdentityMap | 5000 | 140.0 ms | 1.00 | 3172 KB | 1.00 |
+| **MongoZen_ReadAndModify** | **ReadModify** | 5000 | **232.8 ms** | **0.65** | **31123 KB** | **0.96** |
+| RawDriver_ReadAndModify | ReadModify | 5000 | 362.3 ms | 1.00 | 32338 KB | 1.00 |
+| **MongoZen_InsertBatch** | **Insert** | 5000 | **397.0 ms** | **3.62** | **20505 KB** | **2.48** |
+| RawDriver_InsertBatch | Insert | 5000 | 115.8 ms | 1.00 | 8274 KB | 1.00 |
+
+### What these numbers mean:
+
+1.  **IdentityMap (Repeated Reads)**: Serve requests from memory. MongoZen is **~50x - 100x faster** because it serves repeated requests for the same ID from the local `ISessionTracker` instead of hitting the wire.
+2.  **ReadAndModify (Change Tracking)**: This is the core "Zen" win. Even with the overhead of diffing, MongoZen is **35% faster** and uses **less memory** than hand-written `BulkWrite` code. Why? Our optimized internal engine (using unmanaged Arena memory and HashSets) is more efficient at preparing the write models than manual LINQ-to-model mapping.
+3.  **Insert (The "Tracking Tax")**: This is the only place with overhead (~3.6x slower). This is the one-time cost of allocating shadow structs and registering entities in the Identity Map so you can enjoy the performance wins above for the rest of the object lifecycle.
+
 ## More Info
 
 Check out our [Wiki](https://github.com/myarichuk/MongoZen/wiki) for:

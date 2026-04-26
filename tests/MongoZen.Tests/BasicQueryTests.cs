@@ -103,7 +103,7 @@ public class BasicQueryTests : IntegrationTestBase
         using var ctx = new TestDbContext(new DbContextOptions(Database!));
 
         var dbSet = (DbSet<User>)ctx.Users;
-        await dbSet.Remove(data[0]);
+        await dbSet.Remove(entity: data[0]);
 
         var result = await ctx.Users.QueryAsync(u => true);
 
