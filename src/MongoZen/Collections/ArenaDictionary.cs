@@ -17,7 +17,7 @@ public unsafe struct ArenaDictionary<TKey, TValue>
     private const int MinCapacity = 8;
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct Entry
+    internal struct Entry
     {
         public TKey Key;
         public TValue Value;
@@ -106,32 +106,35 @@ public unsafe struct ArenaDictionary<TKey, TValue>
         _count = 0;
     }
 
-    public readonly Enumerator GetEnumerator() => new(this);
+    public readonly Enumerator GetEnumerator() => new(_entries, _occupied, Capacity);
 
     public ref struct Enumerator
     {
-        private readonly ArenaDictionary<TKey, TValue> _dict;
+        private readonly Entry* _entries;
+        private readonly byte* _occupied;
+        private readonly int _capacity;
         private int _index;
 
-        internal Enumerator(in ArenaDictionary<TKey, TValue> dict)
+        internal Enumerator(Entry* entries, byte* occupied, int capacity)
         {
-            _dict = dict;
+            _entries = entries;
+            _occupied = occupied;
+            _capacity = capacity;
             _index = -1;
         }
 
         public bool MoveNext()
         {
-            int cap = _dict.Capacity;
-            while (++_index < cap)
+            while (++_index < _capacity)
             {
-                if (_dict._occupied[_index] != 0)
+                if (_occupied[_index] != 0)
                     return true;
             }
             return false;
         }
 
-        public readonly TKey Key => _dict._entries[_index].Key;
-        public readonly TValue Value => _dict._entries[_index].Value;
+        public readonly TKey Key => _entries[_index].Key;
+        public readonly TValue Value => _entries[_index].Value;
     }
 
     private void Grow()

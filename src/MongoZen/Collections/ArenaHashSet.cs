@@ -89,25 +89,28 @@ public unsafe struct ArenaHashSet<T>
         _count = 0;
     }
 
-    public readonly Enumerator GetEnumerator() => new(this);
+    public readonly Enumerator GetEnumerator() => new(_slots, _occupied, Capacity);
 
     public ref struct Enumerator
     {
-        private readonly ArenaHashSet<T> _set;
+        private readonly T* _slots;
+        private readonly byte* _occupied;
+        private readonly int _capacity;
         private int _index;
 
-        internal Enumerator(in ArenaHashSet<T> set)
+        internal Enumerator(T* slots, byte* occupied, int capacity)
         {
-            _set   = set;
+            _slots = slots;
+            _occupied = occupied;
+            _capacity = capacity;
             _index = -1;
         }
 
         public bool MoveNext()
         {
-            int cap = _set.Capacity;
-            while (++_index < cap)
+            while (++_index < _capacity)
             {
-                if (_set._occupied[_index] != 0)
+                if (_occupied[_index] != 0)
                     return true;
             }
             return false;
@@ -116,7 +119,7 @@ public unsafe struct ArenaHashSet<T>
         public readonly T Current
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => _set._slots[_index];
+            get => _slots[_index];
         }
     }
 
