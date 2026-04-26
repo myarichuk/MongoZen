@@ -98,10 +98,17 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
 
         if (!_inMemoryTransaction && _session != null && _session.IsInTransaction)
         {
+            // Commit first. Only auto-start the next transaction and accept
+            // changes if the commit succeeds. If CommitTransactionAsync throws
+            // (e.g. write conflict), the session stays in its pre-commit state
+            // so the caller can inspect the error and retry or abort.
             await _session.CommitTransactionAsync(cancellationToken);
             _session.StartTransaction(); // RavenDB-style multi-save: auto-start next
         }
 
+        // AcceptChanges is only reached on the happy path — intentional.
+        // If the commit above threw, shadows are NOT refreshed and the pending
+        // change sets are NOT cleared, allowing the caller to retry.
         AcceptChanges();
     }
 
@@ -127,6 +134,10 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     {
         if (!_trackedEntities.TryGetValue(typeof(TEntity), out var map)) return;
 
+        // NOTE: each RefreshShadows call allocates new shadow blocks from the arena
+        // without reclaiming the old ones (standard arena behavior). This ensures
+        // the session stays consistent but means arena memory grows on every save
+        // for long-lived sessions.
         // Updating values in-place while iterating is safe for Dictionary in .NET.
         foreach (var kvp in map)
         {
@@ -215,12 +226,15 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
 
     public void ClearTracking()
     {
+        // IMPORTANT: clear the identity map BEFORE resetting the arena.
+        // Any code that reads a ShadowPtr after Reset() dereferences freed memory.
+        // Clearing the map first ensures no stale pointers can be reached.
         _trackedEntities.Clear();
-        _arena.Reset();
         foreach (var set in _dbSets.Values)
         {
              set.ClearTracking();
         }
+        _arena.Reset();
     }
 
     public async Task CommitTransactionAsync()
@@ -337,7 +351,8 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
             }
         }
 
-        var hello = database.RunCommand<BsonDocument>(new BsonDocument("hello", 1), cancellationToken: new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var hello = database.RunCommand<BsonDocument>(new BsonDocument("hello", 1), cancellationToken: cts.Token);
         var supported = hello.TryGetValue("setName", out _) || (hello.TryGetValue("msg", out var msg) && msg == "isdbgrid");
         TopologyCache.AddOrUpdate(client, new StrongBox<bool>(supported));
         return supported;

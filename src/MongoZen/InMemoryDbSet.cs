@@ -94,34 +94,70 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
         TransactionContext transaction, 
         CancellationToken cancellationToken)
     {
-        // 1. Removals
+        // Mirror the deduplication semantics of DbSet.CommitAsync so that
+        // in-memory tests see the same Remove→Add→Dirty ordering as production.
+
+        // 1. Removals — collect and deduplicate via DocId
         foreach (var entity in removed)
         {
             var id = _idAccessor(entity);
-            if (id != null) _data.Remove(id);
+            if (id == null) continue;
+            var docId = DocId.From(id);
+            if (dedupeBuffer.Add(docId))
+            {
+                rawIdBuffer.Add(id);
+                _data.Remove(id);
+            }
         }
         foreach (var id in removedIds)
         {
-            if (id != null) _data.Remove(id);
+            if (id == null) continue;
+            var docId = DocId.From(id);
+            if (dedupeBuffer.Add(docId))
+            {
+                rawIdBuffer.Add(id);
+                _data.Remove(id);
+            }
         }
 
-        // 2. Added
+        // 2. Added — skip if already removed (removed has priority)
         foreach (var entity in added)
         {
             var id = _idAccessor(entity);
-            if (id != null) _data[id] = entity;
+            if (id == null) continue;
+            var docId = DocId.From(id);
+            if (!dedupeBuffer.Contains(docId))
+            {
+                upsertBuffer[docId] = entity;
+            }
         }
+        foreach (var entry in upsertBuffer)
+        {
+            _data[_idAccessor(entry.Value)!] = entry.Value;
+            dedupeBuffer.Add(entry.Key); // prevent dirty from overwriting a fresh add
+        }
+        upsertBuffer.Clear();
 
-        // 3. Updated/Dirty
+        // 3. Updated / Dirty — skip if already removed or just added
         foreach (var entity in updated)
         {
             var id = _idAccessor(entity);
-            if (id != null) _data[id] = entity;
+            if (id == null) continue;
+            var docId = DocId.From(id);
+            if (!dedupeBuffer.Contains(docId))
+                upsertBuffer[docId] = entity;
         }
         foreach (var entity in dirty)
         {
             var id = _idAccessor(entity);
-            if (id != null) _data[id] = entity;
+            if (id == null) continue;
+            var docId = DocId.From(id);
+            if (!dedupeBuffer.Contains(docId))
+                upsertBuffer[docId] = entity;
+        }
+        foreach (var entry in upsertBuffer)
+        {
+            _data[_idAccessor(entry.Value)!] = entry.Value;
         }
 
         await Task.Yield();

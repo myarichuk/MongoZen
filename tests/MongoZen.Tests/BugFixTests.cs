@@ -46,7 +46,8 @@ namespace MongoZen.Tests
                 {
                     await CommitTransactionAsync();
                 }
-                ClearTracking();
+                ((IInternalMutableDbSet)People).RefreshShadows(this);
+                ((IInternalMutableDbSet)People).ClearTracking();
             }
         }
 
