@@ -36,12 +36,11 @@ internal class EntityTracker<TEntity> : IEntityTracker where TEntity : class
     {
         if (_materializer == null) return;
 
-        foreach (var kvp in Map)
+        Map.UpdateAllValues((_, entry) =>
         {
-            var entry = kvp.Value;
             var newShadowPtr = new ShadowPtr(_materializer(entry.Entity, arena), generation);
-            Map[kvp.Key] = (entry.Entity, newShadowPtr);
-        }
+            return (entry.Entity, newShadowPtr);
+        });
     }
 
     public void TrackDynamic(object entity, object id)

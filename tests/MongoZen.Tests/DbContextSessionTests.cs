@@ -20,7 +20,7 @@ public class DbContextSessionTests : IntegrationTestBase
     private sealed class TestDbContextSession(TestDbContext dbContext, bool startTransaction = true)
         : DbContextSession<TestDbContext>(dbContext, startTransaction)
     {
-        public void ExposeEnsureTransactionActive() => EnsureTransactionActive();
+        public Task ExposeEnsureTransactionActiveAsync() => EnsureTransactionActiveAsync();
     }
 
     [Fact]
@@ -28,6 +28,7 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         await using var session = new TestDbContextSession(ctx);
+        await session.Advanced.InitializeAsync();
 
         Assert.True(session.Transaction.IsActive);
         Assert.True(session.Transaction.IsInMemoryTransaction);
@@ -38,6 +39,7 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         var session = new TestDbContextSession(ctx);
+        await session.Advanced.InitializeAsync();
 
         await session.DisposeAsync();
 
@@ -50,6 +52,7 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         await using var session = new TestDbContextSession(ctx);
+        await session.Advanced.InitializeAsync();
 
         Assert.True(session.Transaction.IsActive);
         await session.AbortTransactionAsync();
@@ -62,14 +65,15 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         await using var session = new TestDbContextSession(ctx);
+        await session.Advanced.InitializeAsync();
 
         Assert.True(session.Transaction.IsActive);
         await session.CommitTransactionAsync();
 
         // For in-memory, we currently just set _inMemoryTransaction = false.
-        // It restarts on next EnsureTransactionActive() call.
+        // It restarts on next EnsureTransactionActiveAsync() call.
         Assert.False(session.Transaction.IsActive);
-        session.ExposeEnsureTransactionActive();
+        await session.ExposeEnsureTransactionActiveAsync();
         Assert.True(session.Transaction.IsActive);
     }
 
@@ -78,11 +82,12 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         await using var session = new TestDbContextSession(ctx);
+        await session.Advanced.InitializeAsync();
 
         await session.CommitTransactionAsync();
 
         // Should NOT throw anymore as we support session reuse
-        session.ExposeEnsureTransactionActive();
+        await session.ExposeEnsureTransactionActiveAsync();
         Assert.True(session.Transaction.IsActive);
     }
 

@@ -113,7 +113,14 @@ public class PartialUpdateIntegrationTests : IntegrationTestBase
 
     private class TestSession : DbContextSession<TestDbContext>
     {
-        public TestSession(TestDbContext dbContext) : base(dbContext)
+        public static async Task<TestSession> OpenSessionAsync(TestDbContext dbContext)
+        {
+            var session = new TestSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private TestSession(TestDbContext dbContext) : base(dbContext)
         {
             Entities = new MutableDbSet<ComplexEntity>(
                 _dbContext.Entities,
@@ -154,7 +161,7 @@ public class PartialUpdateIntegrationTests : IntegrationTestBase
         await collection.InsertOneAsync(entity);
 
         // 2. Modify one field
-        await using (var session = new TestSession(db))
+        await using (var session = await TestSession.OpenSessionAsync(db))
         {
             var loaded = await session.Entities.LoadAsync("c1");
             Assert.NotNull(loaded);
@@ -182,7 +189,7 @@ public class PartialUpdateIntegrationTests : IntegrationTestBase
         var entity = new ComplexEntity { Id = "c2", Name = "A", Scores = new List<int> { 1 }, Version = 1 };
         await collection.InsertOneAsync(entity);
 
-        await using (var session = new TestSession(db))
+        await using (var session = await TestSession.OpenSessionAsync(db))
         {
             var loaded = await session.Entities.LoadAsync("c2");
             loaded!.Scores.Add(2);

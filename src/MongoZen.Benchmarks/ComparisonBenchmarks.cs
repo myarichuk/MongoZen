@@ -145,7 +145,7 @@ public class ComparisonBenchmarks
     [BenchmarkCategory("Insert"), Benchmark]
     public async Task Insert_MongoZen_OptimisticConcurrency()
     {
-        await using var session = _dbContext.StartSession();
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(_dbContext);
         foreach (var entity in _testData)
         {
             session.Store(entity);
@@ -158,7 +158,7 @@ public class ComparisonBenchmarks
     {
         var options = new DbContextOptions(_database, new Conventions { ConcurrencyPropertyName = null });
         var db = new BenchmarkDbContext(options);
-        await using var session = db.StartSession();
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(db);
         foreach (var entity in _testData)
         {
             session.Store(entity);
@@ -289,7 +289,7 @@ public class ComparisonBenchmarks
     [BenchmarkCategory("ReadModify"), Benchmark]
     public async Task ReadAndModify_MongoZen_Set_OptimisticConcurrency()
     {
-        await using var session = _dbContext.StartSession();
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(_dbContext);
         var entities = await session.Entities.QueryAsync(e => _testIds.Contains(e.Id));
         foreach (var entity in entities)
         {
@@ -305,7 +305,7 @@ public class ComparisonBenchmarks
     {
         var options = new DbContextOptions(_database, new Conventions { ConcurrencyPropertyName = null });
         var db = new BenchmarkDbContext(options);
-        await using var session = db.StartSession();
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(db);
         var entities = await session.Entities.QueryAsync(e => _testIds.Contains(e.Id));
         foreach (var entity in entities)
         {
@@ -334,7 +334,7 @@ public class ComparisonBenchmarks
     public async Task IdentityMap_MongoZen_FromMemory()
     {
         var id = _testIds[0];
-        await using var session = _dbContext.StartSession();
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(_dbContext);
         for (int i = 0; i < 100; i++)
         {
             await session.Entities.LoadAsync(id);

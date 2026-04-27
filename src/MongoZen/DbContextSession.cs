@@ -25,6 +25,7 @@ public interface IDbContextSession : ISessionTracker
 
 public interface IDbContextSessionAdvanced
 {
+    Task InitializeAsync(CancellationToken cancellationToken = default);
     Task CommitTransactionAsync();
     Task AbortTransactionAsync();
     void ClearTracking();
@@ -42,21 +43,24 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     private readonly TransactionManager _transactionManager;
     private readonly SessionArenaManager _arenaManager;
     private readonly Dictionary<Type, IInternalMutableDbSet> _dbSets = new();
+    private readonly bool _startTransaction;
 
     // Identity Map and Shadow storage. 
     private readonly Dictionary<Type, IEntityTracker> _trackedEntities = new();
-
-    public TDbContext Context => _dbContext;
 
     protected DbContextSession(TDbContext dbContext, bool startTransaction = true)
     {
         _dbContext = dbContext;
         _transactionManager = new TransactionManager(dbContext);
         _arenaManager = new SessionArenaManager();
-        
-        if (startTransaction)
+        _startTransaction = startTransaction;
+    }
+
+    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        if (_startTransaction)
         {
-            _transactionManager.EnsureTransactionStarted();
+            await _transactionManager.EnsureTransactionStartedAsync(cancellationToken);
         }
     }
 
@@ -93,7 +97,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
 
     public virtual async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        _transactionManager.EnsureTransactionActive();
+        await _transactionManager.EnsureTransactionActiveAsync(cancellationToken);
 
         var transaction = Transaction;
         try 
@@ -300,5 +304,5 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         GC.SuppressFinalize(this);
     }
 
-    protected void EnsureTransactionActive() => _transactionManager.EnsureTransactionActive();
+    protected Task EnsureTransactionActiveAsync(CancellationToken cancellationToken = default) => _transactionManager.EnsureTransactionActiveAsync(cancellationToken);
 }

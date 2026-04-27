@@ -20,14 +20,21 @@ namespace MongoZen.Tests
         {
             public IDbSet<Person> People { get; set; } = null!;
 
-            public Task<TestSession> StartSessionAsync() => Task.FromResult(new TestSession(this));
+            public Task<TestSession> StartSessionAsync() => TestSession.OpenSessionAsync(this);
         }
 
         private class TestSession : DbContextSession<TestDbContext>
         {
+            public static async Task<TestSession> OpenSessionAsync(TestDbContext dbContext, bool startTransaction = true)
+            {
+                var session = new TestSession(dbContext, startTransaction);
+                await session.Advanced.InitializeAsync();
+                return session;
+            }
+
             public IMutableDbSet<Person> People { get; }
 
-            public TestSession(TestDbContext context, bool startTransaction = true) : base(context, startTransaction)
+            private TestSession(TestDbContext context, bool startTransaction = true) : base(context, startTransaction)
             {
                 People = new MutableDbSet<Person>(
                     context.People,
@@ -41,6 +48,7 @@ namespace MongoZen.Tests
 
             public async Task SaveChangesAsync()
             {
+                await EnsureTransactionActiveAsync();
                 await ((IInternalMutableDbSet)People).CommitAsync(Transaction);
                 if (Transaction.Session != null && Transaction.Session.IsInTransaction)
                 {

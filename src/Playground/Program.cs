@@ -39,7 +39,7 @@ var person3 = new Person
     Age = 25,
 };
 
-await using (var session = dbContext.StartSession())
+await using (var session = await MyDbContextSession.OpenSessionAsync(dbContext))
 {
     session.Store(person);
     session.Store(person2);
@@ -57,7 +57,7 @@ foreach (var p in people)
     Console.WriteLine($"Id: {p.Id}, Name: {p.Name}, Age: {p.Age}");
 }
 
-await using (var session = dbContext.StartSession())
+await using (var session = await MyDbContextSession.OpenSessionAsync(dbContext))
 {
     var olderThan30People = await session.Query<Person>()
         .QueryAsync(p => p.Age > 30);

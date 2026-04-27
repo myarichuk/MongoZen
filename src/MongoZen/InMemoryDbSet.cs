@@ -10,7 +10,7 @@ namespace MongoZen;
 /// A test-friendly implementation of IDbSet that stores entities in a local dictionary.
 /// Does NOT perform deep cloning by default — changes to entities are immediate.
 /// </summary>
-public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDbSet where T : class
+public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
 {
     private readonly Dictionary<object, T> _data = new();
     private readonly Dictionary<object, long> _versions = new();
@@ -97,33 +97,6 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDb
     public void Dispose()
     {
         // No-op for InMemoryDbSet
-    }
-
-    void IInternalMutableDbSet.ClearTracking()
-    {
-        // No-op for InMemoryDbSet as it doesn't track local changes.
-    }
-
-    void IInternalMutableDbSet.RefreshShadows(ISessionTracker tracker)
-    {
-        // No-op for InMemoryDbSet as it doesn't track local changes.
-    }
-
-    async ValueTask IInternalMutableDbSet.CommitAsync(TransactionContext transaction, CancellationToken cancellationToken)
-    {
-        var versionGetter = ConcurrencyVersionAccessor<T>.GetGetter(_conventions.ConcurrencyPropertyName);
-        var versionSetter = ConcurrencyVersionAccessor<T>.GetSetter(_conventions.ConcurrencyPropertyName);
-
-        if (versionGetter != null && versionSetter != null)
-        {
-            foreach (var kvp in _data)
-            {
-                var currentVersion = versionGetter(kvp.Value);
-                _versions[kvp.Key] = currentVersion + 1;
-                versionSetter(kvp.Value, currentVersion + 1);
-            }
-        }
-        await Task.Yield();
     }
 
     async ValueTask IInternalDbSet<T>.CommitAsync(

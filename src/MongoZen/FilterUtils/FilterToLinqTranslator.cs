@@ -13,8 +13,10 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
     private static readonly ParameterExpression Param = Expression.Parameter(typeof(T), "x");
 
     private readonly ConcurrentDictionary<BsonDocument, Func<T, bool>> _compiledCache = new();
+    private readonly ConcurrentQueue<BsonDocument> _cacheKeys = new();
     private readonly Dictionary<string, IFilterElementTranslator> _elementTranslators;
     private readonly Conventions _conventions;
+    private int _cacheCount;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using a custom set of filter element translators.
@@ -80,15 +82,21 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
             return cached;
         }
 
-        // Simple eviction: clear cache if it grows too large.
-        // Pragmatic and low-overhead for a query cache.
-        if (_compiledCache.Count >= _conventions.QueryCacheSize)
+        var compiled = Translate(filter).Compile();
+        if (_compiledCache.TryAdd(doc, compiled))
         {
-            _compiledCache.Clear();
+            _cacheKeys.Enqueue(doc);
+            if (Interlocked.Increment(ref _cacheCount) > _conventions.QueryCacheSize)
+            {
+                // Evict one item (the oldest)
+                if (_cacheKeys.TryDequeue(out var oldKey))
+                {
+                    _compiledCache.TryRemove(oldKey, out _);
+                    Interlocked.Decrement(ref _cacheCount);
+                }
+            }
         }
 
-        var compiled = Translate(filter).Compile();
-        _compiledCache.TryAdd(doc, compiled);
         return compiled;
     }
 

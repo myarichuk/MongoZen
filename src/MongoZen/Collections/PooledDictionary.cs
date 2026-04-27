@@ -50,12 +50,6 @@ public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValueP
     public void AddOrUpdate(TKey key, TValue value)
     {
         var entries = _entries!;
-        if (_count * 100 >= entries.Length * 70)
-        {
-            Grow();
-            entries = _entries!;
-        }
-
         int hashCode = _comparer.GetHashCode(key!);
         int slot = hashCode & _capacityMask;
 
@@ -69,9 +63,36 @@ public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValueP
             slot = (slot + 1) & _capacityMask;
         }
 
+        // It's a new key, check if we need to grow
+        if (_count * 100 >= entries.Length * 70)
+        {
+            Grow();
+            entries = _entries!;
+            _capacityMask = entries.Length - 1;
+            slot = hashCode & _capacityMask;
+
+            // Re-find the slot after grow
+            while (_occupied![slot] != 0)
+            {
+                slot = (slot + 1) & _capacityMask;
+            }
+        }
+
         entries[slot] = new Entry { Key = key, Value = value };
         _occupied[slot] = 1;
         _count++;
+    }
+
+    public void UpdateAllValues(Func<TKey, TValue, TValue> transform)
+    {
+        if (_entries == null) return;
+        for (int i = 0; i < _entries.Length; i++)
+        {
+            if (_occupied![i] != 0)
+            {
+                _entries[i].Value = transform(_entries[i].Key, _entries[i].Value);
+            }
+        }
     }
 
     public bool TryGetValue(TKey key, [MaybeNullWhen(false)] out TValue value)

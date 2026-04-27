@@ -28,7 +28,14 @@ public class IncludeTests : IntegrationTestBase
 
     private sealed class TestContextSession : DbContextSession<TestContext>
     {
-        public TestContextSession(TestContext dbContext) : base(dbContext)
+        public static async Task<TestContextSession> OpenSessionAsync(TestContext dbContext)
+        {
+            var session = new TestContextSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private TestContextSession(TestContext dbContext) : base(dbContext)
         {
             Customers = new MutableDbSet<Customer>(_dbContext.Customers, () => Transaction, this, extractor: null, conventions: _dbContext.Options.Conventions);
             Orders = new MutableDbSet<Order>(_dbContext.Orders, () => Transaction, this, extractor: null, conventions: _dbContext.Options.Conventions);
@@ -46,7 +53,7 @@ public class IncludeTests : IntegrationTestBase
 
         public async ValueTask SaveChangesAsync()
         {
-            EnsureTransactionActive();
+            await EnsureTransactionActiveAsync();
             await ((IInternalMutableDbSet)Customers).CommitAsync(Transaction);
             await ((IInternalMutableDbSet)Orders).CommitAsync(Transaction);
             await CommitTransactionAsync();
@@ -63,7 +70,7 @@ public class IncludeTests : IntegrationTestBase
         await Database!.GetCollection<Customer>("Customers").InsertOneAsync(customer);
         await Database!.GetCollection<Order>("Orders").InsertOneAsync(order);
 
-        await using (var session = new TestContextSession(ctx))
+        await using (var session = await TestContextSession.OpenSessionAsync(ctx))
         {
             // Execute query with include
             var orders = (await session.Orders

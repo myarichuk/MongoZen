@@ -97,13 +97,32 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
             }
         }
 
+        // Factory methods
+        sb.Append(indent2).Append("public static async Task<").Append(ctxSymbol.Name).Append("Session> OpenSessionAsync(")
+          .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext, CancellationToken ct = default)")
+          .Append(indent2).AppendLine("{")
+          .Append(indent2).Append("    var session = new ").Append(ctxSymbol.Name).AppendLine("Session(dbContext);")
+          .Append(indent2).AppendLine("    await session.Advanced.InitializeAsync(ct);")
+          .Append(indent2).AppendLine("    return session;")
+          .Append(indent2).AppendLine("}");
+        sb.AppendLine();
+
+        sb.Append(indent2).Append("public static async Task<").Append(ctxSymbol.Name).Append("Session> OpenSessionAsync(")
+          .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext, bool startTransaction, CancellationToken ct = default)")
+          .Append(indent2).AppendLine("{")
+          .Append(indent2).Append("    var session = new ").Append(ctxSymbol.Name).AppendLine("Session(dbContext, startTransaction);")
+          .Append(indent2).AppendLine("    await session.Advanced.InitializeAsync(ct);")
+          .Append(indent2).AppendLine("    return session;")
+          .Append(indent2).AppendLine("}");
+        sb.AppendLine();
+
         // Constructor
-        sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
+        sb.Append(indent2).Append("protected ").Append(ctxSymbol.Name).Append("Session(")
           .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext) : this(dbContext, startTransaction: true)");
         sb.Append(indent2).AppendLine("{");
         sb.Append(indent2).AppendLine("}");
         sb.AppendLine();
-        sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
+        sb.Append(indent2).Append("protected ").Append(ctxSymbol.Name).Append("Session(")
           .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext, bool startTransaction) : base(dbContext, startTransaction)");
         sb.Append(indent2).AppendLine("{");
         sb.Append(indent2).AppendLine("    unsafe {");
@@ -113,13 +132,13 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
             sb.Append(indent2).Append("        ").Append(prop.Name)
                 .Append(" = new MongoZen.MutableDbSet<")
                 .Append(prop.EntityType).Append(">(")
-                .Append("Context.").Append(prop.Name).Append(", ")
+                .Append("((").Append(ctxSymbol.ToDisplayString()).Append(")GetDbContext()).").Append(prop.Name).Append(", ")
                 .Append("() => Transaction, ")
                 .Append("this, ") // Pass the session as ISessionTracker
                 .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, ")
                 .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
                 .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ")
-                .Append("Context.Options.Conventions")
+                .Append("((").Append(ctxSymbol.ToDisplayString()).Append(")GetDbContext()).Options.Conventions")
                 .AppendLine(");");
             sb.Append(indent2).Append("        RegisterDbSet((MongoZen.MutableDbSet<").Append(prop.EntityType).Append(">)").Append(prop.Name).AppendLine(");");
         }

@@ -43,7 +43,14 @@ public class IdentityMapTests : IntegrationTestBase
 
     private sealed class TestDbContextSession : DbContextSession<TestDbContext>
     {
-        public TestDbContextSession(TestDbContext dbContext) : base(dbContext)
+        public static async Task<TestDbContextSession> OpenSessionAsync(TestDbContext dbContext)
+        {
+            var session = new TestDbContextSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private TestDbContextSession(TestDbContext dbContext) : base(dbContext)
         {
             Users = new MutableDbSet<User>(
                 _dbContext.Users,
@@ -67,7 +74,7 @@ public class IdentityMapTests : IntegrationTestBase
 
         public async ValueTask SaveChangesAsync()
         {
-            EnsureTransactionActive();
+            await EnsureTransactionActiveAsync();
             await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
             await CommitTransactionAsync();
         }
@@ -80,14 +87,14 @@ public class IdentityMapTests : IntegrationTestBase
         var userId = Guid.NewGuid().ToString();
         
         // Initial setup
-        await using (var setupSession = new TestDbContextSession(ctx))
+        await using (var setupSession = await TestDbContextSession.OpenSessionAsync(ctx))
         {
             setupSession.Users.Add(new User { Id = userId, Name = "Original" });
             await setupSession.SaveChangesAsync();
         }
 
         // Test Identity Map
-        await using (var session = new TestDbContextSession(ctx))
+        await using (var session = await TestDbContextSession.OpenSessionAsync(ctx))
         {
             var u1 = (await session.Users.QueryAsync(u => u.Id == userId)).First();
             var u2 = (await session.Users.QueryAsync(u => u.Id == userId)).First();
@@ -103,14 +110,14 @@ public class IdentityMapTests : IntegrationTestBase
         var userId = Guid.NewGuid().ToString();
         
         // Initial setup
-        await using (var setupSession = new TestDbContextSession(ctx))
+        await using (var setupSession = await TestDbContextSession.OpenSessionAsync(ctx))
         {
             setupSession.Users.Add(new User { Id = userId, Name = "Original" });
             await setupSession.SaveChangesAsync();
         }
 
         // Test Change Tracking
-        await using (var session = new TestDbContextSession(ctx))
+        await using (var session = await TestDbContextSession.OpenSessionAsync(ctx))
         {
             var user = (await session.Users.QueryAsync(u => u.Id == userId)).First();
             
@@ -121,7 +128,7 @@ public class IdentityMapTests : IntegrationTestBase
         }
 
         // Verify persistence
-        await using (var verifySession = new TestDbContextSession(ctx))
+        await using (var verifySession = await TestDbContextSession.OpenSessionAsync(ctx))
         {
             var user = (await verifySession.Users.QueryAsync(u => u.Id == userId)).First();
             Assert.Equal("Changed", user.Name);
@@ -135,14 +142,14 @@ public class IdentityMapTests : IntegrationTestBase
         var userId = Guid.NewGuid().ToString();
         
         // Initial setup
-        await using (var setupSession = new TestDbContextSession(ctx))
+        await using (var setupSession = await TestDbContextSession.OpenSessionAsync(ctx))
         {
             setupSession.Users.Add(new User { Id = userId, Name = "Original", Ignored = "Initial" });
             await setupSession.SaveChangesAsync();
         }
 
         // Test Change Tracking
-        await using (var session = new TestDbContextSession(ctx))
+        await using (var session = await TestDbContextSession.OpenSessionAsync(ctx))
         {
             var user = (await session.Users.QueryAsync(u => u.Id == userId)).First();
             
@@ -156,7 +163,7 @@ public class IdentityMapTests : IntegrationTestBase
         // but here the fact that it doesn't throw and potentially would have No-Op'ed the update is the goal.
         // Actually, if only ignored properties changed, GetDirtyEntities should be empty.
         
-        await using (var session = new TestDbContextSession(ctx))
+        await using (var session = await TestDbContextSession.OpenSessionAsync(ctx))
         {
             var user = (await session.Users.QueryAsync(u => u.Id == userId)).First();
             user.Ignored = "Changed Again";

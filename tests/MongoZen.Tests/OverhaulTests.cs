@@ -39,7 +39,14 @@ public class OverhaulTests : IntegrationTestBase
 
     private sealed class TestDbContextSession : DbContextSession<TestDbContext>
     {
-        public TestDbContextSession(TestDbContext dbContext) : base(dbContext)
+        public static async Task<TestDbContextSession> OpenSessionAsync(TestDbContext dbContext)
+        {
+            var session = new TestDbContextSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private TestDbContextSession(TestDbContext dbContext) : base(dbContext)
         {
             Users = new MutableDbSet<User>(
                 _dbContext.Users,
@@ -63,7 +70,7 @@ public class OverhaulTests : IntegrationTestBase
 
         public async Task SaveChangesAsync()
         {
-            EnsureTransactionActive();
+            await EnsureTransactionActiveAsync();
             await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
             await CommitTransactionAsync();
             Users.Advanced.ClearTracking();
@@ -74,14 +81,14 @@ public class OverhaulTests : IntegrationTestBase
     public async Task ImplicitSession_IsUsedForQueries()
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
-        var session = new TestDbContextSession(ctx);
+        var session = await TestDbContextSession.OpenSessionAsync(ctx);
 
         // Add a user within the transaction
         session.Users.Add(new User { Name = "Implicit" });
         await session.SaveChangesAsync();
 
         // Start a new session
-        var session2 = new TestDbContextSession(ctx);
+        var session2 = await TestDbContextSession.OpenSessionAsync(ctx);
         
         var results = await session2.Users.QueryAsync(u => u.Name == "Implicit");
         Assert.Single(results);
@@ -91,7 +98,7 @@ public class OverhaulTests : IntegrationTestBase
     public async Task BulkCommit_HandlesMultipleOperations()
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
-        var session = new TestDbContextSession(ctx);
+        var session = await TestDbContextSession.OpenSessionAsync(ctx);
 
         var u1 = new User { Name = "User1" };
         var u2 = new User { Name = "User2" };
@@ -100,7 +107,7 @@ public class OverhaulTests : IntegrationTestBase
         session.Users.Add(u2);
         await session.SaveChangesAsync();
 
-        var session2 = new TestDbContextSession(ctx);
+        var session2 = await TestDbContextSession.OpenSessionAsync(ctx);
         var u1Loaded = (await session2.Users.QueryAsync(u => u.Name == "User1")).First();
         u1Loaded.Name = "User1 Updated";
         

@@ -38,7 +38,14 @@ public class PolymorphismTests : IntegrationTestBase
 
     private class TestSession : DbContextSession<TestDbContext>
     {
-        public TestSession(TestDbContext db) : base(db)
+        public static async Task<TestSession> OpenSessionAsync(TestDbContext dbContext)
+        {
+            var session = new TestSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private TestSession(TestDbContext db) : base(db)
         {
             Zoos = new MutableDbSet<Zoo>(
                 db.Zoos,
@@ -68,7 +75,7 @@ public class PolymorphismTests : IntegrationTestBase
         };
         await collection.InsertOneAsync(zoo);
 
-        await using (var session = new TestSession(db))
+        await using (var session = await TestSession.OpenSessionAsync(db))
         {
             var loaded = await session.Zoos.LoadAsync("z1");
             Assert.NotNull(loaded);

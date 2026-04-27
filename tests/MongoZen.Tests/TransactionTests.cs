@@ -20,12 +20,14 @@ public class TransactionTests : IntegrationTestBase
 
     private sealed class TestDbContextSession : DbContextSession<TestDbContext>
     {
-        public TestDbContextSession(TestDbContext dbContext)
-            : this(dbContext, startTransaction: true)
+        public static async Task<TestDbContextSession> OpenSessionAsync(TestDbContext dbContext, bool startTransaction = true)
         {
+            var session = new TestDbContextSession(dbContext, startTransaction);
+            await session.Advanced.InitializeAsync();
+            return session;
         }
 
-        public TestDbContextSession(TestDbContext dbContext, bool startTransaction)
+        private TestDbContextSession(TestDbContext dbContext, bool startTransaction)
             : base(dbContext, startTransaction)
         {
             Users = new MutableDbSet<User>(_dbContext.Users, () => Transaction, this, null, null, null, _dbContext.Options.Conventions);
@@ -35,7 +37,7 @@ public class TransactionTests : IntegrationTestBase
 
         public async ValueTask SaveChangesAsync()
         {
-            EnsureTransactionActive();
+            await EnsureTransactionActiveAsync();
             try
             {
                 await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
@@ -60,7 +62,7 @@ public class TransactionTests : IntegrationTestBase
     public async Task SaveChanges_ImplicitTransaction_InMemory()
     {
         var ctx = new TestDbContext(new DbContextOptions());
-        await using var session = new TestDbContextSession(ctx);
+        await using var session = await TestDbContextSession.OpenSessionAsync(ctx);
 
         session.Users.Add(new User { Id = "1", Name = "Alice" });
 
@@ -74,7 +76,7 @@ public class TransactionTests : IntegrationTestBase
     public async Task Transaction_Commits_Changes_On_SaveChanges()
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
-        await using var session = new TestDbContextSession(ctx);
+        await using var session = await TestDbContextSession.OpenSessionAsync(ctx);
 
         session.Users.Add(new User { Id = "1", Name = "Alice" });
 
@@ -108,7 +110,7 @@ public class TransactionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
         
-        await using var session = new TestDbContextSession(ctx);
+        await using var session = await TestDbContextSession.OpenSessionAsync(ctx);
         session.Users.Add(new User { Id = "2", Name = "Bob" });
 
         // Force commit to the underlying collection within the transaction
@@ -133,7 +135,7 @@ public class TransactionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
 
-        await using (var session = new TestDbContextSession(ctx))
+        await using (var session = await TestDbContextSession.OpenSessionAsync(ctx))
         {
             session.Users.Add(new User { Id = "1", Name = "Alice" });
             await ((IInternalMutableDbSet)session.Users).CommitAsync(session.Transaction);

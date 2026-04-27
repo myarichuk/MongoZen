@@ -23,7 +23,7 @@ internal class TransactionManager : IAsyncDisposable
     public bool InMemoryTransaction => _inMemoryTransaction;
     public TransactionContext TransactionContext => new(_session, _inMemoryTransaction);
 
-    public void EnsureTransactionStarted()
+    public async Task EnsureTransactionStartedAsync(CancellationToken ct = default)
     {
         if (_inMemoryTransaction || (_session != null && _session.IsInTransaction))
         {
@@ -42,7 +42,7 @@ internal class TransactionManager : IAsyncDisposable
             return;
         }
 
-        if (!TransactionsSupported())
+        if (!await TransactionsSupportedAsync(ct))
         {
             HandleUnsupportedTransactions();
             return;
@@ -50,18 +50,18 @@ internal class TransactionManager : IAsyncDisposable
 
         if (_session == null)
         {
-            _session = _dbContext.Options.Mongo.Client.StartSession();
+            _session = await _dbContext.Options.Mongo.Client.StartSessionAsync(cancellationToken: ct);
             _ownsSession = true;
         }
 
         _session.StartTransaction();
     }
 
-    public void EnsureTransactionActive()
+    public async Task EnsureTransactionActiveAsync(CancellationToken ct = default)
     {
         if (!TransactionContext.IsActive)
         {
-            EnsureTransactionStarted();
+            await EnsureTransactionStartedAsync(ct);
         }
     }
 
@@ -110,7 +110,7 @@ internal class TransactionManager : IAsyncDisposable
         }
     }
 
-    private bool TransactionsSupported()
+    private async Task<bool> TransactionsSupportedAsync(CancellationToken ct)
     {
         var database = _dbContext.Options.Mongo ?? throw new InvalidOperationException("Mongo not configured.");
         var client = database.Client;
@@ -127,8 +127,10 @@ internal class TransactionManager : IAsyncDisposable
             }
         }
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var hello = database.RunCommand<BsonDocument>(new BsonDocument("hello", 1), cancellationToken: cts.Token);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+        
+        var hello = await database.RunCommandAsync<BsonDocument>(new BsonDocument("hello", 1), cancellationToken: cts.Token);
         var supported = hello.TryGetValue("setName", out _) || (hello.TryGetValue("msg", out var msg) && msg == "isdbgrid");
         TopologyCache.AddOrUpdate(client, new StrongBox<bool>(supported));
         return supported;

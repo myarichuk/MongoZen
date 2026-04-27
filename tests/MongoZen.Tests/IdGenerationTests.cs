@@ -18,7 +18,14 @@ public class IdGenerationTests : IntegrationTestBase
 
     private sealed class TestDbContextSession : DbContextSession<TestDbContext>
     {
-        public TestDbContextSession(TestDbContext dbContext) : base(dbContext)
+        public static async Task<TestDbContextSession> OpenSessionAsync(TestDbContext dbContext)
+        {
+            var session = new TestDbContextSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private TestDbContextSession(TestDbContext dbContext) : base(dbContext)
         {
             Users = new MutableDbSet<User>(_dbContext.Users, () => Transaction, this, (e, a) => IntPtr.Zero, (e, p) => true, null, _dbContext.Options.Conventions);
         }
@@ -27,7 +34,7 @@ public class IdGenerationTests : IntegrationTestBase
 
         public async ValueTask SaveChangesAsync()
         {
-            EnsureTransactionActive();
+            await EnsureTransactionActiveAsync();
             await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
             await CommitTransactionAsync();
         }
@@ -57,7 +64,7 @@ public class IdGenerationTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!));
         
-        await using (var session = new TestDbContextSession(ctx))
+        await using (var session = await TestDbContextSession.OpenSessionAsync(ctx))
         {
             var user = new User { Name = "Raven" };
             session.Users.Add(user);

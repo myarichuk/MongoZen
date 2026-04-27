@@ -66,16 +66,30 @@ using MongoZen;
 
 public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingContext>
 {
-    public BloggingContextSession(BloggingContext dbContext) : this(dbContext, startTransaction: true)
+    public static async Task<BloggingContextSession> OpenSessionAsync(BloggingContext dbContext, CancellationToken ct = default)
+    {
+        var session = new BloggingContextSession(dbContext);
+        await session.Advanced.InitializeAsync(ct);
+        return session;
+    }
+
+    public static async Task<BloggingContextSession> OpenSessionAsync(BloggingContext dbContext, bool startTransaction, CancellationToken ct = default)
+    {
+        var session = new BloggingContextSession(dbContext, startTransaction);
+        await session.Advanced.InitializeAsync(ct);
+        return session;
+    }
+
+    protected BloggingContextSession(BloggingContext dbContext) : this(dbContext, startTransaction: true)
     {
     }
 
-    public BloggingContextSession(BloggingContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
+    protected BloggingContextSession(BloggingContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
     {
         unsafe {
-            Blogs = new MongoZen.MutableDbSet<Blog>(((BloggingContext)GetDbContext()).Blogs, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Blog_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, GetDbContext().Options.Conventions);
+            Blogs = new MongoZen.MutableDbSet<Blog>(((BloggingContext)GetDbContext()).Blogs, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Blog_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ((BloggingContext)GetDbContext()).Options.Conventions);
             RegisterDbSet((MongoZen.MutableDbSet<Blog>)Blogs);
-            Posts = new MongoZen.MutableDbSet<Post>(((BloggingContext)GetDbContext()).Posts, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Post_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, GetDbContext().Options.Conventions);
+            Posts = new MongoZen.MutableDbSet<Post>(((BloggingContext)GetDbContext()).Posts, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Post_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ((BloggingContext)GetDbContext()).Options.Conventions);
             RegisterDbSet((MongoZen.MutableDbSet<Post>)Posts);
         }
     }
@@ -281,14 +295,28 @@ namespace MyNamespace
 {
     public sealed class MyContextSession : MongoZen.DbContextSession<MyNamespace.MyContext>
     {
-        public MyContextSession(MyNamespace.MyContext dbContext) : this(dbContext, startTransaction: true)
+        public static async Task<MyContextSession> OpenSessionAsync(MyNamespace.MyContext dbContext, CancellationToken ct = default)
+        {
+            var session = new MyContextSession(dbContext);
+            await session.Advanced.InitializeAsync(ct);
+            return session;
+        }
+
+        public static async Task<MyContextSession> OpenSessionAsync(MyNamespace.MyContext dbContext, bool startTransaction, CancellationToken ct = default)
+        {
+            var session = new MyContextSession(dbContext, startTransaction);
+            await session.Advanced.InitializeAsync(ct);
+            return session;
+        }
+
+        internal MyContextSession(MyNamespace.MyContext dbContext) : this(dbContext, startTransaction: true)
         {
         }
 
-        public MyContextSession(MyNamespace.MyContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
+        internal MyContextSession(MyNamespace.MyContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
         {
             unsafe {
-                Users = new MongoZen.MutableDbSet<MyNamespace.User>(((MyNamespace.MyContext)GetDbContext()).Users, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<MyNamespace.User_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, GetDbContext().Options.Conventions);
+                Users = new MongoZen.MutableDbSet<MyNamespace.User>(((MyNamespace.MyContext)GetDbContext()).Users, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<MyNamespace.User_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ((MyNamespace.MyContext)GetDbContext()).Options.Conventions);
                 RegisterDbSet((MongoZen.MutableDbSet<MyNamespace.User>)Users);
             }
         }

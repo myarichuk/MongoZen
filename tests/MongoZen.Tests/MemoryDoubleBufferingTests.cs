@@ -40,7 +40,14 @@ public class MemoryDoubleBufferingTests : IntegrationTestBase
 
     private class TestSession : DbContextSession<TestDbContext>
     {
-        public TestSession(TestDbContext dbContext) : base(dbContext)
+        public static async Task<TestSession> OpenSessionAsync(TestDbContext dbContext)
+        {
+            var session = new TestSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private TestSession(TestDbContext dbContext) : base(dbContext)
         {
             Entities = new MutableDbSet<SimpleEntity>(
                 _dbContext.Entities,
@@ -70,7 +77,7 @@ public class MemoryDoubleBufferingTests : IntegrationTestBase
         var entity = new SimpleEntity { Id = "m1", Data = new string('A', 1000) };
         ((InMemoryDbSet<SimpleEntity>)db.Entities).Seed(entity); // Use Seed to bypass tracking logic for initial data
 
-        await using (var session = new TestSession(db))
+        await using (var session = await TestSession.OpenSessionAsync(db))
         {
             // Load and track
             var loaded = await session.Entities.LoadAsync("m1");
