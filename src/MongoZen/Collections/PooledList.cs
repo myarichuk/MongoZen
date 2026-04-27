@@ -7,7 +7,7 @@ namespace MongoZen.Collections;
 /// A zero-allocation list struct that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
 /// MUST be disposed to return the array to the pool.
 /// </summary>
-public struct PooledList<T> : IDisposable, IEnumerable<T>
+public class PooledList<T> : IDisposable, IEnumerable<T>
 {
     private T[]? _array;
     private int _count;

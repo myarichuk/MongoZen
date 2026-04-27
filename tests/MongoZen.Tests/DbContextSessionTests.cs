@@ -176,7 +176,7 @@ public class DbContextSessionTests : IntegrationTestBase
         var ctx = new TestDbContext(new DbContextOptions());
         var session = new TestDbContextSession(ctx);
         var user = new User { Name = "Oren" };
-        IntPtr expectedPtr = (IntPtr)0xDEADBEEF;
+        IntPtr expectedPtr = unchecked((IntPtr)0xDEADBEEF);
         
         session.Track(user, "1", (u, a) => expectedPtr, (u, p) => false, forceShadow: true);
 

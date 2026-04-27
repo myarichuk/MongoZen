@@ -116,7 +116,7 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
                 .Append("Context.").Append(prop.Name).Append(", ")
                 .Append("() => Transaction, ")
                 .Append("this, ") // Pass the session as ISessionTracker
-                .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return (System.IntPtr)ptr; }, ")
+                .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, ")
                 .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
                 .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ")
                 .Append("Context.Options.Conventions")

@@ -93,14 +93,14 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         var dedupeBuffer = new ArenaHashSet<DocId>(arena, 128);
 
         // 1. Process Removals
-        BuildDeleteModels(removed, removedIds, ref dedupeBuffer, ref rawIdBuffer, ref modelBuffer);
+        BuildDeleteModels(removed, removedIds, ref dedupeBuffer, rawIdBuffer, modelBuffer);
 
         // 2. Process Added
-        BuildInsertModels(added, ref dedupeBuffer, ref upsertBuffer, ref modelBuffer);
+        BuildInsertModels(added, ref dedupeBuffer, upsertBuffer, modelBuffer);
         upsertBuffer.Clear();
 
         // 3. Process Updated/Dirty
-        CollectUpdates(updated, dirty, ref dedupeBuffer, ref upsertBuffer);
+        CollectUpdates(updated, dirty, ref dedupeBuffer, upsertBuffer);
 
         // 4. Apply Versions and Execute
         if (upsertBuffer.Count > 0 || modelBuffer.Count > 0)
@@ -113,7 +113,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             {
                 foreach (var entry in upsertBuffer)
                 {
-                    var model = PrepareUpdateOrReplaceModel(entry.Key, entry.Value.Entity, entry.Value.IsDirty, versionCtx, extractor, tracker, ref versionMap);
+                    var model = PrepareUpdateOrReplaceModel(entry.Key, entry.Value.Entity, entry.Value.IsDirty, versionCtx, extractor, tracker, versionMap);
                     modelBuffer.Add(model);
                     if (versionCtx.IsValid && model is not ReplaceOneModel<TEntity> { IsUpsert: true })
                     {
@@ -145,7 +145,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 
-    private void BuildDeleteModels(IEnumerable<TEntity> removed, IEnumerable<object> removedIds, ref ArenaHashSet<DocId> dedupeBuffer, ref PooledHashSet<object> rawIdBuffer, ref PooledList<WriteModel<TEntity>> modelBuffer)
+    private void BuildDeleteModels(IEnumerable<TEntity> removed, IEnumerable<object> removedIds, ref ArenaHashSet<DocId> dedupeBuffer, PooledHashSet<object> rawIdBuffer, PooledList<WriteModel<TEntity>> modelBuffer)
     {
         foreach (var entity in removed)
         {
@@ -170,7 +170,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 
-    private void BuildInsertModels(IEnumerable<TEntity> added, ref ArenaHashSet<DocId> dedupeBuffer, ref PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer, ref PooledList<WriteModel<TEntity>> modelBuffer)
+    private void BuildInsertModels(IEnumerable<TEntity> added, ref ArenaHashSet<DocId> dedupeBuffer, PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer, PooledList<WriteModel<TEntity>> modelBuffer)
     {
         foreach (var entity in added)
         {
@@ -189,7 +189,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 
-    private void CollectUpdates(IEnumerable<TEntity> updated, IEnumerable<TEntity> dirty, ref ArenaHashSet<DocId> dedupeBuffer, ref PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer)
+    private void CollectUpdates(IEnumerable<TEntity> updated, IEnumerable<TEntity> dirty, ref ArenaHashSet<DocId> dedupeBuffer, PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer)
     {
         foreach (var entity in updated)
         {
@@ -218,7 +218,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         VersionContext versionCtx,
         Func<TEntity, IntPtr, UpdateDefinition<TEntity>?>? extractor,
         ISessionTracker tracker,
-        ref PooledDictionary<DocId, (object RawId, long Version)> versionMap)
+        PooledDictionary<DocId, (object RawId, long Version)> versionMap)
     {
         var rawId = entity.GetId(_idAccessor);
         var filter = Builders<TEntity>.Filter.Eq(_idFieldName, rawId);
@@ -240,13 +240,19 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             if (update != null)
             {
                 update = Builders<TEntity>.Update.Combine(update, Builders<TEntity>.Update.Set(versionCtx.ElementName!, currentVersion + 1));
-                return new UpdateOneModel<TEntity>(filter, update) { IsUpsert = false };
+                var updateModel = new UpdateOneModel<TEntity>(filter, update);
+                updateModel.IsUpsert = false;
+                return updateModel;
             }
             
-            return new ReplaceOneModel<TEntity>(filter, entity) { IsUpsert = false };
+            var replaceModel = new ReplaceOneModel<TEntity>(filter, entity);
+            replaceModel.IsUpsert = false;
+            return replaceModel;
         }
 
-        return new ReplaceOneModel<TEntity>(filter, entity) { IsUpsert = true };
+        var finalReplaceModel = new ReplaceOneModel<TEntity>(filter, entity);
+        finalReplaceModel.IsUpsert = true;
+        return finalReplaceModel;
     }
 
     private VersionContext ResolveVersionContext()

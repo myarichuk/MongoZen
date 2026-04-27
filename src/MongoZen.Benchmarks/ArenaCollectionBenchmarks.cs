@@ -29,7 +29,7 @@ public class ArenaCollectionBenchmarks
     // HashSet Benchmarks
     // -------------------------------------------------------------------------
 
-    [Benchmark(Baseline = true)]
+    [Benchmark]
     public int ManagedHashSet_Int()
     {
         var set = new HashSet<int>();
@@ -53,7 +53,7 @@ public class ArenaCollectionBenchmarks
     // Dictionary Benchmarks
     // -------------------------------------------------------------------------
 
-    [Benchmark(Baseline = true)]
+    [Benchmark]
     public int ManagedDictionary_Int()
     {
         var dict = new Dictionary<int, int>();

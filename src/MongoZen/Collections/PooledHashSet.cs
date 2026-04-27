@@ -8,7 +8,7 @@ namespace MongoZen.Collections;
 /// A zero-allocation hash set struct that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
 /// Uses open-addressing with linear probing. MUST be disposed.
 /// </summary>
-public struct PooledHashSet<T> : IDisposable, IEnumerable<T>
+public class PooledHashSet<T> : IDisposable, IEnumerable<T>
 {
     private T[]? _slots;
     private byte[]? _occupied; // 0 = empty, 1 = occupied
@@ -32,8 +32,6 @@ public struct PooledHashSet<T> : IDisposable, IEnumerable<T>
 
     public bool Add(T item)
     {
-        if (_slots == null) this = new PooledHashSet<T>(16, _comparer);
-
         var slots = _slots!;
         if (_count * 100 >= slots.Length * 70)
         {
