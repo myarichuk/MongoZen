@@ -154,6 +154,37 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
         }
         sb.Append(indent2).AppendLine("    return false;");
         sb.Append(indent2).AppendLine("}");
+        sb.AppendLine();
+
+        // ExtractChanges method
+        sb.Append(indent2).Append("public static global::MongoDB.Driver.UpdateDefinition<").Append(type.ToDisplayString()).Append(">? ExtractChanges(this ref ")
+          .Append(type.Name).Append("_Shadow shadow, ").Append(type.ToDisplayString()).AppendLine(" current)");
+        sb.Append(indent2).AppendLine("{");
+        sb.Append(indent2).AppendLine("    global::MongoDB.Driver.UpdateDefinition<").Append(type.ToDisplayString()).AppendLine(">? update = null;");
+        sb.Append(indent2).AppendLine("    var builder = global::MongoDB.Driver.Builders<").Append(type.ToDisplayString()).AppendLine(">.Update;");
+        sb.AppendLine();
+
+        foreach (var prop in properties)
+        {
+            var name = prop.Name;
+            sb.Append(indent2).Append("    {"); // Start property scope
+            sb.AppendLine();
+            
+            // Check if property is dirty
+            sb.Append(indent2).Append("        bool dirty = false;");
+            sb.AppendLine();
+            GenerateIsDirtyCheck(sb, indent2 + "        ", prop, "shadow", "current", queue, outDirtyVar: "dirty");
+            
+            sb.Append(indent2).AppendLine("        if (dirty)");
+            sb.Append(indent2).AppendLine("        {");
+            sb.Append(indent2).Append("            if (update == null) update = builder.Set(x => x.").Append(name).AppendLine(", current.").Append(name).AppendLine(");");
+            sb.Append(indent2).Append("            else update = builder.Combine(update, builder.Set(x => x.").Append(name).AppendLine(", current.").Append(name).AppendLine("));");
+            sb.Append(indent2).AppendLine("        }");
+            sb.Append(indent2).AppendLine("    }");
+        }
+
+        sb.Append(indent2).AppendLine("    return update;");
+        sb.Append(indent2).AppendLine("}");
 
         sb.Append(indent).AppendLine("}");
 
@@ -180,14 +211,7 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
                 var keyType = namedType.TypeArguments[0];
                 var valueType = namedType.TypeArguments[1];
                 
-                // ArenaDictionary requires TKey : IEquatable<TKey>. 
-                // ArenaString does not currently implement this.
-                if (keyType.SpecialType != SpecialType.System_String)
-                {
-                    return $"global::MongoZen.Collections.ArenaDictionary<{GetShadowTypeName(keyType, queue)}, {GetShadowTypeName(valueType, queue)}>";
-                }
-                
-                return $"SharpArena.Collections.ArenaList<global::MongoZen.KeyValuePairShadow<{GetShadowTypeName(keyType, queue)}, {GetShadowTypeName(valueType, queue)}>>";
+                return $"global::MongoZen.Collections.ArenaDictionary<{GetShadowTypeName(keyType, queue)}, {GetShadowTypeName(valueType, queue)}>";
             }
 
             if (IsCollection(namedType))
@@ -227,11 +251,22 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
         return false;
     }
 
+    private static bool IsPolymorphic(ITypeSymbol type)
+    {
+        if (type.TypeKind == TypeKind.Interface) return true;
+        if (type.IsAbstract) return true;
+        if (type.SpecialType == SpecialType.System_Object) return true;
+        if (type.GetAttributes().Any(a => a.AttributeClass?.Name == "BsonKnownTypesAttribute" || a.AttributeClass?.Name == "BsonKnownTypes")) return true;
+        return false;
+    }
+
     private static bool IsUnshadowable(ITypeSymbol type)
     {
         // BSON reference types (like BsonDocument, BsonArray) cannot be shadowed because copying the 
         // reference defeats dirty-checking, and deep-shadowing them is complex and unsafe.
-        return !type.IsValueType && type.ContainingNamespace?.ToDisplayString().StartsWith("MongoDB.Bson") == true;
+        if (!type.IsValueType && type.ContainingNamespace?.ToDisplayString().StartsWith("MongoDB.Bson") == true) return true;
+        if (IsPolymorphic(type)) return true;
+        return false;
     }
 
     private static bool IsCollection(ITypeSymbol type)
@@ -297,42 +332,15 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
             sb.Append(indent).Append("if (").Append(sourceExpr).AppendLine(" != null)");
             sb.Append(indent).AppendLine("{");
             sb.Append(indent).Append("    var count = ").Append(sourceExpr).AppendLine(".Count;");
-            
-            if (shadowType.Contains("ArenaDictionary"))
-            {
-                sb.Append(indent).Append("    ").Append(targetExpr).Append(" = new ").Append(shadowType).AppendLine("(arena, count);");
-                sb.Append(indent).Append("    foreach (var kvp in ").Append(sourceExpr).AppendLine(")");
-                sb.Append(indent).AppendLine("    {");
-                sb.Append(indent).AppendLine("        {"); // Add scope
-                GenerateValueAssignment(sb, indent + "            ", keyType, "var shadowKey", "kvp.Key", queue);
-                GenerateValueAssignment(sb, indent + "            ", valueType, "var shadowValue", "kvp.Value", queue);
-                sb.Append(indent).Append("            ").Append(targetExpr).AppendLine(".AddOrUpdate(shadowKey, shadowValue);");
-                sb.Append(indent).AppendLine("        }");
-                sb.Append(indent).AppendLine("    }");
-            }
-            else
-            {
-                // Fallback to ArenaList for ArenaString keys
-                sb.Append(indent).Append("if (").Append(sourceExpr).AppendLine(" == null)");
-                sb.Append(indent).AppendLine("{");
-                sb.Append(indent).Append("    if (").Append(targetExpr).AppendLine(".Length > 0) return;");
-                sb.Append(indent).AppendLine("}");
-                sb.Append(indent).AppendLine("else");
-                sb.Append(indent).AppendLine("{");
-                // Assignment: ArenaList doesn't have a count-mismatch exit, we just populate it.
-                var shadowPairType = $"global::MongoZen.KeyValuePairShadow<{shadowKeyType}, {shadowValueType}>";
-                sb.Append(indent).Append("    ").Append(targetExpr).Append(" = new SharpArena.Collections.ArenaList<").Append(shadowPairType).AppendLine(">(arena, ").Append(sourceExpr).AppendLine(".Count);");
-                sb.Append(indent).Append("    foreach (var kvp in ").Append(sourceExpr).AppendLine(")");
-                sb.Append(indent).AppendLine("    {");
-                sb.Append(indent).AppendLine("        {"); // Add scope
-                sb.Append(indent).Append("            var shadowPair = default(").Append(shadowPairType).AppendLine(");");
-                GenerateValueAssignment(sb, indent + "            ", keyType, "shadowPair.Key", "kvp.Key", queue);
-                GenerateValueAssignment(sb, indent + "            ", valueType, "shadowPair.Value", "kvp.Value", queue);
-                sb.Append(indent).Append("            ").Append(targetExpr).AppendLine(".Add(shadowPair);");
-                sb.Append(indent).AppendLine("        }");
-                sb.Append(indent).AppendLine("    }");
-                sb.Append(indent).AppendLine("}");
-            }
+            sb.Append(indent).Append("    ").Append(targetExpr).Append(" = new ").Append(shadowType).AppendLine("(arena, count);");
+            sb.Append(indent).Append("    foreach (var kvp in ").Append(sourceExpr).AppendLine(")");
+            sb.Append(indent).AppendLine("    {");
+            sb.Append(indent).AppendLine("        {"); // Add scope
+            GenerateValueAssignment(sb, indent + "            ", keyType, "var shadowKey", "kvp.Key", queue);
+            GenerateValueAssignment(sb, indent + "            ", valueType, "var shadowValue", "kvp.Value", queue);
+            sb.Append(indent).Append("            ").Append(targetExpr).AppendLine(".AddOrUpdate(shadowKey, shadowValue);");
+            sb.Append(indent).AppendLine("        }");
+            sb.Append(indent).AppendLine("    }");
             sb.Append(indent).AppendLine("}");
         }
         else if (IsCollection(type))
@@ -377,7 +385,7 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
         }
     }
 
-    private static void GenerateIsDirtyCheck(StringBuilder sb, string indent, IPropertySymbol prop, string shadow, string current, Queue<INamedTypeSymbol> queue)
+    private static void GenerateIsDirtyCheck(StringBuilder sb, string indent, IPropertySymbol prop, string shadow, string current, Queue<INamedTypeSymbol> queue, string? outDirtyVar = null)
     {
         var name = prop.Name;
         var shadowExpr = $"{shadow}.{name}";
@@ -387,29 +395,37 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
         {
             sb.Append(indent).Append("if (").Append(currentExpr).AppendLine(" == null)");
             sb.Append(indent).AppendLine("{");
-            sb.Append(indent).Append("    if (").Append(shadow).Append(".HasValue_").Append(name).AppendLine(") return true;");
+            if (outDirtyVar != null)
+                sb.Append(indent).Append("    if (").Append(shadow).Append(".HasValue_").Append(name).Append(") ").Append(outDirtyVar).AppendLine(" = true;");
+            else
+                sb.Append(indent).Append("    if (").Append(shadow).Append(".HasValue_").Append(name).AppendLine(") return true;");
             sb.Append(indent).AppendLine("}");
             sb.Append(indent).AppendLine("else");
             sb.Append(indent).AppendLine("{");
-            sb.Append(indent).Append("    if (!").Append(shadow).Append(".HasValue_").Append(name).AppendLine(") return true;");
-            GenerateValueDirtyCheck(sb, indent + "    ", prop.Type, shadowExpr, currentExpr, queue);
+            if (outDirtyVar != null)
+                sb.Append(indent).Append("    if (!").Append(shadow).Append(".HasValue_").Append(name).Append(") ").Append(outDirtyVar).AppendLine(" = true;");
+            else
+                sb.Append(indent).Append("    if (!").Append(shadow).Append(".HasValue_").Append(name).AppendLine(") return true;");
+            GenerateValueDirtyCheck(sb, indent + "    ", prop.Type, shadowExpr, currentExpr, queue, outDirtyVar);
             sb.Append(indent).AppendLine("}");
         }
         else
         {
-            GenerateValueDirtyCheck(sb, indent, prop.Type, shadowExpr, currentExpr, queue);
+            GenerateValueDirtyCheck(sb, indent, prop.Type, shadowExpr, currentExpr, queue, outDirtyVar);
         }
     }
 
-    private static void GenerateValueDirtyCheck(StringBuilder sb, string indent, ITypeSymbol type, string shadowExpr, string currentExpr, Queue<INamedTypeSymbol> queue)
+    private static void GenerateValueDirtyCheck(StringBuilder sb, string indent, ITypeSymbol type, string shadowExpr, string currentExpr, Queue<INamedTypeSymbol> queue, string? outDirtyVar = null)
     {
+        string emitAction = outDirtyVar != null ? $"{outDirtyVar} = true" : "return true";
+
         if (type.SpecialType == SpecialType.System_String)
         {
-            sb.Append(indent).Append("if (!").Append(shadowExpr).Append(".Equals(").Append(currentExpr).AppendLine(")) return true;");
+            sb.Append(indent).Append("if (!").Append(shadowExpr).Append(".Equals(").Append(currentExpr).Append(")) ").Append(emitAction).AppendLine(";");
         }
         else if (IsPrimitive(type))
         {
-            sb.Append(indent).Append("if (").Append(shadowExpr).Append(" != ").Append(currentExpr).AppendLine(") return true;");
+            sb.Append(indent).Append("if (").Append(shadowExpr).Append(" != ").Append(currentExpr).Append(") ").Append(emitAction).AppendLine(";");
         }
         else if (IsDictionary(type))
         {
@@ -420,64 +436,42 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
 
             sb.Append(indent).Append("if (").Append(currentExpr).AppendLine(" == null)");
             sb.Append(indent).AppendLine("{");
-            if (shadowType.Contains("ArenaDictionary"))
-                sb.Append(indent).Append("    if (").Append(shadowExpr).AppendLine(".Count > 0) return true;");
-            else
-                sb.Append(indent).Append("    if (").Append(shadowExpr).AppendLine(".Length > 0) return true;");
+            sb.Append(indent).Append("    if (").Append(shadowExpr).Append(".Count > 0) ").Append(emitAction).AppendLine(";");
             sb.Append(indent).AppendLine("}");
             sb.Append(indent).AppendLine("else");
             sb.Append(indent).AppendLine("{");
-            if (shadowType.Contains("ArenaDictionary"))
+            sb.Append(indent).Append("    if (").Append(shadowExpr).Append(".Count != ").Append(currentExpr).Append(".Count) ").Append(emitAction).AppendLine(";");
+            sb.Append(indent).Append("    foreach (var kvp in ").Append(currentExpr).AppendLine(")");
+            sb.Append(indent).AppendLine("    {");
+            sb.Append(indent).AppendLine("        {"); // Add scope
+            if (keyType.SpecialType == SpecialType.System_String)
             {
-                sb.Append(indent).Append("    if (").Append(shadowExpr).Append(".Count != ").Append(currentExpr).AppendLine(".Count) return true;");
-                sb.Append(indent).Append("    foreach (var kvp in ").Append(currentExpr).AppendLine(")");
-                sb.Append(indent).AppendLine("    {");
-                sb.Append(indent).AppendLine("        {"); // Add scope
-                GenerateValueAssignment(sb, indent + "            ", keyType, "var currentKey", "kvp.Key", queue);
-                sb.Append(indent).Append("            if (!").Append(shadowExpr).Append(".TryGetValue(currentKey, out var shadowValue)) return true;");
-                GenerateValueDirtyCheck(sb, indent + "            ", valueType, "shadowValue", "kvp.Value", queue);
-                sb.Append(indent).AppendLine("        }");
-                sb.Append(indent).AppendLine("    }");
+                // Use the optimized string lookup
+                sb.Append(indent).Append("            if (!").Append(shadowExpr).Append(".TryGetValue(kvp.Key, out var shadowValue)) { ").Append(emitAction).AppendLine("; break; }");
             }
             else
             {
-                // NOTE: String-keyed dictionaries fall back to ArenaList<KeyValuePairShadow>
-                // because ArenaString does not implement IEquatable<ArenaString> and therefore
-                // cannot be used as a key in ArenaDictionary. The dirty check below performs a
-                // LINEAR SCAN per key — O(n²) overall. For entities with small dictionaries
-                // (typical TTRPG metadata bags) this is acceptable. If profiling shows this
-                // is a hot path, consider making ArenaString implement IEquatable<ArenaString>
-                // to unlock the O(1) ArenaDictionary path for string keys as well.
-                sb.Append(indent).Append("    if (").Append(shadowExpr).Append(".Length != ").Append(currentExpr).AppendLine(".Count) return true;");
-                sb.Append(indent).Append("    foreach (var kvp in ").Append(currentExpr).AppendLine(")");
-                sb.Append(indent).AppendLine("    {");
-                sb.Append(indent).AppendLine("        bool foundKey = false;");
-                sb.Append(indent).Append("        for (int j = 0; j < ").Append(shadowExpr).AppendLine(".Length; j++)");
-                sb.Append(indent).AppendLine("        {");
-                sb.Append(indent).Append("            var shadowPair = ").Append(shadowExpr).AppendLine("[j];");
-                sb.Append(indent).Append("            if (");
-                GenerateEqualityCheck(sb, keyType, "shadowPair.Key", "kvp.Key");
-                sb.AppendLine(")");
-                sb.Append(indent).AppendLine("            {");
-                sb.Append(indent).AppendLine("                foundKey = true;");
-                GenerateValueDirtyCheck(sb, indent + "                ", valueType, "shadowPair.Value", "kvp.Value", queue);
-                sb.Append(indent).AppendLine("                break;");
-                sb.Append(indent).AppendLine("            }");
-                sb.Append(indent).AppendLine("        }");
-                sb.Append(indent).Append("        if (!foundKey) return true;");
-                sb.Append(indent).AppendLine("    }");
+                GenerateValueAssignment(sb, indent + "            ", keyType, "var currentKey", "kvp.Key", queue);
+                sb.Append(indent).Append("            if (!").Append(shadowExpr).Append(".TryGetValue(currentKey, out var shadowValue)) { ").Append(emitAction).AppendLine("; break; }");
             }
+            GenerateValueDirtyCheck(sb, indent + "            ", valueType, "shadowValue", "kvp.Value", queue, outDirtyVar);
+            if (outDirtyVar != null)
+            {
+                sb.Append(indent).Append("            if (").Append(outDirtyVar).AppendLine(") break;");
+            }
+            sb.Append(indent).AppendLine("        }");
+            sb.Append(indent).AppendLine("    }");
             sb.Append(indent).AppendLine("}");
-        }
-        else if (IsCollection(type))
-        {
+            }
+            else if (IsCollection(type))
+            {
             sb.Append(indent).Append("if (").Append(currentExpr).AppendLine(" == null)");
             sb.Append(indent).AppendLine("{");
-            sb.Append(indent).Append("    if (").Append(shadowExpr).AppendLine(".Length > 0) return true;");
+            sb.Append(indent).Append("    if (").Append(shadowExpr).Append(".Length > 0) ").Append(emitAction).AppendLine(";");
             sb.Append(indent).AppendLine("}");
             sb.Append(indent).AppendLine("else");
             sb.Append(indent).AppendLine("{");
-            sb.Append(indent).Append("    if (").Append(shadowExpr).Append(".Length != System.Linq.Enumerable.Count(").Append(currentExpr).AppendLine(")) return true;");
+            sb.Append(indent).Append("    if (").Append(shadowExpr).Append(".Length != System.Linq.Enumerable.Count(").Append(currentExpr).Append(")) ").Append(emitAction).AppendLine(";");
             sb.Append(indent).AppendLine("    int i = 0;");
             sb.Append(indent).Append("    foreach (var item in ").Append(currentExpr).AppendLine(")");
             sb.Append(indent).AppendLine("    {");
@@ -485,17 +479,20 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
             ITypeSymbol elementType;
             if (type is IArrayTypeSymbol arrayType) elementType = arrayType.ElementType;
             else elementType = ((INamedTypeSymbol)type).TypeArguments[0];
-            GenerateValueDirtyCheck(sb, indent + "            ", elementType, $"{shadowExpr}[i]", "item", queue);
+            GenerateValueDirtyCheck(sb, indent + "            ", elementType, $"{shadowExpr}[i]", "item", queue, outDirtyVar);
+            if (outDirtyVar != null)
+            {
+                sb.Append(indent).Append("            if (").Append(outDirtyVar).AppendLine(") break;");
+            }
             sb.Append(indent).AppendLine("            i++;");
             sb.Append(indent).AppendLine("        }");
             sb.Append(indent).AppendLine("    }");
             sb.Append(indent).AppendLine("}");
-        }
-        else if (type.TypeKind == TypeKind.Class || type.TypeKind == TypeKind.Struct)
-        {
-            sb.Append(indent).Append("if (").Append(shadowExpr).Append(".IsDirty(").Append(currentExpr).AppendLine(")) return true;");
-        }
-    }
+            }
+            else if (type.TypeKind == TypeKind.Class || type.TypeKind == TypeKind.Struct)
+            {
+            sb.Append(indent).Append("if (").Append(shadowExpr).Append(".IsDirty(").Append(currentExpr).Append(")) ").Append(emitAction).AppendLine(";");
+            }    }
 
     private static void GenerateEqualityCheck(StringBuilder sb, ITypeSymbol type, string shadowExpr, string currentExpr)
     {

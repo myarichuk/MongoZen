@@ -9,12 +9,11 @@
 
     <!-- NuGet Metadata -->
     <PackageId>MongoZen</PackageId>
-    <Version>0.1.0</Version>
     <Authors>Michael Yarichuk</Authors>
     <Company>Michael Yarichuk</Company>
     <PackageReleaseNotes>Note: this is not yet ready for production - it is WIP!</PackageReleaseNotes>
     <Description>MongoZen: A minimal ceremony MongoDB-based data access library to make working with MongoDB feel more ORM-like</Description>
-    <RepositoryUrl>https://github.com/myarichuk/MongoFlow</RepositoryUrl>
+    <RepositoryUrl>https://github.com/myarichuk/MongoZen</RepositoryUrl>
     <RootNamespace>MongoZen</RootNamespace>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>

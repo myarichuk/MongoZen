@@ -22,14 +22,12 @@ public class ComparisonBenchmarks
     private List<BenchmarkEntity> _testData = null!;
     private List<string> _testIds = null!;
 
-    [Params(10, 100, 500, 1000)]
+    [Params(100, 1000)]
     public int EntityCount;
 
     [GlobalSetup]
     public async Task Setup()
     {
-        // Disable authentication (empty username/password) to avoid the
-        // "security.keyFile is required when authorization is enabled with replica sets" error.
         _container = new MongoDbBuilder()
             .WithUsername("")
             .WithPassword("")
@@ -38,7 +36,6 @@ public class ComparisonBenchmarks
 
         await _container.StartAsync();
 
-        // Use the internal port (27017) — this is what MongoDB sees inside the container.
         await _container.ExecAsync([
             "mongosh", "--eval",
             "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
@@ -46,8 +43,6 @@ public class ComparisonBenchmarks
 
         var connectionString = _container.GetConnectionString();
 
-        // directConnection=true prevents the driver from trying to discover other
-        // replica set members (which would fail since we only have one node).
         if (!connectionString.Contains("replicaSet="))
         {
             connectionString += (connectionString.Contains("?") ? "&" : "?") + "replicaSet=rs0&directConnection=true";
@@ -59,7 +54,6 @@ public class ComparisonBenchmarks
 
         _client = new MongoClient(connectionString);
 
-        // Wait for the primary election to complete so transactions are supported.
         for (int i = 0; i < 30; i++)
         {
             try
@@ -73,7 +67,6 @@ public class ComparisonBenchmarks
             }
             catch
             {
-                // Election in progress...
             }
             await Task.Delay(1000);
         }
@@ -93,6 +86,9 @@ public class ComparisonBenchmarks
             CreatedAt = DateTime.UtcNow,
             Tags = ["tag1", "tag2", "tag3"],
             Metadata = new Dictionary<string, string> { { "key1", "value1" }, { "key2", "value2" } },
+            PolymorphicData = i % 2 == 0 
+                ? new DerivedDataA { Type = "A", InfoA = "Some info A" }
+                : new DerivedDataB { Type = "B", InfoB = i },
             Version = 1
         }).ToList();
 
@@ -105,34 +101,31 @@ public class ComparisonBenchmarks
         await _container.DisposeAsync();
     }
 
-    // Insert benchmarks: collection must be empty going in.
     [IterationSetup(Targets = [
-        nameof(RawDriver_InsertBatch),
-        nameof(MongoZen_InsertBatch),
-        nameof(MongoZen_InsertBatch_NoConcurrency)])]
+        nameof(Insert_RawDriver_Bulk),
+        nameof(Insert_MongoZen_OptimisticConcurrency),
+        nameof(Insert_MongoZen_NoConcurrency)])]
     public void IterationSetup_Empty()
     {
         _database.DropCollection("Entities");
     }
 
-    // Read/modify benchmarks: collection must be pre-seeded so insert cost
-    // is not measured as part of the benchmark itself.
     [IterationSetup(Targets = [
-        nameof(RawDriver_ReadAndModify),
-        nameof(RawDriver_ReadAndModify_WithManualConcurrency),
-        nameof(MongoZen_ReadAndModify),
-        nameof(MongoZen_ReadAndModify_NoConcurrency)])]
+        nameof(ReadAndModify_RawDriver_Replace_NoConcurrency),
+        nameof(ReadAndModify_RawDriver_Replace_ManualConcurrency),
+        nameof(ReadAndModify_RawDriver_Set_NoConcurrency),
+        nameof(ReadAndModify_RawDriver_Set_ManualConcurrency),
+        nameof(ReadAndModify_MongoZen_Set_OptimisticConcurrency),
+        nameof(ReadAndModify_MongoZen_Set_NoConcurrency)])]
     public void IterationSetup_WithData()
     {
         _database.DropCollection("Entities");
-        // Use the synchronous overload — IterationSetup cannot be async.
         _collection.InsertMany(_testData);
     }
 
-    // ReadRepeat benchmarks: seed just one document
     [IterationSetup(Targets = [
-        nameof(RawDriver_ReadRepeat),
-        nameof(MongoZen_ReadRepeat)])]
+        nameof(IdentityMap_RawDriver_NoTracking),
+        nameof(IdentityMap_MongoZen_FromMemory)])]
     public void IterationSetup_SingleDocument()
     {
         _database.DropCollection("Entities");
@@ -144,15 +137,14 @@ public class ComparisonBenchmarks
     // -------------------------------------------------------------------------
 
     [BenchmarkCategory("Insert"), Benchmark(Baseline = true)]
-    public async Task RawDriver_InsertBatch()
+    public async Task Insert_RawDriver_Bulk()
     {
         await _collection.InsertManyAsync(_testData);
     }
 
     [BenchmarkCategory("Insert"), Benchmark]
-    public async Task MongoZen_InsertBatch()
+    public async Task Insert_MongoZen_OptimisticConcurrency()
     {
-        // Uses default Version concurrency if property exists
         await using var session = _dbContext.StartSession();
         foreach (var entity in _testData)
         {
@@ -162,7 +154,7 @@ public class ComparisonBenchmarks
     }
 
     [BenchmarkCategory("Insert"), Benchmark]
-    public async Task MongoZen_InsertBatch_NoConcurrency()
+    public async Task Insert_MongoZen_NoConcurrency()
     {
         var options = new DbContextOptions(_database, new Conventions { ConcurrencyPropertyName = null });
         var db = new BenchmarkDbContext(options);
@@ -179,7 +171,7 @@ public class ComparisonBenchmarks
     // -------------------------------------------------------------------------
 
     [BenchmarkCategory("ReadModify"), Benchmark(Baseline = true)]
-    public async Task RawDriver_ReadAndModify()
+    public async Task ReadAndModify_RawDriver_Replace_NoConcurrency()
     {
         var filter = Builders<BenchmarkEntity>.Filter.In(e => e.Id, _testIds);
         var entities = await _collection.Find(filter).ToListAsync();
@@ -188,6 +180,9 @@ public class ComparisonBenchmarks
         {
             e.Age++;
             e.Name = "Updated Name";
+            // Polymorphism check
+            if (e.PolymorphicData is DerivedDataB b) b.InfoB++;
+
             return new ReplaceOneModel<BenchmarkEntity>(
                 Builders<BenchmarkEntity>.Filter.Eq(x => x.Id, e.Id), e);
         }).ToList<WriteModel<BenchmarkEntity>>();
@@ -196,7 +191,7 @@ public class ComparisonBenchmarks
     }
 
     [BenchmarkCategory("ReadModify"), Benchmark]
-    public async Task RawDriver_ReadAndModify_WithManualConcurrency()
+    public async Task ReadAndModify_RawDriver_Replace_ManualConcurrency()
     {
         var filter = Builders<BenchmarkEntity>.Filter.In(e => e.Id, _testIds);
         var entities = await _collection.Find(filter).ToListAsync();
@@ -207,6 +202,7 @@ public class ComparisonBenchmarks
             e.Age++;
             e.Name = "Updated Name";
             e.Version++;
+            if (e.PolymorphicData is DerivedDataB b) b.InfoB++;
             
             var updateFilter = Builders<BenchmarkEntity>.Filter.And(
                 Builders<BenchmarkEntity>.Filter.Eq(x => x.Id, e.Id),
@@ -224,7 +220,74 @@ public class ComparisonBenchmarks
     }
 
     [BenchmarkCategory("ReadModify"), Benchmark]
-    public async Task MongoZen_ReadAndModify()
+    public async Task ReadAndModify_RawDriver_Set_NoConcurrency()
+    {
+        var filter = Builders<BenchmarkEntity>.Filter.In(e => e.Id, _testIds);
+        var entities = await _collection.Find(filter).ToListAsync();
+
+        var writes = entities.Select(e =>
+        {
+            e.Age++;
+            e.Name = "Updated Name";
+            
+            var update = Builders<BenchmarkEntity>.Update
+                .Inc(x => x.Age, 1)
+                .Set(x => x.Name, "Updated Name");
+
+            if (e.PolymorphicData is DerivedDataB b)
+            {
+                b.InfoB++;
+                update = update.Set("PolymorphicData.InfoB", b.InfoB);
+            }
+
+            return new UpdateOneModel<BenchmarkEntity>(
+                Builders<BenchmarkEntity>.Filter.Eq(x => x.Id, e.Id), update);
+        }).ToList<WriteModel<BenchmarkEntity>>();
+
+        await _collection.BulkWriteAsync(writes);
+    }
+
+    [BenchmarkCategory("ReadModify"), Benchmark]
+    public async Task ReadAndModify_RawDriver_Set_ManualConcurrency()
+    {
+        var filter = Builders<BenchmarkEntity>.Filter.In(e => e.Id, _testIds);
+        var entities = await _collection.Find(filter).ToListAsync();
+
+        var writes = entities.Select(e =>
+        {
+            var oldVersion = e.Version;
+            e.Age++;
+            e.Name = "Updated Name";
+            e.Version++;
+
+            var update = Builders<BenchmarkEntity>.Update
+                .Inc(x => x.Age, 1)
+                .Set(x => x.Name, "Updated Name")
+                .Inc(x => x.Version, 1);
+
+            if (e.PolymorphicData is DerivedDataB b)
+            {
+                b.InfoB++;
+                update = update.Set("PolymorphicData.InfoB", b.InfoB);
+            }
+            
+            var updateFilter = Builders<BenchmarkEntity>.Filter.And(
+                Builders<BenchmarkEntity>.Filter.Eq(x => x.Id, e.Id),
+                Builders<BenchmarkEntity>.Filter.Eq(x => x.Version, oldVersion)
+            );
+            
+            return new UpdateOneModel<BenchmarkEntity>(updateFilter, update);
+        }).ToList<WriteModel<BenchmarkEntity>>();
+
+        var result = await _collection.BulkWriteAsync(writes);
+        if (result.MatchedCount < entities.Count)
+        {
+            throw new Exception("Concurrency conflict");
+        }
+    }
+
+    [BenchmarkCategory("ReadModify"), Benchmark]
+    public async Task ReadAndModify_MongoZen_Set_OptimisticConcurrency()
     {
         await using var session = _dbContext.StartSession();
         var entities = await session.Entities.QueryAsync(e => _testIds.Contains(e.Id));
@@ -232,12 +295,13 @@ public class ComparisonBenchmarks
         {
             entity.Age++;
             entity.Name = "Updated Name";
+            if (entity.PolymorphicData is DerivedDataB b) b.InfoB++;
         }
         await session.SaveChangesAsync();
     }
 
     [BenchmarkCategory("ReadModify"), Benchmark]
-    public async Task MongoZen_ReadAndModify_NoConcurrency()
+    public async Task ReadAndModify_MongoZen_Set_NoConcurrency()
     {
         var options = new DbContextOptions(_database, new Conventions { ConcurrencyPropertyName = null });
         var db = new BenchmarkDbContext(options);
@@ -247,6 +311,7 @@ public class ComparisonBenchmarks
         {
             entity.Age++;
             entity.Name = "Updated Name";
+            if (entity.PolymorphicData is DerivedDataB b) b.InfoB++;
         }
         await session.SaveChangesAsync();
     }
@@ -256,7 +321,7 @@ public class ComparisonBenchmarks
     // -------------------------------------------------------------------------
 
     [BenchmarkCategory("IdentityMap"), Benchmark(Baseline = true)]
-    public async Task RawDriver_ReadRepeat()
+    public async Task IdentityMap_RawDriver_NoTracking()
     {
         var id = _testIds[0];
         for (int i = 0; i < 100; i++)
@@ -266,7 +331,7 @@ public class ComparisonBenchmarks
     }
 
     [BenchmarkCategory("IdentityMap"), Benchmark]
-    public async Task MongoZen_ReadRepeat()
+    public async Task IdentityMap_MongoZen_FromMemory()
     {
         var id = _testIds[0];
         await using var session = _dbContext.StartSession();

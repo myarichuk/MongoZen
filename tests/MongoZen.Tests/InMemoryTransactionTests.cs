@@ -22,11 +22,11 @@ public class InMemoryTransactionTests
         public TestContextSession(TestContext dbContext) : base(dbContext)
         {
             var userSet = new MutableDbSet<User>(
-                _dbContext.Users, 
-                () => Transaction, 
-                this, 
-                conventions: _dbContext.Options.Conventions);
-            Users = userSet;
+                _dbContext.Users,
+                () => Transaction,
+                this,
+                extractor: null,
+                conventions: _dbContext.Options.Conventions);            Users = userSet;
             RegisterDbSet(userSet);
         }
 

@@ -126,6 +126,38 @@ public unsafe struct ArenaDictionary<TKey, TValue>
         return false;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public readonly bool TryGetValue(string key, out TValue value)
+    {
+        if (_count == 0 || typeof(TKey) != typeof(ArenaString))
+        {
+            value = default;
+            return false;
+        }
+
+        int mask = _capacityMask;
+        int slot = ArenaString.GetHashCode(key) & mask;
+
+        while (true)
+        {
+            int entryIndexPlusOne = _buckets[slot];
+            if (entryIndexPlusOne == 0) break;
+
+            int entryIndex = entryIndexPlusOne - 1;
+            // Unsafe cast TKey to ArenaString to call Equals(string)
+            ref ArenaString arenaKey = ref Unsafe.As<TKey, ArenaString>(ref _entries[entryIndex].Key);
+            if (arenaKey.Equals(key))
+            {
+                value = _entries[entryIndex].Value;
+                return true;
+            }
+            slot = (slot + 1) & mask;
+        }
+
+        value = default;
+        return false;
+    }
+
     public void Clear()
     {
         if (Capacity > 0)

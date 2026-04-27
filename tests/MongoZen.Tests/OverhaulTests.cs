@@ -42,19 +42,20 @@ public class OverhaulTests : IntegrationTestBase
         public TestDbContextSession(TestDbContext dbContext) : base(dbContext)
         {
             Users = new MutableDbSet<User>(
-                _dbContext.Users, 
-                () => Transaction, 
-                this, 
+                _dbContext.Users,
+                () => Transaction,
+                this,
                 (entity, arena) => { unsafe {
-                    var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<User_Shadow>()); 
-                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<User_Shadow>(ptr); 
-                    s.From(entity, arena); 
-                    return (System.IntPtr)ptr; 
-                } },
+                    var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<User_Shadow>());
+                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<User_Shadow>(ptr);
+                    s.From(entity, arena);
+                    return (System.IntPtr)ptr;
+                }},
                 (entity, ptr) => { unsafe {
-                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<User_Shadow>((void*)ptr); 
-                    return s.IsDirty(entity); 
-                } },
+                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<User_Shadow>((void*)ptr);
+                    return s.IsDirty(entity);
+                }},
+                null,
                 _dbContext.Options.Conventions);
         }
 

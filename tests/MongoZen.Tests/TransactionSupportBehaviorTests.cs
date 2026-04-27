@@ -21,7 +21,7 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
         public TestDbContextSession(TestDbContext dbContext)
             : base(dbContext)
         {
-            Users = new MutableDbSet<User>(_dbContext.Users, () => Transaction, this, null, null, _dbContext.Options.Conventions);
+            Users = new MutableDbSet<User>(_dbContext.Users, () => Transaction, this, null, null, null, _dbContext.Options.Conventions);
         }
 
         public IMutableDbSet<User> Users { get; }

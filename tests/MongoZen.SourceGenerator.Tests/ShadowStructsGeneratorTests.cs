@@ -257,11 +257,12 @@ public class User {
         Assert.Contains("foreach (var item in source.Scores)", userCode);
         Assert.Contains("var shadowItem", userCode);
         
-        // Verify Dictionary dirty check is order-independent (contains nested loop and foundKey flag)
+        // Verify Dictionary dirty check is O(1) lookup
         Assert.Contains("foreach (var kvp in current.Settings)", userCode);
-        Assert.Contains("bool foundKey = false;", userCode);
-        Assert.Contains("for (int j = 0; j < shadow.Settings.Length; j++)", userCode);
-        Assert.Contains("if (shadowPair.Key.Equals(kvp.Key))", userCode);
+        Assert.Contains("!shadow.Settings.TryGetValue(kvp.Key, out var shadowValue)", userCode);
+        
+        // Verify ExtractChanges method is present
+        Assert.Contains("public static global::MongoDB.Driver.UpdateDefinition<User>? ExtractChanges(this ref User_Shadow shadow, User current)", userCode);
     }
 
     private static string Normalize(string s) => s.Replace("\r\n", "\n");

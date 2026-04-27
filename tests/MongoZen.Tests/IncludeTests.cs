@@ -30,8 +30,8 @@ public class IncludeTests : IntegrationTestBase
     {
         public TestContextSession(TestContext dbContext) : base(dbContext)
         {
-            Customers = new MutableDbSet<Customer>(_dbContext.Customers, () => Transaction, this, conventions: _dbContext.Options.Conventions);
-            Orders = new MutableDbSet<Order>(_dbContext.Orders, () => Transaction, this, conventions: _dbContext.Options.Conventions);
+            Customers = new MutableDbSet<Customer>(_dbContext.Customers, () => Transaction, this, extractor: null, conventions: _dbContext.Options.Conventions);
+            Orders = new MutableDbSet<Order>(_dbContext.Orders, () => Transaction, this, extractor: null, conventions: _dbContext.Options.Conventions);
         }
 
         public IMutableDbSet<Customer> Customers { get; }

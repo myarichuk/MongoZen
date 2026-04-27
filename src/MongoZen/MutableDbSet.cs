@@ -21,6 +21,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
     private readonly Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr>? _materializer;
     private readonly Func<TEntity, IntPtr, bool>? _differ;
+    private readonly Func<TEntity, IntPtr, UpdateDefinition<TEntity>?>? _extractor;
     private readonly Func<TEntity, TEntity> _trackSingleDelegate;
 
     private PooledHashSet<TEntity> _added;
@@ -29,7 +30,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     private PooledHashSet<TEntity> _updated;
     private PooledList<(LambdaExpression Path, Type IncludeType)> _includes;
 
-    private PooledDictionary<DocId, TEntity> _upsertBuffer;
+    private PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> _upsertBuffer;
     private PooledHashSet<object> _rawIdBuffer;
     private PooledList<WriteModel<TEntity>> _modelBuffer;
     private PooledList<TEntity> _dirtyBuffer;
@@ -51,7 +52,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _updated = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
         _includes = new PooledList<(LambdaExpression Path, Type IncludeType)>(4);
 
-        _upsertBuffer = new PooledDictionary<DocId, TEntity>(16);
+        _upsertBuffer = new PooledDictionary<DocId, (TEntity Entity, bool IsDirty)>(16);
         _rawIdBuffer = new PooledHashSet<object>(16);
         _modelBuffer = new PooledList<WriteModel<TEntity>>(16);
         _dirtyBuffer = new PooledList<TEntity>(16);
@@ -63,6 +64,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         ISessionTracker tracker, 
         Func<TEntity, SharpArena.Allocators.ArenaAllocator, IntPtr>? materializer = null,
         Func<TEntity, IntPtr, bool>? differ = null,
+        Func<TEntity, IntPtr, UpdateDefinition<TEntity>?>? extractor = null,
         Conventions? conventions = null)
         : this(baseSet, conventions ?? new Conventions())
     {
@@ -70,6 +72,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _tracker = tracker;
         _materializer = materializer;
         _differ = differ;
+        _extractor = extractor;
     }
 
     public void Dispose()
@@ -183,7 +186,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _updated = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
         _includes = new PooledList<(LambdaExpression Path, Type IncludeType)>(4);
 
-        _upsertBuffer = new PooledDictionary<DocId, TEntity>(16);
+        _upsertBuffer = new PooledDictionary<DocId, (TEntity Entity, bool IsDirty)>(16);
         _rawIdBuffer = new PooledHashSet<object>(16);
         _modelBuffer = new PooledList<WriteModel<TEntity>>(16);
         _dirtyBuffer = new PooledList<TEntity>(16);
@@ -231,6 +234,8 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
                 _upsertBuffer,
                 _rawIdBuffer,
                 _modelBuffer,
+                _extractor,
+                _tracker!,
                 transaction, arena, cancellationToken);
         }
         finally
@@ -273,18 +278,18 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     {
         using var pipeline = new PooledList<BsonDocument>(16);
         pipeline.Add(new BsonDocument("$match", filter.Render(new RenderArgs<TEntity>(mongoSet.Collection.DocumentSerializer, mongoSet.Collection.Settings.SerializerRegistry))));
-        
+
         using var includeMaps = new PooledList<(string LocalField, string ForeignCollection, string AsField, Type ForeignType)>(8);
 
         foreach (var (path, includeType) in _includes)
         {
             var memberExpr = path.Body as MemberExpression;
-            if (memberExpr == null && path.Body is UnaryExpression unary) memberExpr = unary.Operand as MemberExpression;
+            if (memberExpr == null && path.Body is UnaryExpression unary) memberExpr = unary.Operand as MemberExpression;    
             if (memberExpr == null) continue;
 
             var localField = memberExpr.Member.Name;
             var foreignType = includeType;
-            
+
             if (_tracker is IDbContextSession sessionTyped)
             {
                 var foreignCollection = sessionTyped.GetDbContext().GetCollectionName(foreignType);
@@ -301,39 +306,22 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
             }
         }
 
-        List<BsonDocument> rawResults;
+        // Use the new IncludeWrappingSerializer to reduce GC pressure and avoid full AST parsing
+        var innerSerializer = mongoSet.Collection.DocumentSerializer;
+        var simpleMaps = new List<(string AsField, Type ForeignType)>(includeMaps.Count);
+        foreach (var map in includeMaps) simpleMaps.Add((map.AsField, map.ForeignType));
+        
+        var wrappingSerializer = new IncludeWrappingSerializer<TEntity>(innerSerializer, _tracker!, simpleMaps);
+
+        var pipelineDefinition = PipelineDefinition<TEntity, TEntity>.Create(pipeline, wrappingSerializer);
+
+        List<TEntity> results;
         if (session != null)
-            rawResults = await mongoSet.Collection.Aggregate(session, PipelineDefinition<TEntity, BsonDocument>.Create(pipeline)).ToListAsync(cancellationToken);
+            results = await mongoSet.Collection.Aggregate(session, pipelineDefinition).ToListAsync(cancellationToken);
         else
-            rawResults = await mongoSet.Collection.Aggregate(PipelineDefinition<TEntity, BsonDocument>.Create(pipeline)).ToListAsync(cancellationToken);
+            results = await mongoSet.Collection.Aggregate(pipelineDefinition).ToListAsync(cancellationToken);
 
-        var entities = new List<TEntity>(rawResults.Count);
-        foreach (var doc in rawResults)
-        {
-            foreach (var map in includeMaps)
-            {
-                if (doc.TryGetValue(map.AsField, out var includedArray) && includedArray.IsBsonArray)
-                {
-                    foreach (var includedDoc in includedArray.AsBsonArray)
-                    {
-                        var foreignEntity = MongoDB.Bson.Serialization.BsonSerializer.Deserialize(includedDoc.AsBsonDocument, map.ForeignType);
-                        var id = includedDoc.AsBsonDocument.GetValue("_id", BsonNull.Value);
-                        if (id != BsonNull.Value)
-                        {
-                            var idValue = BsonTypeMapper.MapToDotNetValue(id);
-                            _tracker?.TrackDynamic(foreignEntity, map.ForeignType, idValue);
-                        }
-                    }
-                    doc.Remove(map.AsField);
-                }
-            }
-
-            var entity = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<TEntity>(doc);
-            var trackedEntity = TrackSingle(entity);
-            entities.Add(trackedEntity);
-        }
-
-        return entities;
+        return results.Select(TrackSingle);
     }
 
     private TEntity TrackSingle(TEntity entity)

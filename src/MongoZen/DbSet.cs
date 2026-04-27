@@ -76,9 +76,11 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         IEnumerable<object> removedIds, 
         IEnumerable<TEntity> updated, 
         IEnumerable<TEntity> dirty, 
-        MongoZen.Collections.PooledDictionary<DocId, TEntity> upsertBuffer,
+        MongoZen.Collections.PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer,
         MongoZen.Collections.PooledHashSet<object> rawIdBuffer,
         MongoZen.Collections.PooledList<WriteModel<TEntity>> modelBuffer,
+        Func<TEntity, IntPtr, UpdateDefinition<TEntity>?>? extractor,
+        ISessionTracker tracker,
         TransactionContext transaction, 
         SharpArena.Allocators.ArenaAllocator arena,
         CancellationToken cancellationToken)
@@ -113,7 +115,6 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
 
         if (rawIdBuffer.Count > 0)
         {
-            // Builders<T>.Filter.In handles IEnumerable<T>
             modelBuffer.Add(new DeleteManyModel<TEntity>(Builders<TEntity>.Filter.In(_idFieldName, rawIdBuffer)));
         }
 
@@ -126,13 +127,13 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var docId = DocId.From(rawId);
             if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer.AddOrUpdate(docId, entity);
+                upsertBuffer.AddOrUpdate(docId, (entity, false));
             }
         }
 
         foreach (var entry in upsertBuffer)
         {
-            modelBuffer.Add(new InsertOneModel<TEntity>(entry.Value));
+            modelBuffer.Add(new InsertOneModel<TEntity>(entry.Value.Entity));
             dedupeBuffer.Add(entry.Key); // Prevent updates for this ID
         }
         upsertBuffer.Clear();
@@ -146,7 +147,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var docId = DocId.From(rawId);
             if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer.AddOrUpdate(docId, entity);
+                upsertBuffer.AddOrUpdate(docId, (entity, false));
             }
         }
         foreach (var entity in dirty)
@@ -157,7 +158,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var docId = DocId.From(rawId);
             if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer.AddOrUpdate(docId, entity);
+                upsertBuffer.AddOrUpdate(docId, (entity, true));
             }
         }
 
@@ -174,7 +175,8 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
 
         foreach (var entry in upsertBuffer)
         {
-            var entity = entry.Value;
+            var entity = entry.Value.Entity;
+            var isDirty = entry.Value.IsDirty;
             var rawId = entity.GetId(_idAccessor);
             var filter = Builders<TEntity>.Filter.Eq(_idFieldName, rawId);
 
@@ -200,8 +202,23 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
                 filter = Builders<TEntity>.Filter.And(filter, Builders<TEntity>.Filter.Eq(concurrencyElementName, currentVersion));
                 
                 versionSetter(entity, currentVersion + 1);
-                
-                modelBuffer.Add(new ReplaceOneModel<TEntity>(filter, entity) { IsUpsert = false });
+
+                UpdateDefinition<TEntity>? update = null;
+                if (isDirty && extractor != null && tracker != null && tracker.TryGetShadowPtr<TEntity>(rawId, out var shadowPtr))
+                {
+                    update = extractor(entity, shadowPtr);
+                }
+
+                if (update != null)
+                {
+                    // Add version increment to the partial update
+                    update = Builders<TEntity>.Update.Combine(update, Builders<TEntity>.Update.Set(concurrencyElementName, currentVersion + 1));
+                    modelBuffer.Add(new UpdateOneModel<TEntity>(filter, update) { IsUpsert = false });
+                }
+                else
+                {
+                    modelBuffer.Add(new ReplaceOneModel<TEntity>(filter, entity) { IsUpsert = false });
+                }
                 updateCount++;
             }
             else
@@ -237,10 +254,11 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
                 {
                     foreach (var entry in upsertBuffer)
                     {
-                        var rawId = entry.Value.GetId(_idAccessor);
+                        var entityToRevert = entry.Value.Entity;
+                        var rawId = entityToRevert.GetId(_idAccessor);
                         if (rawId != null && versionMap.TryGetValue(DocId.From(rawId), out var original))
                         {
-                            versionSetter(entry.Value, original.Version);
+                            versionSetter(entityToRevert, original.Version);
                         }
                     }
                 }

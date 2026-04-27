@@ -33,10 +33,10 @@ namespace MongoZen.Tests
                     context.People,
                     () => Transaction,
                     this,
-                    (p, a) => (IntPtr)1, 
+                    (p, a) => (IntPtr)1,
                     (p, ptr) => true, // Treat as always dirty for these simple tests
-                    context.Options.Conventions);
-                RegisterDbSet((MutableDbSet<Person>)People);
+                    null,
+                    context.Options.Conventions);                RegisterDbSet((MutableDbSet<Person>)People);
             }
 
             public async Task SaveChangesAsync()
@@ -215,7 +215,7 @@ namespace MongoZen.Tests
             // Use a Mongo DbSet to trigger QueryWithIncludesAsync
             var mongoCollection = Database!.GetCollection<Person>("People");
             var dbSet = new DbSet<Person>(mongoCollection, new Conventions());
-            var mutableSet = new MutableDbSet<Person>(dbSet, new Conventions()); // No session tracker
+            var mutableSet = new MutableDbSet<Person>(dbSet, null!, null!, null, null, null, new Conventions()); // No session tracker
             
             await Assert.ThrowsAsync<InvalidOperationException>(async () => 
                 await mutableSet.Include(x => x.Id).QueryAsync(x => true));

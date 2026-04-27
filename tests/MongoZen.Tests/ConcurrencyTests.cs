@@ -48,19 +48,20 @@ public class ConcurrencyTests : IntegrationTestBase
         public MyDbContextSession(MyDbContext dbContext) : base(dbContext)
         {
             People = new MutableDbSet<Person>(
-                _dbContext.People, 
-                () => Transaction, 
-                this, 
+                _dbContext.People,
+                () => Transaction,
+                this,
                 (entity, arena) => { unsafe {
-                    var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Person_Shadow>()); 
-                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Person_Shadow>(ptr); 
-                    s.From(entity, arena); 
-                    return (System.IntPtr)ptr; 
-                } },
+                    var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Person_Shadow>());
+                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Person_Shadow>(ptr);
+                    s.From(entity, arena);
+                    return (System.IntPtr)ptr;
+                }},
                 (entity, ptr) => { unsafe {
-                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Person_Shadow>((void*)ptr); 
-                    return s.IsDirty(entity); 
-                } },
+                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Person_Shadow>((void*)ptr);
+                    return s.IsDirty(entity);
+                }},
+                null,
                 _dbContext.Options.Conventions);
             
             RegisterDbSet((MutableDbSet<Person>)People);
