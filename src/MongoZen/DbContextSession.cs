@@ -1,124 +1,9 @@
 using System.Runtime.CompilerServices;
-using System.Collections.Concurrent;
 using System.ComponentModel;
-using MongoDB.Bson;
 using MongoDB.Driver;
-using MongoDB.Driver.Core.Clusters;
 using SharpArena.Allocators;
 
 namespace MongoZen;
-
-internal interface IEntityTracker : IDisposable
-{
-    void RefreshShadows(ArenaAllocator arena, int generation);
-    void TrackDynamic(object entity, object id);
-    bool TryGetEntity(object id, out object? entity);
-    bool TryGetShadowPtr(object id, out ShadowPtr shadowPtr);
-    void Untrack(object id);
-}
-
-internal class EntityTracker<TEntity> : IEntityTracker where TEntity : class
-{
-    private readonly Func<TEntity, IntPtr, bool>? _differ;
-    private readonly Func<TEntity, ArenaAllocator, IntPtr>? _materializer;
-    public MongoZen.Collections.PooledDictionary<object, (TEntity Entity, ShadowPtr ShadowPtr)> Map;
-
-    public EntityTracker()
-    {
-        Map = new MongoZen.Collections.PooledDictionary<object, (TEntity Entity, ShadowPtr ShadowPtr)>(16);
-    }
-
-    public EntityTracker(Func<TEntity, IntPtr, bool>? differ, Func<TEntity, ArenaAllocator, IntPtr>? materializer)
-        : this()
-    {
-        _differ = differ;
-        _materializer = materializer;
-    }
-
-    public void RefreshShadows(ArenaAllocator arena, int generation)
-    {
-        if (_materializer == null) return;
-
-        foreach (var kvp in Map)
-        {
-            var entry = kvp.Value;
-            var newShadowPtr = new ShadowPtr(_materializer(entry.Entity, arena), generation);
-            Map[kvp.Key] = (entry.Entity, newShadowPtr);
-        }
-    }
-
-    public void TrackDynamic(object entity, object id)
-    {
-        if (!Map.ContainsKey(id))
-        {
-            Map[id] = ((TEntity)entity, ShadowPtr.Zero);
-        }
-    }
-
-    public bool TryGetEntity(object id, out object? entity)
-    {
-        if (Map.TryGetValue(id, out var entry))
-        {
-            entity = entry.Entity;
-            return true;
-        }
-        entity = null;
-        return false;
-    }
-
-    public bool TryGetShadowPtr(object id, out ShadowPtr shadowPtr)
-    {
-        if (Map.TryGetValue(id, out var entry))
-        {
-            shadowPtr = entry.ShadowPtr;
-            return true;
-        }
-        shadowPtr = ShadowPtr.Zero;
-        return false;
-    }
-
-    public void Untrack(object id) => Map.Remove(id);
-
-    public IEnumerable<TEntity> GetDirtyEntities(int currentGeneration)
-    {
-        if (_differ == null) yield break;
-
-        foreach (var kvp in Map)
-        {
-            var entry = kvp.Value;
-            if (entry.ShadowPtr.IsZero) continue;
-#if DEBUG
-            if (entry.ShadowPtr.Generation != currentGeneration)
-            {
-                throw new InvalidOperationException("Attempted to access a shadow pointer from a previous arena generation. This pointer is stale and unsafe to use.");
-            }
-#endif
-            if (_differ(entry.Entity, entry.ShadowPtr))
-            {
-                yield return entry.Entity;
-            }
-        }
-    }
-
-    public TEntity Track(TEntity entity, object id, bool forceShadow, ArenaAllocator arena, int generation)
-    {
-        if (Map.TryGetValue(id, out var existing))
-        {
-            return existing.Entity;
-        }
-
-        ShadowPtr shadowPtr = ShadowPtr.Zero;
-        if (forceShadow && _materializer != null)
-        {
-            shadowPtr = new ShadowPtr(_materializer(entity, arena), generation);
-        }
-
-        Map[id] = (entity, shadowPtr);
-        return entity;
-    }
-
-    public void Dispose() => Map.Dispose();
-}
 
 /// <summary>
 /// Non-generic interface for session tracking and access to the context.
@@ -153,40 +38,36 @@ public interface IDbContextSessionAdvanced
 public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContextSession, IDbContextSessionAdvanced
     where TDbContext : DbContext
 {
-    private static readonly ConditionalWeakTable<IMongoClient, StrongBox<bool>> TopologyCache = new();
-
     protected readonly TDbContext _dbContext;
-    protected IClientSessionHandle? _session;
-    protected bool _ownsSession;
-    protected bool _inMemoryTransaction;
-
-    protected ArenaAllocator _arena;
-    protected ArenaAllocator _nextArena;
-    protected int _arenaGeneration = 0;
-    protected readonly Dictionary<Type, IInternalMutableDbSet> _dbSets = new();
+    private readonly TransactionManager _transactionManager;
+    private readonly SessionArenaManager _arenaManager;
+    private readonly Dictionary<Type, IInternalMutableDbSet> _dbSets = new();
 
     // Identity Map and Shadow storage. 
     private readonly Dictionary<Type, IEntityTracker> _trackedEntities = new();
 
+    public TDbContext Context => _dbContext;
+
     protected DbContextSession(TDbContext dbContext, bool startTransaction = true)
     {
         _dbContext = dbContext;
-        _arena = new ArenaAllocator();
-        _nextArena = new ArenaAllocator();
+        _transactionManager = new TransactionManager(dbContext);
+        _arenaManager = new SessionArenaManager();
+        
         if (startTransaction)
         {
-            EnsureTransactionStarted();
+            _transactionManager.EnsureTransactionStarted();
         }
     }
 
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public ArenaAllocator Arena => _arena;
+    public ArenaAllocator Arena => _arenaManager.Current;
 
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public IClientSessionHandle? ClientSession => _session;
+    public IClientSessionHandle? ClientSession => _transactionManager.ClientSession;
 
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public TransactionContext Transaction => new(_session, _inMemoryTransaction);
+    public TransactionContext Transaction => _transactionManager.TransactionContext;
 
     public DbContext GetDbContext() => _dbContext;
 
@@ -212,7 +93,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
 
     public virtual async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        EnsureTransactionActive();
+        _transactionManager.EnsureTransactionActive();
 
         var transaction = Transaction;
         try 
@@ -229,15 +110,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
             throw;
         }
 
-        if (!_inMemoryTransaction && _session != null && _session.IsInTransaction)
-        {
-            // Commit first. Only auto-start the next transaction and accept
-            // changes if the commit succeeds. If CommitTransactionAsync throws
-            // (e.g. write conflict), the session stays in its pre-commit state
-            // so the caller can inspect the error and retry or abort.
-            await _session.CommitTransactionAsync(cancellationToken);
-            _session.StartTransaction(); // RavenDB-style multi-save: auto-start next
-        }
+        await _transactionManager.SaveChangesCommitAsync(cancellationToken);
 
         // AcceptChanges is only reached on the happy path — intentional.
         // If the commit above threw, shadows are NOT refreshed and the pending
@@ -247,7 +120,8 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
 
     private void AcceptChanges()
     {
-        _arenaGeneration++;
+        _arenaManager.IncrementGeneration();
+        
         // 1. Refresh shadows for all tracked entities into _nextArena.
         foreach (var set in _dbSets.Values)
         {
@@ -256,12 +130,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         }
 
         // 2. Swap arenas to preserve the newly generated shadows in _arena.
-        var temp = _arena;
-        _arena = _nextArena;
-        _nextArena = temp;
-
-        // 3. Clear the old arena (now in _nextArena) for the next save cycle.
-        _nextArena.Reset();
+        _arenaManager.SwapAndResetNext();
     }
 
     protected void RegisterDbSet<TEntity>(MutableDbSet<TEntity> set) where TEntity : class
@@ -279,7 +148,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     {
         if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) return;
 
-        info.RefreshShadows(_nextArena, _arenaGeneration);
+        info.RefreshShadows(_arenaManager.Next, _arenaManager.Generation);
     }
 
     /// <summary>
@@ -311,7 +180,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
             _trackedEntities[type] = info;
         }
 
-        return ((EntityTracker<TEntity>)info).Track(entity, id, forceShadow, _arena, _arenaGeneration);
+        return ((EntityTracker<TEntity>)info).Track(entity, id, forceShadow, _arenaManager.Current, _arenaManager.Generation);
     }
 
 
@@ -380,7 +249,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     {
         if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) return Enumerable.Empty<TEntity>();
 
-        return ((EntityTracker<TEntity>)info).GetDirtyEntities(_arenaGeneration);
+        return ((EntityTracker<TEntity>)info).GetDirtyEntities(_arenaManager.Generation);
     }
 
 
@@ -399,45 +268,17 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         {
              set.ClearTracking();
         }
-        _arena.Reset();
-        _nextArena.Reset();
-        _arenaGeneration++;
+        _arenaManager.ResetAll();
     }
 
     public async Task CommitTransactionAsync()
     {
-        if (_inMemoryTransaction)
-        {
-            _inMemoryTransaction = false;
-            return;
-        }
-
-        if (_session == null || !_session.IsInTransaction)
-        {
-            throw new InvalidOperationException("No active transaction to commit.");
-        }
-
-        await _session.CommitTransactionAsync();
+        await _transactionManager.CommitTransactionAsync();
     }
 
     public async Task AbortTransactionAsync()
     {
-        if (_inMemoryTransaction)
-        {
-            _inMemoryTransaction = false;
-            return;
-        }
-
-        if (_session != null && _session.IsInTransaction)
-        {
-            await _session.AbortTransactionAsync();
-        }
-
-        if (_ownsSession)
-        {
-            _session?.Dispose();
-            _session = null;
-        }
+        await _transactionManager.AbortTransactionAsync();
     }
 
     public async ValueTask DisposeAsync()
@@ -454,97 +295,10 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         }
         _dbSets.Clear();
 
-        if (_session != null)
-        {
-            if (_session.IsInTransaction && _ownsSession)
-            {
-                try { await _session.AbortTransactionAsync(); } catch { }
-            }
-
-            if (_ownsSession) _session.Dispose();
-            _session = null;
-        }
-
-        _inMemoryTransaction = false;
-        _arena.Dispose();
-        _nextArena.Dispose();
+        await _transactionManager.DisposeAsync();
+        _arenaManager.Dispose();
         GC.SuppressFinalize(this);
     }
 
-
-    protected void EnsureTransactionActive()
-    {
-        if (!Transaction.IsActive)
-        {
-            EnsureTransactionStarted();
-        }
-    }
-
-    private void EnsureTransactionStarted()
-    {
-        if (_inMemoryTransaction || (_session != null && _session.IsInTransaction))
-        {
-            return;
-        }
-
-        if (_dbContext.Options.UseInMemory)
-        {
-            _inMemoryTransaction = true;
-            return;
-        }
-
-        if (_dbContext.Options.Mongo == null || _dbContext.Options.Conventions.DisableTransactions)
-        {
-            HandleUnsupportedTransactions();
-            return;
-        }
-
-        if (!TransactionsSupported())
-        {
-            HandleUnsupportedTransactions();
-            return;
-        }
-
-        if (_session == null)
-        {
-            _session = _dbContext.Options.Mongo.Client.StartSession();
-            _ownsSession = true;
-        }
-
-        _session.StartTransaction();
-    }
-
-    private bool TransactionsSupported()
-    {
-        var database = _dbContext.Options.Mongo ?? throw new InvalidOperationException("Mongo not configured.");
-        var client = database.Client;
-
-        if (TopologyCache.TryGetValue(client, out var box)) return box.Value;
-
-        if (client is MongoClient mongoClient)
-        {
-            var clusterType = mongoClient.Cluster.Description.Type;
-            if (clusterType == ClusterType.ReplicaSet || clusterType == ClusterType.Sharded)
-            {
-                TopologyCache.AddOrUpdate(client, new StrongBox<bool>(true));
-                return true;
-            }
-        }
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var hello = database.RunCommand<BsonDocument>(new BsonDocument("hello", 1), cancellationToken: cts.Token);
-        var supported = hello.TryGetValue("setName", out _) || (hello.TryGetValue("msg", out var msg) && msg == "isdbgrid");
-        TopologyCache.AddOrUpdate(client, new StrongBox<bool>(supported));
-        return supported;
-    }
-
-    private void HandleUnsupportedTransactions()
-    {
-        if (_dbContext.Options.Conventions.TransactionSupportBehavior == TransactionSupportBehavior.Throw)
-        {
-            throw new InvalidOperationException("Transactions not supported.");
-        }
-
-        _inMemoryTransaction = true;
-    }
+    protected void EnsureTransactionActive() => _transactionManager.EnsureTransactionActive();
 }
