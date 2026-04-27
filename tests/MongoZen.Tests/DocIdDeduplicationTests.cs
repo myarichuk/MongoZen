@@ -142,7 +142,7 @@ public class DocIdDeduplicationTests : IntegrationTestBase
         
         var internalSet = (IInternalDbSet<TEntity>)dbSet;
         using var arena = new SharpArena.Allocators.ArenaAllocator();
-        using var upsertBuf = new MongoZen.Collections.PooledDictionary<DocId, TEntity>(16);
+        using var upsertBuf = new MongoZen.Collections.PooledDictionary<DocId, (TEntity Entity, bool IsDirty)>(16);
         using var rawIdBuf = new MongoZen.Collections.PooledHashSet<object>(16);
         using var modelBuf = new MongoZen.Collections.PooledList<WriteModel<TEntity>>(16);
 
@@ -165,6 +165,8 @@ public class DocIdDeduplicationTests : IntegrationTestBase
             upsertBuffer: upsertBuf,
             rawIdBuffer: rawIdBuf,
             modelBuffer: modelBuf,
+            extractor: null,
+            tracker: null!,
             transaction: TransactionContext.InMemory(),
             arena: arena,
             cancellationToken: default);

@@ -13,6 +13,7 @@ internal interface IEntityTracker : IDisposable
     void RefreshShadows(ArenaAllocator arena, int generation);
     void TrackDynamic(object entity, object id);
     bool TryGetEntity(object id, out object? entity);
+    bool TryGetShadowPtr(object id, out ShadowPtr shadowPtr);
     void Untrack(object id);
 }
 
@@ -65,6 +66,17 @@ internal class EntityTracker<TEntity> : IEntityTracker where TEntity : class
         return false;
     }
 
+    public bool TryGetShadowPtr(object id, out ShadowPtr shadowPtr)
+    {
+        if (Map.TryGetValue(id, out var entry))
+        {
+            shadowPtr = entry.ShadowPtr;
+            return true;
+        }
+        shadowPtr = ShadowPtr.Zero;
+        return false;
+    }
+
     public void Untrack(object id) => Map.Remove(id);
 
     public IEnumerable<TEntity> GetDirtyEntities(int currentGeneration)
@@ -96,7 +108,7 @@ internal class EntityTracker<TEntity> : IEntityTracker where TEntity : class
         }
 
         ShadowPtr shadowPtr = ShadowPtr.Zero;
-        if (forceShadow)
+        if (forceShadow && _materializer != null)
         {
             shadowPtr = new ShadowPtr(_materializer(entity, arena), generation);
         }
@@ -148,7 +160,8 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     protected bool _ownsSession;
     protected bool _inMemoryTransaction;
 
-    protected readonly ArenaAllocator _arena = new();
+    protected ArenaAllocator _arena;
+    protected ArenaAllocator _nextArena;
     protected int _arenaGeneration = 0;
     protected readonly Dictionary<Type, IInternalMutableDbSet> _dbSets = new();
 
@@ -158,6 +171,8 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     protected DbContextSession(TDbContext dbContext, bool startTransaction = true)
     {
         _dbContext = dbContext;
+        _arena = new ArenaAllocator();
+        _nextArena = new ArenaAllocator();
         if (startTransaction)
         {
             EnsureTransactionStarted();
@@ -232,14 +247,21 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
 
     private void AcceptChanges()
     {
-        // 1. Refresh shadows for all tracked entities.
-        // This ensures subsequent calls to SaveChangesAsync only detect NEW changes.
-        // We iterate over the registered dbSets because they know their TEntity.
+        _arenaGeneration++;
+        // 1. Refresh shadows for all tracked entities into _nextArena.
         foreach (var set in _dbSets.Values)
         {
             set.RefreshShadows(this);
             set.ClearTracking();
         }
+
+        // 2. Swap arenas to preserve the newly generated shadows in _arena.
+        var temp = _arena;
+        _arena = _nextArena;
+        _nextArena = temp;
+
+        // 3. Clear the old arena (now in _nextArena) for the next save cycle.
+        _nextArena.Reset();
     }
 
     protected void RegisterDbSet<TEntity>(MutableDbSet<TEntity> set) where TEntity : class
@@ -257,7 +279,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     {
         if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) return;
 
-        info.RefreshShadows(_arena, _arenaGeneration);
+        info.RefreshShadows(_nextArena, _arenaGeneration);
     }
 
     /// <summary>
@@ -339,6 +361,17 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         return false;
     }
 
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public bool TryGetShadowPtr<TEntity>(object id, out ShadowPtr shadowPtr) where TEntity : class
+    {
+        if (_trackedEntities.TryGetValue(typeof(TEntity), out var info) && info.TryGetShadowPtr(id, out shadowPtr))
+        {
+            return true;
+        }
+        shadowPtr = ShadowPtr.Zero;
+        return false;
+    }
+
     /// <summary>
     /// For infrastructure use only. Generated code calls this.
     /// </summary>
@@ -367,6 +400,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
              set.ClearTracking();
         }
         _arena.Reset();
+        _nextArena.Reset();
         _arenaGeneration++;
     }
 
@@ -433,6 +467,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
 
         _inMemoryTransaction = false;
         _arena.Dispose();
+        _nextArena.Dispose();
         GC.SuppressFinalize(this);
     }
 

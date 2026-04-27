@@ -73,12 +73,27 @@ public readonly unsafe struct ArenaString : IEquatable<ArenaString>
         return span.SequenceEqual(System.Text.Encoding.UTF8.GetBytes(other));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int GetHashCode(string? s)
+    {
+        if (s == null) return 0;
+        int byteCount = System.Text.Encoding.UTF8.GetByteCount(s);
+        Span<byte> buffer = stackalloc byte[512];
+        if (byteCount <= 512)
+        {
+            int written = System.Text.Encoding.UTF8.GetBytes(s, buffer);
+            var hash = System.IO.Hashing.XxHash3.HashToUInt64(buffer[..written]);
+            return (int)hash ^ (int)(hash >> 32);
+        }
+        
+        var largeBuffer = System.Text.Encoding.UTF8.GetBytes(s);
+        var largeHash = System.IO.Hashing.XxHash3.HashToUInt64(largeBuffer);
+        return (int)largeHash ^ (int)(largeHash >> 32);
+    }
+
     public override int GetHashCode()
     {
         if (_ptr == null) return 0;
-        
-        // Use a fast non-cryptographic hash (XxHash3 is excellent for this)
-        // System.IO.Hashing.XxHash3 is available in our project.
         var span = new ReadOnlySpan<byte>(_ptr, _length);
         var hash = System.IO.Hashing.XxHash3.HashToUInt64(span);
         return (int)hash ^ (int)(hash >> 32);
@@ -129,4 +144,27 @@ public readonly unsafe struct ArenaString : IEquatable<ArenaString>
 
     public static bool operator ==(ArenaString left, ArenaString right) => left.Equals(right);
     public static bool operator !=(ArenaString left, ArenaString right) => !left.Equals(right);
+}
+
+public static class ArenaDictionaryExtensions
+{
+    public static unsafe bool TryGetValue<TValue>(this ref ArenaDictionary<ArenaString, TValue> dict, string key, out TValue value)
+        where TValue : unmanaged
+    {
+        if (dict.Count == 0)
+        {
+            value = default;
+            return false;
+        }
+
+        int mask = dict.Capacity - 1;
+        int slot = ArenaString.GetHashCode(key) & mask;
+
+        // We need to access private fields of ArenaDictionary. 
+        // Since they are internal, we can do it if we are in the same assembly.
+        // Wait, ArenaDictionary fields are private.
+        // I'll make them internal or use a trick.
+        // Actually, I'll just update ArenaDictionary.cs to have this method.
+        return dict.TryGetValue(key, out value);
+    }
 }

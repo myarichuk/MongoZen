@@ -131,9 +131,11 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDb
         IEnumerable<object> removedIds, 
         IEnumerable<T> updated, 
         IEnumerable<T> dirty, 
-        PooledDictionary<DocId, T> upsertBuffer,
+        PooledDictionary<DocId, (T Entity, bool IsDirty)> upsertBuffer,
         PooledHashSet<object> rawIdBuffer,
         PooledList<WriteModel<T>> modelBuffer,
+        Func<T, IntPtr, UpdateDefinition<T>?>? extractor,
+        ISessionTracker tracker,
         TransactionContext transaction, 
         ArenaAllocator arena,
         CancellationToken cancellationToken)
@@ -178,12 +180,12 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDb
             var docId = DocId.From(id);
             if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer[docId] = entity;
+                upsertBuffer[docId] = (entity, false);
             }
         }
         foreach (var entry in upsertBuffer)
         {
-            var entity = entry.Value;
+            var entity = entry.Value.Entity;
             var id = _idAccessor(entity)!;
             _data[id] = entity;
             if (versionGetter != null)
@@ -201,7 +203,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDb
             if (id == null) continue;
             var docId = DocId.From(id);
             if (!dedupeBuffer.Contains(docId))
-                upsertBuffer[docId] = entity;
+                upsertBuffer[docId] = (entity, false);
         }
         foreach (var entity in dirty)
         {
@@ -209,13 +211,13 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDb
             if (id == null) continue;
             var docId = DocId.From(id);
             if (!dedupeBuffer.Contains(docId))
-                upsertBuffer[docId] = entity;
+                upsertBuffer[docId] = (entity, true);
         }
 
         var conflicts = new List<object>();
         foreach (var entry in upsertBuffer)
         {
-            var entity = entry.Value;
+            var entity = entry.Value.Entity;
             var id = _idAccessor(entity)!;
 
             if (versionGetter != null && versionSetter != null)

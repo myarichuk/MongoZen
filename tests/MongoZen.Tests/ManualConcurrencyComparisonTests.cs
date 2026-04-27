@@ -52,19 +52,20 @@ public class ManualConcurrencyComparisonTests : IntegrationTestBase
         public TestSession(TestDbContext dbContext) : base(dbContext)
         {
             Entities = new MutableDbSet<VersionedEntity>(
-                _dbContext.Entities, 
-                () => Transaction, 
-                this, 
+                _dbContext.Entities,
+                () => Transaction,
+                this,
                 (entity, arena) => { unsafe {
-                    var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<VersionedEntity_Shadow>()); 
-                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<VersionedEntity_Shadow>(ptr); 
-                    s.From(entity, arena); 
-                    return (System.IntPtr)ptr; 
-                } },
+                    var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<VersionedEntity_Shadow>());
+                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<VersionedEntity_Shadow>(ptr);
+                    s.From(entity, arena);
+                    return (System.IntPtr)ptr;
+                }},
                 (entity, ptr) => { unsafe {
-                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<VersionedEntity_Shadow>((void*)ptr); 
-                    return s.IsDirty(entity); 
-                } },
+                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<VersionedEntity_Shadow>((void*)ptr);
+                    return s.IsDirty(entity);
+                }},
+                null,
                 _dbContext.Options.Conventions);
             
             RegisterDbSet((MutableDbSet<VersionedEntity>)Entities);

@@ -26,19 +26,20 @@ public class AttachAndRemoveTests : IntegrationTestBase
         public ShopContextSession(ShopContext dbContext) : base(dbContext)
         {
             Products = new MutableDbSet<Product>(
-                _dbContext.Products, 
-                () => Transaction, 
-                this, 
+                _dbContext.Products,
+                () => Transaction,
+                this,
                 (entity, arena) => { unsafe {
-                    var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Product_Shadow>()); 
-                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Product_Shadow>(ptr); 
-                    s.From(entity, arena); 
-                    return (System.IntPtr)ptr; 
-                } },
+                    var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Product_Shadow>());
+                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Product_Shadow>(ptr);
+                    s.From(entity, arena);
+                    return (System.IntPtr)ptr;
+                }},
                 (entity, ptr) => { unsafe {
-                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Product_Shadow>((void*)ptr); 
-                    return s.IsDirty(entity); 
-                } },
+                    ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Product_Shadow>((void*)ptr);
+                    return s.IsDirty(entity);
+                }},
+                null,
                 _dbContext.Options.Conventions);
         }
 
