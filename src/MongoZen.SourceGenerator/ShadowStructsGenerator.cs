@@ -444,15 +444,16 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
             sb.Append(indent).Append("    foreach (var kvp in ").Append(currentExpr).AppendLine(")");
             sb.Append(indent).AppendLine("    {");
             sb.Append(indent).AppendLine("        {"); // Add scope
+            var suffix = outDirtyVar != null ? "; break; }" : "; }";
             if (keyType.SpecialType == SpecialType.System_String)
             {
                 // Use the optimized string lookup
-                sb.Append(indent).Append("            if (!").Append(shadowExpr).Append(".TryGetValue(kvp.Key, out var shadowValue)) { ").Append(emitAction).AppendLine("; break; }");
+                sb.Append(indent).Append("            if (!").Append(shadowExpr).Append(".TryGetValue(kvp.Key, out var shadowValue)) { ").Append(emitAction).AppendLine(suffix);
             }
             else
             {
                 GenerateValueAssignment(sb, indent + "            ", keyType, "var currentKey", "kvp.Key", queue);
-                sb.Append(indent).Append("            if (!").Append(shadowExpr).Append(".TryGetValue(currentKey, out var shadowValue)) { ").Append(emitAction).AppendLine("; break; }");
+                sb.Append(indent).Append("            if (!").Append(shadowExpr).Append(".TryGetValue(currentKey, out var shadowValue)) { ").Append(emitAction).AppendLine(suffix);
             }
             GenerateValueDirtyCheck(sb, indent + "            ", valueType, "shadowValue", "kvp.Value", queue, outDirtyVar);
             if (outDirtyVar != null)
@@ -462,9 +463,9 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
             sb.Append(indent).AppendLine("        }");
             sb.Append(indent).AppendLine("    }");
             sb.Append(indent).AppendLine("}");
-            }
-            else if (IsCollection(type))
-            {
+        }
+        else if (IsCollection(type))
+        {
             sb.Append(indent).Append("if (").Append(currentExpr).AppendLine(" == null)");
             sb.Append(indent).AppendLine("{");
             sb.Append(indent).Append("    if (").Append(shadowExpr).Append(".Length > 0) ").Append(emitAction).AppendLine(";");
@@ -488,11 +489,12 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
             sb.Append(indent).AppendLine("        }");
             sb.Append(indent).AppendLine("    }");
             sb.Append(indent).AppendLine("}");
-            }
-            else if (type.TypeKind == TypeKind.Class || type.TypeKind == TypeKind.Struct)
-            {
+        }
+        else if (type.TypeKind == TypeKind.Class || type.TypeKind == TypeKind.Struct)
+        {
             sb.Append(indent).Append("if (").Append(shadowExpr).Append(".IsDirty(").Append(currentExpr).Append(")) ").Append(emitAction).AppendLine(";");
-            }    }
+        }
+    }
 
     private static void GenerateEqualityCheck(StringBuilder sb, ITypeSymbol type, string shadowExpr, string currentExpr)
     {
