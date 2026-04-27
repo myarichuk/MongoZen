@@ -70,12 +70,11 @@ public class FilterRegexElementTranslator: FilterElementTranslatorBase
             }
         }
 
-        var member = Expression.PropertyOrField(param, field);
-
-        return Expression.Call(
-            IsMatchMethod!,
-            member,
-            Expression.Constant(pattern),
-            Expression.Constant(regexOptions));
+        return BuildExpression(param, field, member => 
+            Expression.Call(
+                IsMatchMethod!,
+                member,
+                Expression.Constant(pattern),
+                Expression.Constant(regexOptions)));
     }
 }

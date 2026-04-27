@@ -12,13 +12,14 @@ public abstract class BinaryOperatorFilterElementTranslator : FilterElementTrans
     public override Expression Handle(string field, BsonValue value, ParameterExpression param)
     {
         var dotNetValue = BsonTypeMapper.MapToDotNetValue(value);
-        var left = BuildSafeMemberAccess(param, field, out var nullCheck);
-        
-        Expression constant = dotNetValue == null 
-            ? Expression.Constant(null, left.Type) 
-            : Expression.Constant(Convert.ChangeType(dotNetValue, left.Type), left.Type);
 
-        var comparison = _expressionBuilder(left, constant);
-        return nullCheck != null ? Expression.AndAlso(nullCheck, comparison) : comparison;
+        return BuildExpression(param, field, left =>
+        {
+            Expression constant = dotNetValue == null
+                ? Expression.Constant(null, left.Type)
+                : Expression.Constant(Convert.ChangeType(dotNetValue, left.Type), left.Type);
+
+            return _expressionBuilder(left, constant);
+        });
     }
 }
