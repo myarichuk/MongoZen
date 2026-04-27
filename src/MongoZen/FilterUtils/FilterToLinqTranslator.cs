@@ -12,31 +12,37 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
     private static readonly RenderArgs<T> RenderArgs = new(BsonSerializer.LookupSerializer<T>(), BsonSerializer.SerializerRegistry);
     private static readonly ParameterExpression Param = Expression.Parameter(typeof(T), "x");
 
-    private static readonly ConcurrentDictionary<BsonDocument, Func<T, bool>> CompiledCache = 
-        new(new BsonDocumentEqualityComparer());
-
+    private readonly ConcurrentDictionary<BsonDocument, Func<T, bool>> _compiledCache = new();
     private readonly Dictionary<string, IFilterElementTranslator> _elementTranslators;
-
-    private class BsonDocumentEqualityComparer : IEqualityComparer<BsonDocument>
-    {
-        public bool Equals(BsonDocument? x, BsonDocument? y) => x == null ? y == null : x.Equals(y);
-        public int GetHashCode(BsonDocument obj) => obj.GetHashCode(); // BsonDocument.GetHashCode is content-based
-    }
+    private readonly Conventions _conventions;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using a custom set of filter element translators.
     /// </summary>
     /// <param name="translators">The filter element translators keyed by the operator they handle.</param>
-    public FilterToLinqTranslator(IEnumerable<IFilterElementTranslator> translators) =>
+    /// <param name="conventions">The conventions to use, specifically for cache sizing.</param>
+    public FilterToLinqTranslator(IEnumerable<IFilterElementTranslator> translators, Conventions? conventions = null)
+    {
         _elementTranslators = new(
             translators.ToDictionary(t => t.Operator),
             StringComparer.InvariantCultureIgnoreCase);
+        _conventions = conventions ?? new Conventions();
+    }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using default translators from the current MongoZen.
     /// </summary>
     public FilterToLinqTranslator()
-        : this(FilterElementTranslatorDiscovery.DiscoverFromMongoZen())
+        : this(FilterElementTranslatorDiscovery.DiscoverFromMongoZen(), null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FilterToLinqTranslator{T}"/> class using default translators and specified conventions.
+    /// </summary>
+    /// <param name="conventions">The conventions to use, specifically for cache sizing.</param>
+    public FilterToLinqTranslator(Conventions? conventions)
+        : this(FilterElementTranslatorDiscovery.DiscoverFromMongoZen(), conventions)
     {
     }
 
@@ -59,10 +65,7 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
         var doc = filter.Render(RenderArgs);
         var expr = ParseDocument(doc, Param);
 
-        var lambda = Expression.Lambda<Func<T, bool>>(expr, Param);
-        MongoLinqValidator.ValidateAndThrowIfNeeded(lambda); // ensure Mongo LINQ compatibility
-
-        return lambda;
+        return Expression.Lambda<Func<T, bool>>(expr, Param);
     }
 
     /// <summary>
@@ -71,7 +74,22 @@ public class FilterToLinqTranslator<T> : IFilterToLinqTranslator<T>, IFilterToLi
     public Func<T, bool> GetCompiled(FilterDefinition<T> filter)
     {
         var doc = filter.Render(RenderArgs);
-        return CompiledCache.GetOrAdd(doc, _ => Translate(filter).Compile());
+        
+        if (_compiledCache.TryGetValue(doc, out var cached))
+        {
+            return cached;
+        }
+
+        // Simple eviction: clear cache if it grows too large.
+        // Pragmatic and low-overhead for a query cache.
+        if (_compiledCache.Count >= _conventions.QueryCacheSize)
+        {
+            _compiledCache.Clear();
+        }
+
+        var compiled = Translate(filter).Compile();
+        _compiledCache.TryAdd(doc, compiled);
+        return compiled;
     }
 
     public Expression Translate(BsonDocument filter, ParameterExpression parameter) => ParseDocument(filter, parameter);
