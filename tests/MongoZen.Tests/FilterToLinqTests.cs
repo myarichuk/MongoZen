@@ -534,14 +534,22 @@ public class FilterToLinqTests
     }
 
     [Fact]
-    public void NestedArrayPath_ShouldThrowNotSupported_UntilImplemented()
+    public void NestedArrayPath_ShouldGenerateAnyCall()
     {
-        // This currently hits the "Check if we hit a collection" block but doesn't handle it yet
         var filter = new BsonDocument("Lines.Product", "Apples").ToFilterDefinition<Order>();
         var translator = new FilterToLinqTranslator<Order>();
         
-        // It will currently throw because it tries to access .Product on a List<OrderLine>
-        Assert.ThrowsAny<Exception>(() => translator.Translate(filter));
+        var expr = translator.Translate(filter);
+        var compiled = expr.Compile();
+
+        var order = new Order { Lines = new List<OrderLine> { new OrderLine("Apples", 5) } };
+        Assert.True(compiled(order));
+
+        var otherOrder = new Order { Lines = new List<OrderLine> { new OrderLine("Oranges", 5) } };
+        Assert.False(compiled(otherOrder));
+
+        var emptyOrder = new Order { Lines = new List<OrderLine>() };
+        Assert.False(compiled(emptyOrder));
     }
 
     public class Order
