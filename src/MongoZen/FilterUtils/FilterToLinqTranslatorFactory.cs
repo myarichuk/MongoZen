@@ -5,15 +5,9 @@ namespace MongoZen.FilterUtils;
 
 public static class FilterToLinqTranslatorFactory
 {
-    private static readonly ConcurrentDictionary<Type, IFilterToLinqTranslator> TranslatorCache = new();
+    public static FilterToLinqTranslator<TDoc> Create<TDoc>() => new();
 
-    public static FilterToLinqTranslator<TDoc> Create<TDoc>() =>
-        (FilterToLinqTranslator<TDoc>)Create(typeof(TDoc));
-
-    public static IFilterToLinqTranslator Create(Type docType) =>
-        TranslatorCache.GetOrAdd(docType, CreateTranslatorForType);
-
-    private static IFilterToLinqTranslator CreateTranslatorForType(Type docType)
+    public static IFilterToLinqTranslator Create(Type docType)
     {
         var translatorType = typeof(FilterToLinqTranslator<>).MakeGenericType(docType);
         var factory = TranslatorFactoryCache.GetFactory(translatorType);

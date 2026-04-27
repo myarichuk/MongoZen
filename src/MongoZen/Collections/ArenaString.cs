@@ -45,7 +45,7 @@ public readonly unsafe struct ArenaString : IEquatable<ArenaString>
         if (_ptr == other._ptr) return true;
         if (_ptr == null || other._ptr == null) return false;
 
-        return CompareMemory(_ptr, other._ptr, _length);
+        return new ReadOnlySpan<byte>(_ptr, _length).SequenceEqual(new ReadOnlySpan<byte>(other._ptr, other._length));
     }
 
     public override bool Equals(object? obj) => obj is ArenaString other && Equals(other);
@@ -56,21 +56,28 @@ public readonly unsafe struct ArenaString : IEquatable<ArenaString>
         if (other == null) return _ptr == null;
         if (_ptr == null) return false;
         
-        // Potential optimization: check length first if we can get UTF8 byte count cheaply,
-        // but for simplicity and correctness we use Span.
-        var span = new ReadOnlySpan<byte>(_ptr, _length);
         int otherByteCount = System.Text.Encoding.UTF8.GetByteCount(other);
         if (_length != otherByteCount) return false;
 
-        // SequenceEqual is highly optimized and uses SIMD under the hood
-        Span<byte> otherBytes = stackalloc byte[512];
+        var span = new ReadOnlySpan<byte>(_ptr, _length);
+        
         if (otherByteCount <= 512)
         {
-            int written = System.Text.Encoding.UTF8.GetBytes(other, otherBytes);
-            return span.SequenceEqual(otherBytes[..written]);
+            byte* buffer = stackalloc byte[512];
+            int written = System.Text.Encoding.UTF8.GetBytes(other, new Span<byte>(buffer, 512));
+            return span.SequenceEqual(new ReadOnlySpan<byte>(buffer, written));
         }
         
-        return span.SequenceEqual(System.Text.Encoding.UTF8.GetBytes(other));
+        byte[] rented = System.Buffers.ArrayPool<byte>.Shared.Rent(otherByteCount);
+        try
+        {
+            int written = System.Text.Encoding.UTF8.GetBytes(other, rented);
+            return span.SequenceEqual(new ReadOnlySpan<byte>(rented, 0, written));
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -78,62 +85,33 @@ public readonly unsafe struct ArenaString : IEquatable<ArenaString>
     {
         if (s == null) return 0;
         int byteCount = System.Text.Encoding.UTF8.GetByteCount(s);
-        Span<byte> buffer = stackalloc byte[512];
+        
         if (byteCount <= 512)
         {
-            int written = System.Text.Encoding.UTF8.GetBytes(s, buffer);
-            var hash = System.IO.Hashing.XxHash3.HashToUInt64(buffer[..written]);
+            byte* buffer = stackalloc byte[512];
+            int written = System.Text.Encoding.UTF8.GetBytes(s, new Span<byte>(buffer, 512));
+            var hash = System.IO.Hashing.XxHash3.HashToUInt64(new ReadOnlySpan<byte>(buffer, written));
             return (int)hash ^ (int)(hash >> 32);
         }
         
-        var largeBuffer = System.Text.Encoding.UTF8.GetBytes(s);
-        var largeHash = System.IO.Hashing.XxHash3.HashToUInt64(largeBuffer);
-        return (int)largeHash ^ (int)(largeHash >> 32);
+        byte[] rented = System.Buffers.ArrayPool<byte>.Shared.Rent(byteCount);
+        try
+        {
+            int written = System.Text.Encoding.UTF8.GetBytes(s, rented);
+            var hash = System.IO.Hashing.XxHash3.HashToUInt64(new ReadOnlySpan<byte>(rented, 0, written));
+            return (int)hash ^ (int)(hash >> 32);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     public override int GetHashCode()
     {
         if (_ptr == null) return 0;
-        var span = new ReadOnlySpan<byte>(_ptr, _length);
-        var hash = System.IO.Hashing.XxHash3.HashToUInt64(span);
+        var hash = System.IO.Hashing.XxHash3.HashToUInt64(new ReadOnlySpan<byte>(_ptr, _length));
         return (int)hash ^ (int)(hash >> 32);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool CompareMemory(byte* a, byte* b, int length)
-    {
-        // Use SIMD intrinsics for comparison
-        int offset = 0;
-
-        if (Vector256.IsHardwareAccelerated && length >= Vector256<byte>.Count)
-        {
-            while (offset <= length - Vector256<byte>.Count)
-            {
-                if (Vector256.Load(a + offset) != Vector256.Load(b + offset))
-                    return false;
-                offset += Vector256<byte>.Count;
-            }
-        }
-
-        if (Vector128.IsHardwareAccelerated && offset <= length - Vector128<byte>.Count)
-        {
-            while (offset <= length - Vector128<byte>.Count)
-            {
-                if (Vector128.Load(a + offset) != Vector128.Load(b + offset))
-                    return false;
-                offset += Vector128<byte>.Count;
-            }
-        }
-
-        // Remaining bytes
-        while (offset < length)
-        {
-            if (a[offset] != b[offset])
-                return false;
-            offset++;
-        }
-
-        return true;
     }
 
     public override string ToString()

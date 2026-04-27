@@ -17,6 +17,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDb
     private readonly Func<T, object?> _idAccessor;
     private readonly string _idFieldName;
     private readonly Conventions _conventions;
+    private readonly FilterUtils.FilterToLinqTranslator<T> _translator;
 
     public string CollectionName { get; }
 
@@ -41,6 +42,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDb
         _conventions = conventions;
         _idAccessor = EntityIdAccessor<T>.GetAccessor(conventions.IdConvention);
         _idFieldName = conventions.IdConvention.ResolveIdProperty<T>()?.Name ?? "_id";
+        _translator = new FilterUtils.FilterToLinqTranslator<T>(conventions);
     }
 
     /// <summary>
@@ -68,8 +70,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T>, IInternalMutableDb
 
     public ValueTask<IEnumerable<T>> QueryAsync(FilterDefinition<T> filter, CancellationToken cancellationToken = default)
     {
-        var translator = new FilterUtils.FilterToLinqTranslator<T>();
-        var predicate = translator.GetCompiled(filter);
+        var predicate = _translator.GetCompiled(filter);
         return new ValueTask<IEnumerable<T>>(_data.Values.Where(predicate).ToList());
     }
 

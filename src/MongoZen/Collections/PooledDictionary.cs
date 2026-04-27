@@ -9,7 +9,7 @@ namespace MongoZen.Collections;
 /// A zero-allocation dictionary struct that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
 /// Uses open-addressing with linear probing. MUST be disposed.
 /// </summary>
-public struct PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValuePair<TKey, TValue>>
+public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValuePair<TKey, TValue>>
 {
     private struct Entry
     {
@@ -49,8 +49,6 @@ public struct PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValue
 
     public void AddOrUpdate(TKey key, TValue value)
     {
-        if (_entries == null) this = new PooledDictionary<TKey, TValue>(16, _comparer);
-
         var entries = _entries!;
         if (_count * 100 >= entries.Length * 70)
         {

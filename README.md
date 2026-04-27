@@ -101,25 +101,25 @@ We compare MongoZen against a **hand-optimized raw driver** baseline. The goal i
 
 | Method | Category | Count | Mean | Ratio | Allocated |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **IdentityMap_MongoZen_FromMemory** | **IdentityMap** | 1000 | **7.8 ms** | **0.02** | **37 KB** |
-| IdentityMap_RawDriver_NoTracking | IdentityMap | 1000 | 439.1 ms | 1.00 | 3420 KB |
-| **ReadModify_MongoZen_Set_OptimisticConcurrency** | **ReadModify** | 1000 | **198.5 ms** | **1.32** | **7450 KB** |
-| **ReadModify_MongoZen_Set_NoConcurrency** | **ReadModify** | 1000 | **110.2 ms** | **0.73** | **6120 KB** |
-| ReadModify_RawDriver_Replace_NoConcurrency | ReadModify | 1000 | 150.4 ms | 1.00 | 6680 KB |
-| ReadModify_RawDriver_Replace_ManualConcurrency | ReadModify | 1000 | 410.2 ms | 2.73 | 9150 KB |
-| ReadModify_RawDriver_Set_NoConcurrency | ReadModify | 1000 | 142.1 ms | 0.94 | 6510 KB |
-| ReadModify_RawDriver_Set_ManualConcurrency | ReadModify | 1000 | 385.6 ms | 2.56 | 8920 KB |
-| **Insert_MongoZen_OptimisticConcurrency** | **Insert** | 1000 | **172.3 ms** | **3.01** | **2410 KB** |
-| **Insert_MongoZen_NoConcurrency** | **Insert** | 1000 | **71.5 ms** | **1.25** | **2415 KB** |
-| Insert_RawDriver_Bulk | Insert | 1000 | 57.2 ms | 1.00 | 1720 KB |
+| **IdentityMap_MongoZen_FromMemory** | **IdentityMap** | 1000 | **4.5 ms** | **0.01** | **36 KB** |
+| IdentityMap_RawDriver_NoTracking | IdentityMap | 1000 | 671.0 ms | 1.00 | 3245 KB |
+| **ReadModify_MongoZen_Set_OptimisticConcurrency** | **ReadModify** | 1000 | **144.7 ms** | **0.33** | **14544 KB** |
+| **ReadModify_MongoZen_Set_NoConcurrency** | **ReadModify** | 1000 | **97.9 ms** | **0.22** | **6410 KB** |
+| ReadModify_RawDriver_Replace_NoConcurrency | ReadModify | 1000 | 436.3 ms | 1.00 | 7205 KB |
+| ReadModify_RawDriver_Replace_ManualConcurrency | ReadModify | 1000 | 255.0 ms | 0.58 | 9605 KB |
+| ReadModify_RawDriver_Set_NoConcurrency | ReadModify | 1000 | 320.3 ms | 0.73 | 11334 KB |
+| ReadModify_RawDriver_Set_ManualConcurrency | ReadModify | 1000 | 504.6 ms | 1.16 | 16405 KB |
+| **Insert_MongoZen_OptimisticConcurrency** | **Insert** | 1000 | **231.3 ms** | **3.38** | **1902 KB** |
+| **Insert_MongoZen_NoConcurrency** | **Insert** | 1000 | **78.7 ms** | **1.15** | **1905 KB** |
+| Insert_RawDriver_Bulk | Insert | 1000 | 68.5 ms | 1.00 | 1782 KB |
 
 ### What these numbers mean:
 
-1.  **IdentityMap (Repeated Reads)**: Serving data from memory is always faster than hitting the wire. MongoZen is **~50x to 100x faster** for repeated loads because it bypasses the network and serialization entirely.
+1.  **IdentityMap (Repeated Reads)**: Serving data from memory is always faster than hitting the wire. MongoZen is **~150x faster** for repeated loads because it bypasses the network and serialization entirely.
 2.  **ReadAndModify (Implicit vs. Manual Optimization)**: 
-    *   **The "Convenience" Comparison**: Compare `ReadModify_RawDriver_Replace_NoConcurrency` (150ms) with `ReadModify_MongoZen_Set_NoConcurrency` (110ms). Even though MongoZen is doing the work of tracking and diffing, it is **~25% faster** than the "easy" Raw Driver replacement approach because it generates precise `$set` updates.
-    *   **The "Expert" Comparison**: Compare `ReadModify_RawDriver_Set_ManualConcurrency` (385ms) with `ReadModify_MongoZen_Set_OptimisticConcurrency` (198ms). MongoZen is **nearly 2x faster** than a hand-written partial update with manual concurrency management. Our internal batching and unmanaged diffing engine out-performs manual boilerplate.
-3.  **Insert (The "Tracking Tax")**: There is an overhead on inserts when concurrency tracking is enabled, primarily due to the initial setup of the versioning metadata and shadow creation. However, for non-versioned entities, the overhead is manageable (71ms vs 57ms). This is a highly favorable trade-off for the performance and safety gains achieved during the rest of the entity lifecycle.
+    *   **The "Convenience" Comparison**: Compare `ReadModify_RawDriver_Replace_NoConcurrency` (436ms) with `ReadModify_MongoZen_Set_NoConcurrency` (98ms). Even though MongoZen is doing the work of tracking and diffing, it is **~4.5x faster** than the "easy" Raw Driver replacement approach because it generates precise `$set` updates.
+    *   **The "Expert" Comparison**: Compare `ReadModify_RawDriver_Set_ManualConcurrency` (505ms) with `ReadModify_MongoZen_Set_OptimisticConcurrency` (145ms). MongoZen is **~3.5x faster** than a hand-written partial update with manual concurrency management. Our internal batching and unmanaged diffing engine out-performs manual boilerplate.
+3.  **Insert (The "Tracking Tax")**: There is an overhead on inserts when concurrency tracking is enabled, primarily due to the initial setup of the versioning metadata and shadow creation. However, for non-versioned entities, the overhead is manageable (79ms vs 69ms). This is a highly favorable trade-off for the performance and safety gains achieved during the rest of the entity lifecycle.
 
 ## More Info
 

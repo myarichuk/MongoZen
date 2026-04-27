@@ -7,5 +7,6 @@ public record Conventions
     public TransactionSupportBehavior TransactionSupportBehavior { get; init; } = TransactionSupportBehavior.Throw;
     public bool DisableTransactions { get; init; } = false;
     public string? ConcurrencyPropertyName { get; init; } = "Version";
+    public int QueryCacheSize { get; init; } = 1000;
 }
 
