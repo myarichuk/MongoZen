@@ -7,19 +7,13 @@ using MongoDB.Bson.Serialization.Serializers;
 
 namespace MongoZen;
 
-internal class IncludeWrappingSerializer<TEntity> : SerializerBase<TEntity> where TEntity : class
+internal class IncludeWrappingSerializer<TEntity>(
+    IBsonSerializer<TEntity> innerSerializer,
+    ISessionTracker tracker,
+    IEnumerable<(string AsField, Type ForeignType)> includeMaps)
+    : SerializerBase<TEntity>
+    where TEntity : class
 {
-    private readonly IBsonSerializer<TEntity> _innerSerializer;
-    private readonly ISessionTracker _tracker;
-    private readonly IEnumerable<(string AsField, Type ForeignType)> _includeMaps;
-
-    public IncludeWrappingSerializer(IBsonSerializer<TEntity> innerSerializer, ISessionTracker tracker, IEnumerable<(string AsField, Type ForeignType)> includeMaps)
-    {
-        _innerSerializer = innerSerializer;
-        _tracker = tracker;
-        _includeMaps = includeMaps;
-    }
-
     public override TEntity Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args)
     {
         // To avoid full BsonDocument AST allocation for every entity, we use RawBsonDocument.
@@ -27,7 +21,7 @@ internal class IncludeWrappingSerializer<TEntity> : SerializerBase<TEntity> wher
         var rawDoc = RawBsonDocumentSerializer.Instance.Deserialize(context);
         using (rawDoc)
         {
-            foreach (var map in _includeMaps)
+            foreach (var map in includeMaps)
             {
                 if (rawDoc.TryGetValue(map.AsField, out var includedArray) && includedArray.IsBsonArray)
                 {
@@ -38,7 +32,7 @@ internal class IncludeWrappingSerializer<TEntity> : SerializerBase<TEntity> wher
                         if (id != BsonNull.Value)
                         {
                             var idValue = BsonTypeMapper.MapToDotNetValue(id);
-                            _tracker.TrackDynamic(foreignEntity, map.ForeignType, idValue);
+                            tracker.TrackDynamic(foreignEntity, map.ForeignType, DocId.From(idValue));
                         }
                     }
                 }
@@ -46,127 +40,96 @@ internal class IncludeWrappingSerializer<TEntity> : SerializerBase<TEntity> wher
 
             // Now deserialize the main entity.
             // We wrap the reader to skip our injected fields.
-            // This avoids FormatException in the inner serializer while keeping memory overhead zero (no extra BsonDocument).
+            // This keeps memory overhead near zero as we don't copy the document.
             using var docReader = new BsonDocumentReader(rawDoc);
             using var filteringReader = new FilteringBsonReader(docReader);
             var innerContext = BsonDeserializationContext.CreateRoot(filteringReader);
-            return _innerSerializer.Deserialize(innerContext, args);
+            return innerSerializer.Deserialize(innerContext, args);
         }
     }
 
-    private class FilteringBsonReader : WrappedBsonReader
+    private class FilteringBsonReader(IBsonReader inner) : WrappedBsonReader(inner)
     {
-        public FilteringBsonReader(IBsonReader inner) : base(inner) { }
-
         public override BsonType ReadBsonType()
         {
             var type = base.ReadBsonType();
-            while (type != BsonType.EndOfDocument && State == BsonReaderState.Type)
+            while (type != BsonType.EndOfDocument && base.State == BsonReaderState.Name)
             {
-                var name = InnerReader.ReadName();
+                var bookmark = base.GetBookmark();
+                var name = base.ReadName();
                 if (name.StartsWith("_included_"))
                 {
-                    InnerReader.SkipValue();
+                    base.SkipValue();
                     type = base.ReadBsonType();
                 }
                 else
                 {
-                    // We need to return the name we just read to the caller.
-                    // The standard IBsonReader doesn't have a 'unread name', 
-                    // but we can use the fact that we're in 'Type' state.
-                    // Actually, if we return from here, the caller will call ReadName().
-                    // Since we already called ReadName(), we need to intercept that.
-                    _pendingName = name;
+                    base.ReturnToBookmark(bookmark);
                     return type;
                 }
             }
             return type;
         }
-
-        private string? _pendingName;
-
-        public override string ReadName()
-        {
-            if (_pendingName != null)
-            {
-                var name = _pendingName;
-                _pendingName = null;
-                return name;
-            }
-            return base.ReadName();
-        }
-
-        public override string ReadName(INameDecoder nameDecoder)
-        {
-            if (_pendingName != null)
-            {
-                var name = _pendingName;
-                _pendingName = null;
-                return name;
-            }
-            return base.ReadName(nameDecoder);
-        }
     }
-
-    /// <summary>
-    /// Base class for delegating readers to avoid boilerplate.
-    /// </summary>
-    private abstract class WrappedBsonReader : IBsonReader
+    private abstract class WrappedBsonReader(IBsonReader innerReader) : IBsonReader
     {
-        protected readonly IBsonReader InnerReader;
-        protected WrappedBsonReader(IBsonReader innerReader) => InnerReader = innerReader;
+        public virtual BsonReaderState State => innerReader.State;
+        public virtual void Close() => innerReader.Close();
+        public virtual void Dispose() => innerReader.Dispose();
+        public virtual BsonType GetCurrentBsonType() => innerReader.GetCurrentBsonType();
+        public virtual BsonReaderBookmark GetBookmark() => innerReader.GetBookmark();
+        public virtual void ReturnToBookmark(BsonReaderBookmark bookmark) => innerReader.ReturnToBookmark(bookmark);
 
-        public virtual BsonReaderState State => InnerReader.State;
-        public virtual void Close() => InnerReader.Close();
-        public virtual void Dispose() => InnerReader.Dispose();
-        public virtual BsonType GetCurrentBsonType() => InnerReader.GetCurrentBsonType();
-        public virtual string GetBookmark() => "FilteringReader:" + InnerReader.GetBookmark();
-        public virtual void ReturnToBookmark(string bookmark) => InnerReader.ReturnToBookmark(bookmark.Substring(16));
+        public virtual BsonBinaryData ReadBinaryData() => innerReader.ReadBinaryData();
+        public virtual bool ReadBoolean() => innerReader.ReadBoolean();
+        public virtual bool ReadBoolean(string name) => innerReader.ReadBoolean(name);
+        public virtual BsonType ReadBsonType() => innerReader.ReadBsonType();
+        public virtual long ReadDateTime() => innerReader.ReadDateTime();
+        public virtual double ReadDouble() => innerReader.ReadDouble();
+        public virtual double ReadDouble(string name) => innerReader.ReadDouble(name);
+        public virtual void ReadEndArray() => innerReader.ReadEndArray();
+        public virtual void ReadEndDocument() => innerReader.ReadEndDocument();
+        public virtual int ReadInt32() => innerReader.ReadInt32();
+        public virtual int ReadInt32(string name) => innerReader.ReadInt32(name);
+        public virtual long ReadInt64() => innerReader.ReadInt64();
+        public virtual long ReadInt64(string name) => innerReader.ReadInt64(name);
+        public virtual string ReadJavaScript() => innerReader.ReadJavaScript();
+        public virtual string ReadJavaScript(string name) => innerReader.ReadJavaScript(name);
+        public virtual string ReadJavaScriptWithScope() => innerReader.ReadJavaScriptWithScope();
+        public virtual string ReadJavaScriptWithScope(string name) => innerReader.ReadJavaScriptWithScope(name);
+        public virtual void ReadMaxKey() => innerReader.ReadMaxKey();
+        public virtual void ReadMaxKey(string name) => innerReader.ReadMaxKey(name);
+        public virtual void ReadMinKey() => innerReader.ReadMinKey();
+        public virtual void ReadMinKey(string name) => innerReader.ReadMinKey(name);
+        public virtual string ReadName() => innerReader.ReadName();
+        public virtual string ReadName(INameDecoder nameDecoder) => innerReader.ReadName(nameDecoder);
+        public virtual void ReadNull() => innerReader.ReadNull();
+        public virtual void ReadNull(string name) => innerReader.ReadNull(name);
+        public virtual ObjectId ReadObjectId() => innerReader.ReadObjectId();
+        public virtual void ReadStartArray() => innerReader.ReadStartArray();
+        public virtual void ReadStartDocument() => innerReader.ReadStartDocument();
+        public virtual string ReadString() => innerReader.ReadString();
+        public virtual string ReadString(string name) => innerReader.ReadString(name);
+        public virtual string ReadSymbol() => innerReader.ReadSymbol();
+        public virtual string ReadSymbol(string name) => innerReader.ReadSymbol(name);
+        public virtual long ReadTimestamp() => innerReader.ReadTimestamp();
+        public virtual long ReadTimestamp(string name) => innerReader.ReadTimestamp(name);
+        public virtual void ReadUndefined() => innerReader.ReadUndefined();
+        public virtual void ReadUndefined(string name) => innerReader.ReadUndefined(name);
+        public virtual void SkipName() => innerReader.SkipName();
+        public virtual void SkipValue() => innerReader.SkipValue();
+        public virtual Decimal128 ReadDecimal128() => innerReader.ReadDecimal128();
+        public virtual Decimal128 ReadDecimal128(string name) => innerReader.ReadDecimal128(name);
 
-        public virtual void ReadBinaryData(out byte[] bytes, out BsonBinarySubType subType) => InnerReader.ReadBinaryData(out bytes, out subType);
-        public virtual void ReadBinaryData(string name, out byte[] bytes, out BsonBinarySubType subType) => InnerReader.ReadBinaryData(name, out bytes, out subType);
-        public virtual bool ReadBoolean() => InnerReader.ReadBoolean();
-        public virtual bool ReadBoolean(string name) => InnerReader.ReadBoolean(name);
-        public virtual BsonType ReadBsonType() => InnerReader.ReadBsonType();
-        public virtual void ReadDateTime(out long value) => InnerReader.ReadDateTime(out value);
-        public virtual void ReadDateTime(string name, out long value) => InnerReader.ReadDateTime(name, out value);
-        public virtual double ReadDouble() => InnerReader.ReadDouble();
-        public virtual double ReadDouble(string name) => InnerReader.ReadDouble(name);
-        public virtual void ReadEndArray() => InnerReader.ReadEndArray();
-        public virtual void ReadEndDocument() => InnerReader.ReadEndDocument();
-        public virtual int ReadInt32() => InnerReader.ReadInt32();
-        public virtual int ReadInt32(string name) => InnerReader.ReadInt32(name);
-        public virtual long ReadInt64() => InnerReader.ReadInt64();
-        public virtual long ReadInt64(string name) => InnerReader.ReadInt64(name);
-        public virtual string ReadJavaScript() => InnerReader.ReadJavaScript();
-        public virtual string ReadJavaScript(string name) => InnerReader.ReadJavaScript(name);
-        public virtual string ReadJavaScriptWithScope() => InnerReader.ReadJavaScriptWithScope();
-        public virtual string ReadJavaScriptWithScope(string name) => InnerReader.ReadJavaScriptWithScope(name);
-        public virtual void ReadMaxKey() => InnerReader.ReadMaxKey();
-        public virtual void ReadMaxKey(string name) => InnerReader.ReadMaxKey(name);
-        public virtual void ReadMinKey() => InnerReader.ReadMinKey();
-        public virtual void ReadMinKey(string name) => InnerReader.ReadMinKey(name);
-        public virtual string ReadName() => InnerReader.ReadName();
-        public virtual string ReadName(INameDecoder nameDecoder) => InnerReader.ReadName(nameDecoder);
-        public virtual void ReadNull() => InnerReader.ReadNull();
-        public virtual void ReadNull(string name) => InnerReader.ReadNull(name);
-        public virtual void ReadObjectId(out MongoDB.Bson.ObjectId objectId) => InnerReader.ReadObjectId(out objectId);
-        public virtual void ReadObjectId(string name, out MongoDB.Bson.ObjectId objectId) => InnerReader.ReadObjectId(name, out objectId);
-        public virtual string ReadRegularExpression(out string pattern, out string options) => InnerReader.ReadRegularExpression(out pattern, out options);
-        public virtual string ReadRegularExpression(string name, out string pattern, out string options) => InnerReader.ReadRegularExpression(name, out pattern, out options);
-        public virtual void ReadStartArray() => InnerReader.ReadStartArray();
-        public virtual void ReadStartDocument() => InnerReader.ReadStartDocument();
-        public virtual string ReadString() => InnerReader.ReadString();
-        public virtual string ReadString(string name) => InnerReader.ReadString(name);
-        public virtual string ReadSymbol() => InnerReader.ReadSymbol();
-        public virtual string ReadSymbol(string name) => InnerReader.ReadSymbol(name);
-        public virtual long ReadTimestamp() => InnerReader.ReadTimestamp();
-        public virtual long ReadTimestamp(string name) => InnerReader.ReadTimestamp(name);
-        public virtual void ReadUndefined() => InnerReader.ReadUndefined();
-        public virtual void ReadUndefined(string name) => InnerReader.ReadUndefined(name);
-        public virtual void SkipName() => InnerReader.SkipName();
-        public virtual void SkipValue() => InnerReader.SkipValue();
-        public virtual Decimal128 ReadDecimal128() => InnerReader.ReadDecimal128();
-        public virtual Decimal128 ReadDecimal128(string name) => InnerReader.ReadDecimal128(name);
+        public virtual BsonType CurrentBsonType => innerReader.CurrentBsonType;
+        public virtual bool IsAtEndOfFile() => innerReader.IsAtEndOfFile();
+        public virtual void PopSettings() => innerReader.PopSettings();
+        public virtual void PushSettings(Action<BsonReaderSettings> configurer) => innerReader.PushSettings(configurer);
+        public virtual byte[] ReadBytes() => innerReader.ReadBytes();
+        public virtual Guid ReadGuid() => innerReader.ReadGuid();
+        public virtual Guid ReadGuid(GuidRepresentation guidRepresentation) => innerReader.ReadGuid(guidRepresentation);
+        public virtual IByteBuffer ReadRawBsonArray() => innerReader.ReadRawBsonArray();
+        public virtual IByteBuffer ReadRawBsonDocument() => innerReader.ReadRawBsonDocument();
+        public virtual BsonRegularExpression ReadRegularExpression() => innerReader.ReadRegularExpression();
     }
 }
