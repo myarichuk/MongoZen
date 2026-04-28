@@ -5,7 +5,7 @@ using System.Runtime.CompilerServices;
 namespace MongoZen.Collections;
 
 /// <summary>
-/// A zero-allocation list class that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
+/// A lean list class that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
 /// MUST be disposed to return the array to the pool.
 /// </summary>
 public class PooledList<T> : IDisposable, IEnumerable<T>

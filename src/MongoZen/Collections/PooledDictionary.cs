@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 namespace MongoZen.Collections;
 
 /// <summary>
-/// A zero-allocation dictionary class that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
+/// A lean dictionary class that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
 /// Uses open-addressing with linear probing. MUST be disposed.
 /// </summary>
 public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValuePair<TKey, TValue>>
