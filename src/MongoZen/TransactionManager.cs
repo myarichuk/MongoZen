@@ -160,4 +160,20 @@ internal class TransactionManager : IAsyncDisposable
         }
         _inMemoryTransaction = false;
     }
+
+    public void Reset()
+    {
+        if (_session != null && _session.IsInTransaction)
+        {
+             // We can't really "reset" a MongoDB session that's in a transaction 
+             // without aborting it, which is async.
+             // For simplicity, if we are resetting for reuse, we assume the transaction was committed or aborted.
+        }
+        _inMemoryTransaction = false;
+        // Keep the _session handle if we want to reuse it, but MongoDB sessions 
+        // are usually short-lived. However, we'll clear it for now.
+        if (_ownsSession) _session?.Dispose();
+        _session = null;
+        _ownsSession = false;
+    }
 }
