@@ -160,8 +160,7 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
         sb.Append(indent2).Append("public static global::MongoDB.Driver.UpdateDefinition<").Append(type.ToDisplayString()).Append(">? ExtractChanges(this ref ")
           .Append(type.Name).Append("_Shadow shadow, ").Append(type.ToDisplayString()).AppendLine(" current)");
         sb.Append(indent2).AppendLine("{");
-        sb.Append(indent2).AppendLine("    global::MongoDB.Driver.UpdateDefinition<").Append(type.ToDisplayString()).AppendLine(">? update = null;");
-        sb.Append(indent2).AppendLine("    var builder = global::MongoDB.Driver.Builders<").Append(type.ToDisplayString()).AppendLine(">.Update;");
+        sb.Append(indent2).AppendLine("    var changes = new global::MongoDB.Bson.BsonDocument();");
         sb.AppendLine();
 
         foreach (var prop in properties)
@@ -177,13 +176,13 @@ public sealed class ShadowStructsGenerator : IIncrementalGenerator
             
             sb.Append(indent2).AppendLine("        if (dirty)");
             sb.Append(indent2).AppendLine("        {");
-            sb.Append(indent2).Append("            if (update == null) update = builder.Set(x => x.").Append(name).AppendLine(", current.").Append(name).AppendLine(");");
-            sb.Append(indent2).Append("            else update = builder.Combine(update, builder.Set(x => x.").Append(name).AppendLine(", current.").Append(name).AppendLine("));");
+            sb.Append(indent2).Append("            changes.Add(\"").Append(name).Append("\", global::MongoDB.Bson.BsonValue.Create(current.").Append(name).AppendLine("));");
             sb.Append(indent2).AppendLine("        }");
             sb.Append(indent2).AppendLine("    }");
         }
 
-        sb.Append(indent2).AppendLine("    return update;");
+        sb.Append(indent2).AppendLine("    if (changes.ElementCount == 0) return null;");
+        sb.Append(indent2).AppendLine("    return new global::MongoDB.Driver.BsonDocumentUpdateDefinition<").Append(type.ToDisplayString()).AppendLine(">(new global::MongoDB.Bson.BsonDocument(\"$set\", changes));");
         sb.Append(indent2).AppendLine("}");
 
         sb.Append(indent).AppendLine("}");
