@@ -20,7 +20,7 @@
 
   <ItemGroup>
     <!-- Reference MongoDB Driver -->
-    <PackageReference Include="MongoDB.Driver" Version="3.3.0" />
+    <PackageReference Include="MongoDB.Driver" Version="3.8.0" />
     <PackageReference Include="SharpArena" Version="0.7.21" />
     <PackageReference Include="System.IO.Hashing" Version="10.0.7" />
     <!-- resolve CVE-2026-26171 -->
