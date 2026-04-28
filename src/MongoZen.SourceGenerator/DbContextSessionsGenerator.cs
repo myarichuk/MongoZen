@@ -115,8 +115,8 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
           foreach (var prop in mutableProps)
           {
               var fieldName = $"_{char.ToLower(prop.Name[0])}{prop.Name.Substring(1)}";
-              sb.Append(indent2).Append("        if (").Append(fieldName).AppendLine(" != null)")
-                .Append(indent2).Append("            ((IInternalMutableDbSet)").Append(fieldName).Append(").Rebind(dbContext.").Append(prop.Name).AppendLine(");");
+              sb.Append(indent2).Append("        if (session.").Append(fieldName).AppendLine(" != null)")
+                .Append(indent2).Append("            ((IInternalMutableDbSet)session.").Append(fieldName).Append(").Rebind(dbContext.").Append(prop.Name).AppendLine(");");
           }
         sb.Append(indent2).AppendLine("    }")
           .Append(indent2).AppendLine("    await session.Advanced.InitializeAsync(ct);")
@@ -137,8 +137,8 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
           foreach (var prop in mutableProps)
           {
               var fieldName = $"_{char.ToLower(prop.Name[0])}{prop.Name.Substring(1)}";
-              sb.Append(indent2).Append("        if (").Append(fieldName).AppendLine(" != null)")
-                .Append(indent2).Append("            ((IInternalMutableDbSet)").Append(fieldName).Append(").Rebind(dbContext.").Append(prop.Name).AppendLine(");");
+              sb.Append(indent2).Append("        if (session.").Append(fieldName).AppendLine(" != null)")
+                .Append(indent2).Append("            ((IInternalMutableDbSet)session.").Append(fieldName).Append(").Rebind(dbContext.").Append(prop.Name).AppendLine(");");
           }
         sb.Append(indent2).AppendLine("    }")
           .Append(indent2).AppendLine("    await session.Advanced.InitializeAsync(ct);")
