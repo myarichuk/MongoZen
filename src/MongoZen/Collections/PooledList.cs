@@ -1,10 +1,11 @@
 using System.Buffers;
 using System.Collections;
+using System.Runtime.CompilerServices;
 
 namespace MongoZen.Collections;
 
 /// <summary>
-/// A zero-allocation list struct that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
+/// A zero-allocation list class that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
 /// MUST be disposed to return the array to the pool.
 /// </summary>
 public class PooledList<T> : IDisposable, IEnumerable<T>
@@ -12,7 +13,9 @@ public class PooledList<T> : IDisposable, IEnumerable<T>
     private T[]? _array;
     private int _count;
 
-    public PooledList(int initialCapacity = 16)
+    public PooledList() : this(16) { }
+
+    public PooledList(int initialCapacity)
     {
         _array = ArrayPool<T>.Shared.Rent(initialCapacity);
         _count = 0;
@@ -86,10 +89,4 @@ public class PooledList<T> : IDisposable, IEnumerable<T>
 
         public void Dispose() { }
     }
-}
-
-internal static class RuntimeHelpers
-{
-    public static bool IsReferenceOrContainsReferences<T>() => 
-        System.Runtime.CompilerServices.RuntimeHelpers.IsReferenceOrContainsReferences<T>();
 }

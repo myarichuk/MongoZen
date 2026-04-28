@@ -14,9 +14,12 @@ public interface IDbContextSession : ISessionTracker
     IClientSessionHandle? ClientSession { get; }
     TransactionContext Transaction { get; }
 
+    IAttachmentsSession Attachments { get; }
+
     void Store<TEntity>(TEntity entity) where TEntity : class;
     void Delete<TEntity>(TEntity entity) where TEntity : class;
     void Delete<TEntity>(object id) where TEntity : class;
+    void Delete<TEntity>(in DocId id) where TEntity : class;
 
     Task SaveChangesAsync(CancellationToken cancellationToken = default);
 
@@ -39,11 +42,12 @@ public interface IDbContextSessionAdvanced
 public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContextSession, IDbContextSessionAdvanced
     where TDbContext : DbContext
 {
-    protected readonly TDbContext _dbContext;
-    private readonly TransactionManager _transactionManager;
+    protected TDbContext _dbContext;
+    private TransactionManager _transactionManager;
     private readonly SessionArenaManager _arenaManager;
     private readonly Dictionary<Type, IInternalMutableDbSet> _dbSets = new();
-    private readonly bool _startTransaction;
+    private bool _startTransaction;
+    private IAttachmentsSession? _attachments;
 
     // Identity Map and Shadow storage. 
     private readonly Dictionary<Type, IEntityTracker> _trackedEntities = new();
@@ -56,6 +60,32 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         _startTransaction = startTransaction;
     }
 
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public void Rebind(TDbContext dbContext, bool startTransaction)
+    {
+        _dbContext = dbContext;
+        _startTransaction = startTransaction;
+        _transactionManager = new TransactionManager(dbContext);
+        _attachments = null;
+    }
+
+    public IAttachmentsSession Attachments
+    {
+        get
+        {
+            if (_attachments != null) return _attachments;
+            if (_dbContext.Options.UseInMemory)
+            {
+                return _attachments = new InMemoryAttachmentsSession(_dbContext.InMemoryAttachments!);
+            }
+            if (_dbContext.Options.Mongo == null)
+            {
+                throw new InvalidOperationException("Mongo database is not configured for this DbContext. Check your DbContextOptions.");
+            }
+            return _attachments = new GridFSAttachmentsSession(_dbContext.Options.Mongo, _dbContext.GridFSBucketName, ClientSession);
+        }
+    }
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         if (_startTransaction)
@@ -66,6 +96,9 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
 
     [EditorBrowsable(EditorBrowsableState.Never)]
     public ArenaAllocator Arena => _arenaManager.Current;
+
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public int Generation => _arenaManager.Generation;
 
     [EditorBrowsable(EditorBrowsableState.Never)]
     public IClientSessionHandle? ClientSession => _transactionManager.ClientSession;
@@ -93,6 +126,12 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     /// For infrastructure use only. Generated code calls this.
     /// </summary>
     public virtual void Delete<TEntity>(object id) where TEntity : class
+        => throw new NotSupportedException("This method must be overridden by a derived class or provided by the source generator.");
+
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
+    public virtual void Delete<TEntity>(in DocId id) where TEntity : class
         => throw new NotSupportedException("This method must be overridden by a derived class or provided by the source generator.");
 
     public virtual async Task SaveChangesAsync(CancellationToken cancellationToken = default)
@@ -126,15 +165,13 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     {
         _arenaManager.IncrementGeneration();
         
-        // 1. Refresh shadows for all tracked entities into _nextArena.
+        // 1. Refresh shadows for all tracked entities.
+        // NOTE: Since we are using a single allocator now, we just append new shadows to the end.
         foreach (var set in _dbSets.Values)
         {
             set.RefreshShadows(this);
             set.ClearTracking();
         }
-
-        // 2. Swap arenas to preserve the newly generated shadows in _arena.
-        _arenaManager.SwapAndResetNext();
     }
 
     protected void RegisterDbSet<TEntity>(MutableDbSet<TEntity> set) where TEntity : class
@@ -152,7 +189,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     {
         if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) return;
 
-        info.RefreshShadows(_arenaManager.Next, _arenaManager.Generation);
+        info.RefreshShadows(_arenaManager.Current, _arenaManager.Generation);
     }
 
     /// <summary>
@@ -161,7 +198,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     [EditorBrowsable(EditorBrowsableState.Never)]
     public TEntity Track<TEntity>(
         TEntity entity,
-        object id,
+        in DocId id,
         Func<TEntity, ArenaAllocator, IntPtr> materializer,
         Func<TEntity, IntPtr, bool> differ) where TEntity : class
         => Track(entity, id, materializer, differ, true);
@@ -172,7 +209,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     [EditorBrowsable(EditorBrowsableState.Never)]
     public TEntity Track<TEntity>(
         TEntity entity,
-        object id,
+        in DocId id,
         Func<TEntity, ArenaAllocator, IntPtr> materializer,
         Func<TEntity, IntPtr, bool> differ,
         bool forceShadow) where TEntity : class
@@ -192,7 +229,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     /// For infrastructure use only. Generated code calls this.
     /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public void TrackDynamic(object entity, Type entityType, object id)
+    public void TrackDynamic(object entity, Type entityType, in DocId id)
     {
         if (!_trackedEntities.TryGetValue(entityType, out var info))
         {
@@ -211,7 +248,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     /// For infrastructure use only. Generated code calls this.
     /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public void Untrack<TEntity>(object id) where TEntity : class
+    public void Untrack<TEntity>(in DocId id) where TEntity : class
     {
         if (_trackedEntities.TryGetValue(typeof(TEntity), out var info))
         {
@@ -223,7 +260,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     /// For infrastructure use only. Generated code calls this.
     /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public bool TryGetEntity<TEntity>(object id, out TEntity? entity) where TEntity : class
+    public bool TryGetEntity<TEntity>(in DocId id, out TEntity? entity) where TEntity : class
     {
         if (_trackedEntities.TryGetValue(typeof(TEntity), out var info) && info.TryGetEntity(id, out var obj))
         {
@@ -235,7 +272,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     }
 
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public bool TryGetShadowPtr<TEntity>(object id, out ShadowPtr shadowPtr) where TEntity : class
+    public bool TryGetShadowPtr<TEntity>(in DocId id, out ShadowPtr shadowPtr) where TEntity : class
     {
         if (_trackedEntities.TryGetValue(typeof(TEntity), out var info) && info.TryGetShadowPtr(id, out shadowPtr))
         {
@@ -253,26 +290,41 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
     {
         if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) return Enumerable.Empty<TEntity>();
 
-        return ((EntityTracker<TEntity>)info).GetDirtyEntities(_arenaManager.Generation);
+        return info.GetDirtyEntities<TEntity>(_arenaManager.Generation);
+    }
+
+    /// <summary>
+    /// For infrastructure use only. Generated code calls this.
+    /// </summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public void CollectDirtyEntities<TEntity>(MongoZen.Collections.PooledList<TEntity> buffer) where TEntity : class
+    {
+        if (!_trackedEntities.TryGetValue(typeof(TEntity), out var info)) return;
+
+        info.CollectDirtyEntities(buffer, _arenaManager.Generation);
     }
 
 
     public void ClearTracking()
     {
-        // IMPORTANT: clear the identity map BEFORE resetting the arena.
-        // Any code that reads a ShadowPtr after Reset() dereferences freed memory.
-        // Clearing the map first ensures no stale pointers can be reached.
+        // IMPORTANT: Reset trackers BEFORE resetting the arena.
         foreach (var info in _trackedEntities.Values)
         {
-            info.Dispose();
+            info.Reset();
         }
-        _trackedEntities.Clear();
 
         foreach (var set in _dbSets.Values)
         {
              set.ClearTracking();
         }
         _arenaManager.ResetAll();
+    }
+
+    public void Reset()
+    {
+        ClearTracking();
+        _transactionManager.Reset();
+        _attachments = null;
     }
 
     public async Task CommitTransactionAsync()
@@ -285,7 +337,7 @@ public abstract class DbContextSession<TDbContext> : IAsyncDisposable, IDbContex
         await _transactionManager.AbortTransactionAsync();
     }
 
-    public async ValueTask DisposeAsync()
+    public virtual async ValueTask DisposeAsync()
     {
         foreach (var info in _trackedEntities.Values)
         {

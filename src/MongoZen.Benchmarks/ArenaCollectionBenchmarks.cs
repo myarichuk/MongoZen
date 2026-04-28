@@ -1,10 +1,13 @@
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
 using MongoZen.Collections;
 using SharpArena.Allocators;
 
 namespace MongoZen.Benchmarks;
 
 [MemoryDiagnoser]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[CategoriesColumn]
 public class ArenaCollectionBenchmarks
 {
     private const int ItemCount = 1000;
@@ -29,7 +32,7 @@ public class ArenaCollectionBenchmarks
     // HashSet Benchmarks
     // -------------------------------------------------------------------------
 
-    [Benchmark]
+    [BenchmarkCategory("HashSet"), Benchmark(Baseline = true, Description = "Managed: HashSet<int>")]
     public int ManagedHashSet_Int()
     {
         var set = new HashSet<int>();
@@ -39,7 +42,7 @@ public class ArenaCollectionBenchmarks
         return count;
     }
 
-    [Benchmark]
+    [BenchmarkCategory("HashSet"), Benchmark(Description = "Zen: ArenaHashSet<int> (Zero-GC)")]
     public int ArenaHashSet_Int()
     {
         var set = new ArenaHashSet<int>(_arena, ItemCount);
@@ -53,7 +56,7 @@ public class ArenaCollectionBenchmarks
     // Dictionary Benchmarks
     // -------------------------------------------------------------------------
 
-    [Benchmark]
+    [BenchmarkCategory("Dictionary"), Benchmark(Baseline = true, Description = "Managed: Dictionary<int, int>")]
     public int ManagedDictionary_Int()
     {
         var dict = new Dictionary<int, int>();
@@ -63,7 +66,7 @@ public class ArenaCollectionBenchmarks
         return sum;
     }
 
-    [Benchmark]
+    [BenchmarkCategory("Dictionary"), Benchmark(Description = "Zen: ArenaDictionary<int, int> (Zero-GC)")]
     public int ArenaDictionary_Int()
     {
         var dict = new ArenaDictionary<int, int>(_arena, ItemCount);
@@ -77,7 +80,7 @@ public class ArenaCollectionBenchmarks
     // ArenaString Benchmarks
     // -------------------------------------------------------------------------
 
-    [Benchmark]
+    [BenchmarkCategory("ArenaString"), Benchmark(Description = "Zen: ArenaDictionary<ArenaString, int>")]
     public int ArenaDictionary_ArenaString()
     {
         var dict = new ArenaDictionary<ArenaString, int>(_arena, ItemCount);
