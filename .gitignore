@@ -5,6 +5,8 @@
 
 packages-microsoft-prod.deb
 
+.serena/
+
 # User-specific files
 *.rsuser
 *.suo

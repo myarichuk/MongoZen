@@ -36,6 +36,11 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
         }
     }
 
+    /// <summary>
+    /// For testing/seeding purposes. In production, use session.Store().
+    /// </summary>
+    public void Store(T entity) => Seed(entity);
+
     public InMemoryDbSet(string collectionName, Conventions conventions)
     {
         CollectionName = collectionName;
@@ -99,97 +104,88 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
         // No-op for InMemoryDbSet
     }
 
-    async ValueTask IInternalDbSet<T>.CommitAsync(
-        IEnumerable<T> added, 
-        IEnumerable<T> removed, 
-        IEnumerable<object> removedIds, 
-        IEnumerable<T> updated, 
-        IEnumerable<T> dirty, 
-        PooledDictionary<DocId, (T Entity, bool IsDirty)> upsertBuffer,
-        PooledHashSet<object> rawIdBuffer,
-        PooledList<WriteModel<T>> modelBuffer,
-        Func<T, IntPtr, UpdateDefinition<T>?>? extractor,
-        ISessionTracker tracker,
-        TransactionContext transaction, 
-        ArenaAllocator arena,
-        CancellationToken cancellationToken)
+    async ValueTask IInternalDbSet<T>.CommitAsync(CommitContext<T> context, CancellationToken cancellationToken)
     {
-        // Mirror the deduplication semantics of DbSet.CommitAsync so that
-        // in-memory tests see the same Remove→Add→Dirty ordering as production.
+        context.Buffers.UpsertBuffer.Clear();
+        context.Buffers.RawIdBuffer.Clear();
 
-        var dedupeBuffer = new ArenaHashSet<DocId>(arena, 128);
+        var dedupeBuffer = new ArenaHashSet<DocId>(context.Session.Arena, 128);
         var versionGetter = ConcurrencyVersionAccessor<T>.GetGetter(_conventions.ConcurrencyPropertyName);
         var versionSetter = ConcurrencyVersionAccessor<T>.GetSetter(_conventions.ConcurrencyPropertyName);
 
         // 1. Removals — collect and deduplicate via DocId
-        foreach (var entity in removed)
+        foreach (var entity in context.Work.Removed)
         {
+            if (entity == null) continue;
             var id = _idAccessor(entity);
             if (id == null) continue;
             var docId = DocId.From(id);
             if (dedupeBuffer.Add(docId))
             {
-                rawIdBuffer.Add(id);
+                context.Buffers.RawIdBuffer.Add(id);
                 _data.Remove(id);
                 _versions.Remove(id);
             }
         }
-        foreach (var id in removedIds)
+        foreach (var id in context.Work.RemovedIds)
         {
             if (id == null) continue;
             var docId = DocId.From(id);
             if (dedupeBuffer.Add(docId))
             {
-                rawIdBuffer.Add(id);
+                context.Buffers.RawIdBuffer.Add(id);
                 _data.Remove(id);
                 _versions.Remove(id);
             }
         }
 
-        // 2. Added — skip if already removed (removed has priority)
-        foreach (var entity in added)
+        // 2. Added — process directly with last-one-wins
+        using var addedMap = new PooledDictionary<DocId, T>(16);
+        foreach (var entity in context.Work.Added)
         {
+            if (entity == null) continue;
             var id = _idAccessor(entity);
             if (id == null) continue;
             var docId = DocId.From(id);
             if (!dedupeBuffer.Contains(docId))
             {
-                upsertBuffer[docId] = (entity, false);
+                addedMap[docId] = entity;
             }
         }
-        foreach (var entry in upsertBuffer)
+
+        foreach (var kvp in addedMap)
         {
-            var entity = entry.Value.Entity;
-            var id = _idAccessor(entity)!;
-            _data[id] = entity;
+            var id = _idAccessor(kvp.Value)!;
+            _data[id] = kvp.Value;
             if (versionGetter != null)
             {
-                _versions[id] = versionGetter(entity);
+                _versions[id] = versionGetter(kvp.Value);
             }
-            dedupeBuffer.Add(entry.Key); // prevent dirty from overwriting a fresh add
+            dedupeBuffer.Add(kvp.Key);
         }
-        upsertBuffer.Clear();
 
-        // 3. Updated / Dirty — skip if already removed or just added
-        foreach (var entity in updated)
+        // 3. Updated / Dirty — collect to buffer
+        foreach (var entity in context.Work.Updated)
         {
+            if (entity == null) continue;
             var id = _idAccessor(entity);
             if (id == null) continue;
             var docId = DocId.From(id);
             if (!dedupeBuffer.Contains(docId))
-                upsertBuffer[docId] = (entity, false);
+                context.Buffers.UpsertBuffer.AddOrUpdate(docId, (entity, false));
         }
-        foreach (var entity in dirty)
+        foreach (var entity in context.Work.Dirty)
         {
+            if (entity == null) continue;
             var id = _idAccessor(entity);
             if (id == null) continue;
             var docId = DocId.From(id);
             if (!dedupeBuffer.Contains(docId))
-                upsertBuffer[docId] = (entity, true);
+                context.Buffers.UpsertBuffer.AddOrUpdate(docId, (entity, true));
         }
 
         var conflicts = new List<object>();
-        foreach (var entry in upsertBuffer)
+        foreach (var entry in context.Buffers.UpsertBuffer)
         {
             var entity = entry.Value.Entity;
             var id = _idAccessor(entity)!;
@@ -203,11 +199,8 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
                     continue;
                 }
 
-                // Increment version for DB state
                 var newVersion = actualVersion + 1;
                 _versions[id] = newVersion;
-                
-                // DbSet increments the entity version in CommitAsync, so we match it here.
                 versionSetter(entity, newVersion);
             }
 

@@ -10,9 +10,23 @@ public abstract partial class DbContext : IDisposable
 {
     public DbContextOptions Options { get; }
 
+    internal string GridFSBucketName { get; } = "fs";
+
+    internal System.Collections.Concurrent.ConcurrentDictionary<string, InMemoryFileData>? InMemoryAttachments { get; }
+
     protected DbContext(DbContextOptions options)
     {
         Options = options;
+
+        if (options.UseInMemory)
+        {
+            InMemoryAttachments = new System.Collections.Concurrent.ConcurrentDictionary<string, InMemoryFileData>();
+        }
+        else if (options.Mongo != null)
+        {
+            GridFSBucketName = options.GridFSOptions?.BucketName ?? "fs";
+        }
+
         InitializeDbSets();
         OnModelCreating();
     }
