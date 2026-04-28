@@ -111,10 +111,10 @@ namespace MongoZen.Tests
             session.People.Attach(person1);
             
             var tracker = (ISessionTracker)session;
-            Assert.True(tracker.TryGetEntity<Person>("1", out var tracked1));
+            Assert.True(tracker.TryGetEntity<Person>(DocId.From("1"), out var tracked1));
             Assert.Same(person1, tracked1);
 
-            Assert.False(tracker.TryGetEntity<OtherNamespace.Person>("1", out _));
+            Assert.False(tracker.TryGetEntity<OtherNamespace.Person>(DocId.From("1"), out _));
         }
 
         [Fact]

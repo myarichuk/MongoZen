@@ -54,6 +54,11 @@ public class InMemoryTransactionTests
             if (typeof(TEntity) == typeof(User)) Users.Remove(id);
         }
 
+        public override void Delete<TEntity>(in DocId id) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(User)) Users.Remove(id);
+        }
+
         public async ValueTask<TEntity?> LoadAsync<TEntity>(object id, System.Threading.CancellationToken cancellationToken = default) where TEntity : class
         {
             if (typeof(TEntity) == typeof(User)) return (TEntity?)(object?)await Users.LoadAsync(id, cancellationToken);
