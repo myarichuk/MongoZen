@@ -66,36 +66,82 @@ using MongoZen;
 
 public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingContext>
 {
+    private static readonly System.Collections.Concurrent.ConcurrentStack<BloggingContextSession> Pool = new();
+
     public static async Task<BloggingContextSession> OpenSessionAsync(BloggingContext dbContext, CancellationToken ct = default)
     {
-        var session = new BloggingContextSession(dbContext);
+        if (!Pool.TryPop(out var session))
+        {
+            session = new BloggingContextSession(dbContext);
+        }
+        else
+        {
+            session.Rebind(dbContext, startTransaction: true);
+            if (_blogs != null)
+                ((IInternalMutableDbSet)_blogs).Rebind(dbContext.Blogs);
+            if (_posts != null)
+                ((IInternalMutableDbSet)_posts).Rebind(dbContext.Posts);
+        }
         await session.Advanced.InitializeAsync(ct);
         return session;
     }
 
     public static async Task<BloggingContextSession> OpenSessionAsync(BloggingContext dbContext, bool startTransaction, CancellationToken ct = default)
     {
-        var session = new BloggingContextSession(dbContext, startTransaction);
+        if (!Pool.TryPop(out var session))
+        {
+            session = new BloggingContextSession(dbContext, startTransaction);
+        }
+        else
+        {
+            session.Rebind(dbContext, startTransaction);
+            if (_blogs != null)
+                ((IInternalMutableDbSet)_blogs).Rebind(dbContext.Blogs);
+            if (_posts != null)
+                ((IInternalMutableDbSet)_posts).Rebind(dbContext.Posts);
+        }
         await session.Advanced.InitializeAsync(ct);
         return session;
     }
 
-    protected BloggingContextSession(BloggingContext dbContext) : this(dbContext, startTransaction: true)
+    public override async ValueTask DisposeAsync()
+    {
+        Reset();
+        Pool.Push(this);
+        await Task.CompletedTask; // Keep signature async
+    }
+
+    internal BloggingContextSession(BloggingContext dbContext) : this(dbContext, startTransaction: true)
     {
     }
 
-    protected BloggingContextSession(BloggingContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
+    internal BloggingContextSession(BloggingContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
+    {
+    }
+
+    private MongoZen.MutableDbSet<Blog>? _blogs;
+    public MongoZen.IMutableDbSet<Blog> Blogs => _blogs ??= InitializeBlogs();
+
+    private MongoZen.MutableDbSet<Blog> InitializeBlogs()
     {
         unsafe {
-            Blogs = new MongoZen.MutableDbSet<Blog>(((BloggingContext)GetDbContext()).Blogs, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Blog_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ((BloggingContext)GetDbContext()).Options.Conventions);
-            RegisterDbSet((MongoZen.MutableDbSet<Blog>)Blogs);
-            Posts = new MongoZen.MutableDbSet<Post>(((BloggingContext)GetDbContext()).Posts, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Post_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ((BloggingContext)GetDbContext()).Options.Conventions);
-            RegisterDbSet((MongoZen.MutableDbSet<Post>)Posts);
+            var set = new MongoZen.MutableDbSet<Blog>(((BloggingContext)GetDbContext()).Blogs, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Blog_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Blog_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ((BloggingContext)GetDbContext()).Options.Conventions);
+            RegisterDbSet(set);
+            return set;
         }
     }
 
-    public MongoZen.IMutableDbSet<Blog> Blogs { get; }
-    public MongoZen.IMutableDbSet<Post> Posts { get; }
+    private MongoZen.MutableDbSet<Post>? _posts;
+    public MongoZen.IMutableDbSet<Post> Posts => _posts ??= InitializePosts();
+
+    private MongoZen.MutableDbSet<Post> InitializePosts()
+    {
+        unsafe {
+            var set = new MongoZen.MutableDbSet<Post>(((BloggingContext)GetDbContext()).Posts, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<Post_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<Post_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ((BloggingContext)GetDbContext()).Options.Conventions);
+            RegisterDbSet(set);
+            return set;
+        }
+    }
 
     public override void Store<TEntity>(TEntity entity) where TEntity : class
     {
@@ -130,6 +176,22 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
     }
 
     public override void Delete<TEntity>(object id) where TEntity : class
+    {
+        if (typeof(TEntity) == typeof(Blog))
+        {
+            Blogs.Delete(id);
+        }
+        else if (typeof(TEntity) == typeof(Post))
+        {
+            Posts.Delete(id);
+        }
+        else
+        {
+            throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+        }
+    }
+
+    public override void Delete<TEntity>(in global::MongoZen.DocId id) where TEntity : class
     {
         if (typeof(TEntity) == typeof(Blog))
         {
@@ -192,6 +254,12 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
 
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     public void Remove<TEntity>(object id) where TEntity : class
+    {
+        Delete<TEntity>(id);
+    }
+
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public void Remove<TEntity>(global::MongoZen.DocId id) where TEntity : class
     {
         Delete<TEntity>(id);
     }
@@ -295,18 +363,45 @@ namespace MyNamespace
 {
     public sealed class MyContextSession : MongoZen.DbContextSession<MyNamespace.MyContext>
     {
+        private static readonly System.Collections.Concurrent.ConcurrentStack<MyContextSession> Pool = new();
+
         public static async Task<MyContextSession> OpenSessionAsync(MyNamespace.MyContext dbContext, CancellationToken ct = default)
         {
-            var session = new MyContextSession(dbContext);
+            if (!Pool.TryPop(out var session))
+            {
+                session = new MyContextSession(dbContext);
+            }
+            else
+            {
+                session.Rebind(dbContext, startTransaction: true);
+                if (_users != null)
+                    ((IInternalMutableDbSet)_users).Rebind(dbContext.Users);
+            }
             await session.Advanced.InitializeAsync(ct);
             return session;
         }
 
         public static async Task<MyContextSession> OpenSessionAsync(MyNamespace.MyContext dbContext, bool startTransaction, CancellationToken ct = default)
         {
-            var session = new MyContextSession(dbContext, startTransaction);
+            if (!Pool.TryPop(out var session))
+            {
+                session = new MyContextSession(dbContext, startTransaction);
+            }
+            else
+            {
+                session.Rebind(dbContext, startTransaction);
+                if (_users != null)
+                    ((IInternalMutableDbSet)_users).Rebind(dbContext.Users);
+            }
             await session.Advanced.InitializeAsync(ct);
             return session;
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            Reset();
+            Pool.Push(this);
+            await Task.CompletedTask; // Keep signature async
         }
 
         internal MyContextSession(MyNamespace.MyContext dbContext) : this(dbContext, startTransaction: true)
@@ -315,13 +410,20 @@ namespace MyNamespace
 
         internal MyContextSession(MyNamespace.MyContext dbContext, bool startTransaction) : base(dbContext, startTransaction)
         {
+        }
+
+        private MongoZen.MutableDbSet<MyNamespace.User>? _users;
+        public MongoZen.IMutableDbSet<MyNamespace.User> Users => _users ??= InitializeUsers();
+
+        private MongoZen.MutableDbSet<MyNamespace.User> InitializeUsers()
+        {
             unsafe {
-                Users = new MongoZen.MutableDbSet<MyNamespace.User>(((MyNamespace.MyContext)GetDbContext()).Users, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<MyNamespace.User_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ((MyNamespace.MyContext)GetDbContext()).Options.Conventions);
-                RegisterDbSet((MongoZen.MutableDbSet<MyNamespace.User>)Users);
+                var set = new MongoZen.MutableDbSet<MyNamespace.User>(((MyNamespace.MyContext)GetDbContext()).Users, () => Transaction, this, (entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<MyNamespace.User_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.IsDirty(entity); }, (entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<MyNamespace.User_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ((MyNamespace.MyContext)GetDbContext()).Options.Conventions);
+                RegisterDbSet(set);
+                return set;
             }
         }
 
-        public MongoZen.IMutableDbSet<MyNamespace.User> Users { get; }
 
         public override void Store<TEntity>(TEntity entity) where TEntity : class
         {
@@ -348,6 +450,18 @@ namespace MyNamespace
         }
 
         public override void Delete<TEntity>(object id) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(MyNamespace.User))
+            {
+                Users.Delete(id);
+            }
+            else
+            {
+                throw new System.ArgumentException($""Entity type {typeof(TEntity).Name} is not part of this DbContext."");
+            }
+        }
+
+        public override void Delete<TEntity>(in global::MongoZen.DocId id) where TEntity : class
         {
             if (typeof(TEntity) == typeof(MyNamespace.User))
             {
@@ -398,6 +512,12 @@ namespace MyNamespace
 
         [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         public void Remove<TEntity>(object id) where TEntity : class
+        {
+            Delete<TEntity>(id);
+        }
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public void Remove<TEntity>(global::MongoZen.DocId id) where TEntity : class
         {
             Delete<TEntity>(id);
         }

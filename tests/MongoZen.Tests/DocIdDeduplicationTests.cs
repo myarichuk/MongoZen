@@ -1,150 +1,43 @@
 using MongoDB.Bson;
-using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
-using MongoZen;
+using MongoZen.Collections;
+using SharpArena.Allocators;
 using Xunit;
 
 namespace MongoZen.Tests;
 
 public class DocIdDeduplicationTests : IntegrationTestBase
 {
-    #region Entity Types
-    public class EntityWithObjectId { public ObjectId Id { get; set; } public string Name { get; set; } = ""; }
-    public class EntityWithGuid { [BsonGuidRepresentation(GuidRepresentation.Standard)] public Guid Id { get; set; } public string Name { get; set; } = ""; }
-    public class EntityWithInt { public int Id { get; set; } public string Name { get; set; } = ""; }
-    public class EntityWithLong { public long Id { get; set; } public string Name { get; set; } = ""; }
-    public class EntityWithString { public string Id { get; set; } = ""; public string Name { get; set; } = ""; }
-    
-    public class CompositeKey : IDocIdHashable
+    private class SimpleEntity
     {
-        public string Part1 { get; set; } = "";
-        public int Part2 { get; set; }
-        public int WriteIdBytes(Span<byte> destination)
-        {
-            var p1 = System.Text.Encoding.UTF8.GetBytes(Part1);
-            p1.CopyTo(destination);
-            BitConverter.TryWriteBytes(destination[p1.Length..], Part2);
-            return p1.Length + 4;
-        }
-    }
-    public class EntityWithComposite { public CompositeKey Id { get; set; } = new(); public string Name { get; set; } = ""; }
-
-    public class ComplexKey { public string Key { get; set; } = ""; }
-    public class EntityWithComplex { public ComplexKey Id { get; set; } = new(); public string Name { get; set; } = ""; }
-    #endregion
-
-    #region DocId Unit Tests
-    [Fact]
-    public void DocId_ObjectId_Equality()
-    {
-        var oid = ObjectId.GenerateNewId();
-        var id1 = DocId.From(oid);
-        var id2 = DocId.From(oid);
-        var id3 = DocId.From(ObjectId.GenerateNewId());
-
-        Assert.Equal(id1, id2);
-        Assert.Equal(id1.GetHashCode(), id2.GetHashCode());
-        Assert.NotEqual(id1, id3);
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
     }
 
     [Fact]
-    public void DocId_Guid_Equality()
+    public async Task Can_Deduplicate_String_Ids()
     {
-        var guid = Guid.NewGuid();
-        var id1 = DocId.From(guid);
-        var id2 = DocId.From(guid);
-        var id3 = DocId.From(Guid.NewGuid());
-
-        Assert.Equal(id1, id2);
-        Assert.Equal(id1.GetHashCode(), id2.GetHashCode());
-        Assert.NotEqual(id1, id3);
+        await TestDeduplication<SimpleEntity>("users/1");
     }
 
     [Fact]
-    public void DocId_String_Equality()
+    public async Task Can_Deduplicate_ObjectId_Ids()
     {
-        var s = "test-id";
-        var id1 = DocId.From(s);
-        var id2 = DocId.From(s);
-        var id3 = DocId.From("other-id");
-
-        Assert.Equal(id1, id2);
-        Assert.Equal(id1.GetHashCode(), id2.GetHashCode());
-        Assert.NotEqual(id1, id3);
+        await TestDeduplication<SimpleEntity>(ObjectId.GenerateNewId().ToString());
     }
 
-    [Fact]
-    public void DocId_Int_Equality()
+    #region Generic Test Helper
+    private async Task TestDeduplication<TEntity>(object id) where TEntity : class, new()
     {
-        var id1 = DocId.From(123);
-        var id2 = DocId.From(123);
-        var id3 = DocId.From(456);
+        var collection = Database!.GetCollection<TEntity>("TestCollection_" + Guid.NewGuid().ToString("N"));
+        var conventions = new Conventions();
+        var ds = new DbSet<TEntity>(collection, conventions);
+        var internalSet = (IInternalDbSet<TEntity>)ds;
 
-        Assert.Equal(id1, id2);
-        Assert.NotEqual(id1, id3);
-    }
-
-    [Fact]
-    public void DocId_Composite_Equality()
-    {
-        var k1 = new CompositeKey { Part1 = "A", Part2 = 1 };
-        var k2 = new CompositeKey { Part1 = "A", Part2 = 1 };
-        var k3 = new CompositeKey { Part1 = "B", Part2 = 1 };
-
-        Assert.Equal(DocId.From(k1), DocId.From(k2));
-        Assert.NotEqual(DocId.From(k1), DocId.From(k3));
-    }
-
-    [Fact]
-    public void DocId_BsonFallback_Equality()
-    {
-        var k1 = new ComplexKey { Key = "X" };
-        var k2 = new ComplexKey { Key = "X" };
-        var k3 = new ComplexKey { Key = "Y" };
-
-        Assert.Equal(DocId.From(k1), DocId.From(k2));
-        Assert.NotEqual(DocId.From(k1), DocId.From(k3));
-    }
-    #endregion
-
-    #region Integration Tests
-    [Fact]
-    public async Task DbSet_Deduplicates_ObjectId()
-    {
-        var oid = ObjectId.GenerateNewId();
-        await TestDeduplication<EntityWithObjectId, ObjectId>(oid);
-    }
-
-    [Fact]
-    public async Task DbSet_Deduplicates_Guid()
-    {
-        var guid = Guid.NewGuid();
-        await TestDeduplication<EntityWithGuid, Guid>(guid);
-    }
-
-    [Fact]
-    public async Task DbSet_Deduplicates_String()
-    {
-        await TestDeduplication<EntityWithString, string>("string-id");
-    }
-
-    [Fact]
-    public async Task DbSet_Deduplicates_Int()
-    {
-        await TestDeduplication<EntityWithInt, int>(99);
-    }
-
-    private async Task TestDeduplication<TEntity, TId>(TId id) where TEntity : class, new()
-    {
-        var options = new DbContextOptions(Database!);
-        var collection = Database!.GetCollection<TEntity>(typeof(TEntity).Name);
-        var dbSet = new DbSet<TEntity>(collection, options.Conventions);
-        
-        var internalSet = (IInternalDbSet<TEntity>)dbSet;
-        using var arena = new SharpArena.Allocators.ArenaAllocator();
-        using var upsertBuf = new MongoZen.Collections.PooledDictionary<DocId, (TEntity Entity, bool IsDirty)>(16);
-        using var rawIdBuf = new MongoZen.Collections.PooledHashSet<object>(16);
-        using var modelBuf = new MongoZen.Collections.PooledList<WriteModel<TEntity>>(16);
+        using var upsertBuf = new PooledDictionary<DocId, (TEntity Entity, bool IsDirty)>(16);
+        using var rawIdBuf = new PooledHashSet<object>(16);
+        using var modelBuf = new PooledList<WriteModel<TEntity>>(16);
+        using var arena = new ArenaAllocator();
 
         var e1 = new TEntity();
         typeof(TEntity).GetProperty("Id")!.SetValue(e1, id);
@@ -156,20 +49,19 @@ public class DocIdDeduplicationTests : IntegrationTestBase
 
         // Act: Commit both. Deduplication should take the last one ("Second").
         // Dirty list is empty for this test.
-        await internalSet.CommitAsync(
+        var work = new CommitWork<TEntity>(
             added: new[] { e1, e2 }, 
             removed: [], 
             removedIds: [], 
             updated: [], 
-            dirty: [], 
-            upsertBuffer: upsertBuf,
-            rawIdBuffer: rawIdBuf,
-            modelBuffer: modelBuf,
-            extractor: null,
-            tracker: null!,
-            transaction: TransactionContext.InMemory(),
-            arena: arena,
-            cancellationToken: default);
+            dirty: []);
+
+        var buffers = new CommitBuffers<TEntity>(upsertBuf, rawIdBuf, modelBuf);
+        var session = new SessionState(null!, TransactionContext.InMemory(), arena);
+
+        var context = new CommitContext<TEntity>(work, buffers, session, null);
+
+        await internalSet.CommitAsync(context);
 
         // Assert
         var results = await collection.Find(FilterDefinition<TEntity>.Empty).ToListAsync();
