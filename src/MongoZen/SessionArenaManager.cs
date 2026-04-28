@@ -1,39 +1,39 @@
 using SharpArena.Allocators;
+using System.Collections.Concurrent;
 
 namespace MongoZen;
 
 internal class SessionArenaManager : IDisposable
 {
+    private static readonly ConcurrentStack<ArenaAllocator> Pool = new();
+
     public ArenaAllocator Current { get; private set; }
-    public ArenaAllocator Next { get; private set; }
     public int Generation { get; private set; }
 
     public SessionArenaManager()
     {
-        Current = new ArenaAllocator();
-        Next = new ArenaAllocator();
+        if (!Pool.TryPop(out var arena))
+        {
+            arena = new ArenaAllocator();
+        }
+        Current = arena;
     }
 
     public void IncrementGeneration() => Generation++;
 
-    public void SwapAndResetNext()
-    {
-        var temp = Current;
-        Current = Next;
-        Next = temp;
-        Next.Reset();
-    }
-
     public void ResetAll()
     {
         Current.Reset();
-        Next.Reset();
         Generation++;
     }
 
     public void Dispose()
     {
-        Current.Dispose();
-        Next.Dispose();
+        if (Current != null)
+        {
+            Current.Reset();
+            Pool.Push(Current);
+            Current = null!;
+        }
     }
 }

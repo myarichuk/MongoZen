@@ -18,6 +18,9 @@ public interface IMutableDbSet<T> : IDbSet<T> where T : class
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     void Remove(object id);
 
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    void Remove(in DocId id);
+
     /// <summary>
     /// RavenDB-compatible alias for Add.
     /// </summary>
@@ -32,6 +35,11 @@ public interface IMutableDbSet<T> : IDbSet<T> where T : class
     /// RavenDB-compatible alias for Remove.
     /// </summary>
     void Delete(object id);
+
+    /// <summary>
+    /// RavenDB-compatible alias for Remove.
+    /// </summary>
+    void Delete(in DocId id);
 
     new ValueTask<T?> LoadAsync(object id, CancellationToken cancellationToken = default);
 

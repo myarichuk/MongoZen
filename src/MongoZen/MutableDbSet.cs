@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using MongoDB.Bson;
@@ -12,10 +13,12 @@ namespace MongoZen;
 
 public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanced<TEntity>, IInternalMutableDbSet where TEntity : class
 {
-    private readonly IDbSet<TEntity> _dbSet;
+    private static readonly ConcurrentDictionary<(string MemberName, Type IncludeType, Type ContextType), (BsonDocument Lookup, string AsField)> _lookupCache = new();
+    private IDbSet<TEntity> _dbSet;
     private readonly Func<TransactionContext>? _transactionProvider;
     private readonly ISessionTracker? _tracker;
     private readonly Func<TEntity, object?> _idAccessor;
+    private readonly Func<TEntity, DocId> _docIdAccessor;
     private readonly string _idFieldName;
     private readonly Conventions _conventions;
 
@@ -24,38 +27,35 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     private readonly Func<TEntity, IntPtr, UpdateDefinition<TEntity>?>? _extractor;
     private readonly Func<TEntity, TEntity> _trackSingleDelegate;
 
-    private PooledHashSet<TEntity> _added;
+    private PooledDictionary<DocId, TEntity> _added;
     private PooledList<TEntity> _removed;
     private PooledList<object> _removedIds;
-    private PooledHashSet<TEntity> _updated;
     private PooledList<(LambdaExpression Path, Type IncludeType)> _includes;
 
-    private PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> _upsertBuffer;
-    private PooledHashSet<object> _rawIdBuffer;
-    private PooledList<WriteModel<TEntity>> _modelBuffer;
+    private CommitBuffers<TEntity>? _buffers;
     private PooledList<TEntity> _dirtyBuffer;
 
     public IMutableDbSetAdvanced<TEntity> Advanced => this;
+
+    public void Rebind(object baseSet)
+    {
+        _dbSet = (IDbSet<TEntity>)baseSet;
+    }
 
     public MutableDbSet(IDbSet<TEntity> baseSet, Conventions conventions)
     {
         _dbSet = baseSet ?? throw new ArgumentNullException(nameof(baseSet));
         _conventions = conventions ?? throw new ArgumentNullException(nameof(conventions));
         _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
+        _docIdAccessor = EntityIdAccessor<TEntity>.GetDocIdAccessor(_conventions.IdConvention);
         _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
         _trackSingleDelegate = TrackSingle;
-        
-        // Initialize pooled collections with reference equality where needed
-        _added = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
-        _removed = new PooledList<TEntity>(8);
-        _removedIds = new PooledList<object>(8);
-        _updated = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
-        _includes = new PooledList<(LambdaExpression Path, Type IncludeType)>(4);
 
-        _upsertBuffer = new PooledDictionary<DocId, (TEntity Entity, bool IsDirty)>(16);
-        _rawIdBuffer = new PooledHashSet<object>(16);
-        _modelBuffer = new PooledList<WriteModel<TEntity>>(16);
-        _dirtyBuffer = new PooledList<TEntity>(16);
+        _added = new PooledDictionary<DocId, TEntity>();
+        _removed = new PooledList<TEntity>();
+        _removedIds = new PooledList<object>();
+        _includes = new PooledList<(LambdaExpression Path, Type IncludeType)>();
+        _dirtyBuffer = new PooledList<TEntity>();
     }
 
     public MutableDbSet(
@@ -75,16 +75,20 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _extractor = extractor;
     }
 
+    private CommitBuffers<TEntity> Buffers => _buffers ??= new CommitBuffers<TEntity>(
+        new PooledDictionary<DocId, (TEntity Entity, bool IsDirty)>(16),
+        new PooledHashSet<object>(16),
+        new PooledList<WriteModel<TEntity>>(16));
+
     public void Dispose()
     {
         _added.Dispose();
         _removed.Dispose();
         _removedIds.Dispose();
-        _updated.Dispose();
         _includes.Dispose();
-        _upsertBuffer.Dispose();
-        _rawIdBuffer.Dispose();
-        _modelBuffer.Dispose();
+        _buffers?.UpsertBuffer.Dispose();
+        _buffers?.RawIdBuffer.Dispose();
+        _buffers?.ModelBuffer.Dispose();
         _dirtyBuffer.Dispose();
     }
 
@@ -93,49 +97,90 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     public void Add(TEntity entity)
     {
         _conventions.IdGenerator.AssignId(entity, _dbSet.CollectionName, _conventions.IdConvention);
-        _added.Add(entity);
-        var id = _idAccessor(entity);
-        if (id != null && _materializer != null && _differ != null)
+        var docId = entity.GetDocId(_docIdAccessor);
+        if (docId != default)
         {
-            _tracker?.Track(entity, id, _materializer, _differ, forceShadow: false);
+            _added[docId] = entity;
+            if (_materializer != null && _differ != null)
+            {
+                _tracker?.Track(entity, docId, _materializer, _differ, forceShadow: false);
+            }
+        }
+        else
+        {
+            // Fallback for entities where ID cannot be determined yet (rare with AssignId)
+            // We use the object itself as a temporary key if we MUST, but DocId.From(entity)
+            // will just return Bson hash.
+            _added[DocId.From(entity)] = entity;
         }
     }
 
     public void Attach(TEntity entity)
     {
-        var id = _idAccessor(entity);
-        if (id == null) throw new InvalidOperationException("Cannot attach an entity without an ID.");
+        var docId = entity.GetDocId(_docIdAccessor);
+        if (docId == default) throw new InvalidOperationException("Cannot attach an entity without an ID.");
         if (_materializer != null && _differ != null)
         {
-            _tracker?.Track(entity, id, _materializer, _differ);
+            _tracker?.Track(entity, docId, _materializer, _differ);
         }
     }
 
     public void Remove(TEntity entity)
     {
         _removed.Add(entity);
-        var id = _idAccessor(entity);
-        if (id != null) _tracker?.Untrack<TEntity>(id);
+        var docId = entity.GetDocId(_docIdAccessor);
+        if (docId != default)
+        {
+            _tracker?.Untrack<TEntity>(docId);
+            _added.Remove(docId);
+        }
     }
 
     public void Remove(object id)
     {
         _removedIds.Add(id);
+        var docId = DocId.From(id);
+        _tracker?.Untrack<TEntity>(docId);
+        _added.Remove(docId);
+    }
+
+    public void Remove(in DocId id)
+    {
+        if (_tracker != null && _tracker.TryGetEntity<TEntity>(id, out var entity) && entity != null)
+        {
+            Remove(entity);
+            return;
+        }
+
+        var rawId = id.ToBsonValue();
+        if (rawId == null)
+        {
+             // If we have a hash (string) and it's not tracked, we can't reliably delete by DocId.
+             // But we can at least ensure it's not in our tracking maps.
+             _tracker?.Untrack<TEntity>(id);
+             _added.Remove(id);
+             throw new InvalidOperationException("Cannot remove an untracked entity by string-based DocId (hash). Use object ID instead.");
+        }
+        _removedIds.Add(BsonTypeMapper.MapToDotNetValue(rawId));
         _tracker?.Untrack<TEntity>(id);
+        _added.Remove(id);
     }
 
     public void Store(TEntity entity) => Add(entity);
     public void Delete(TEntity entity) => Remove(entity);
     public void Delete(object id) => Remove(id);
+    public void Delete(in DocId id) => Remove(id);
 
     public async ValueTask<TEntity?> LoadAsync(object id, CancellationToken cancellationToken = default)
     {
-        if (_tracker != null && _tracker.TryGetEntity<TEntity>(id, out var tracked)) return tracked;
+        var docId = DocId.From(id);
+        if (_tracker != null && _tracker.TryGetEntity<TEntity>(docId, out var tracked) && tracked != null) return tracked;
+        if (_added.TryGetValue(docId, out var added)) return added;
 
         var entity = await _dbSet.LoadAsync(id, cancellationToken);
         if (entity != null && _tracker != null && _materializer != null && _differ != null)
         {
-            return _tracker.Track(entity, id, _materializer, _differ);
+            return _tracker.Track(entity, docId, _materializer, _differ);
         }
         return entity;
     }
@@ -155,44 +200,45 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     private static Type GetIncludeType(Expression<Func<TEntity, object?>> path)
     {
         var memberExpr = path.Body as MemberExpression;
-        if (memberExpr == null && path.Body is UnaryExpression unary) memberExpr = unary.Operand as MemberExpression;
+        if (memberExpr == null && path.Body is UnaryExpression unary) memberExpr = unary.Operand as MemberExpression;    
         return memberExpr?.Type ?? throw new ArgumentException("Could not resolve include type from expression. Ensure it is a simple property access.");
     }
 
     IDbSet<TEntity> IDbSet<TEntity>.Include(Expression<Func<TEntity, object?>> path) => Include(path);
     IDbSet<TEntity> IDbSet<TEntity>.Include<TInclude>(Expression<Func<TEntity, object?>> path) where TInclude : class => Include<TInclude>(path);
 
-    public IEnumerable<TEntity> GetAdded() => _added;
+    public IEnumerable<TEntity> GetAdded() => _added.Values;
     public IEnumerable<TEntity> GetRemoved() => _removed;
-    public IEnumerable<TEntity> GetUpdated() => _updated;
+    public IEnumerable<TEntity> GetUpdated() => Enumerable.Empty<TEntity>();
 
     public void ClearTracking()
+    {
+        _added.Clear();
+        _removed.Clear();
+        _removedIds.Clear();
+        _includes.Clear();
+
+        if (_buffers != null)
+        {
+            _buffers.UpsertBuffer.Clear();
+            _buffers.RawIdBuffer.Clear();
+            _buffers.ModelBuffer.Clear();
+        }
+        _dirtyBuffer.Clear();
+    }
+
+
+    public void Reset()
     {
         _added.Dispose();
         _removed.Dispose();
         _removedIds.Dispose();
-        _updated.Dispose();
         _includes.Dispose();
-
-        _upsertBuffer.Dispose();
-        _rawIdBuffer.Dispose();
-        _modelBuffer.Dispose();
+        _buffers?.UpsertBuffer.Dispose();
+        _buffers?.RawIdBuffer.Dispose();
+        _buffers?.ModelBuffer.Dispose();
         _dirtyBuffer.Dispose();
-
-        // Re-initialize for next use
-        _added = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
-        _removed = new PooledList<TEntity>(8);
-        _removedIds = new PooledList<object>(8);
-        _updated = new PooledHashSet<TEntity>(16, ReferenceEqualityComparer.Instance);
-        _includes = new PooledList<(LambdaExpression Path, Type IncludeType)>(4);
-
-        _upsertBuffer = new PooledDictionary<DocId, (TEntity Entity, bool IsDirty)>(16);
-        _rawIdBuffer = new PooledHashSet<object>(16);
-        _modelBuffer = new PooledList<WriteModel<TEntity>>(16);
-        _dirtyBuffer = new PooledList<TEntity>(16);
     }
-
-
     void IInternalMutableDbSet.RefreshShadows(ISessionTracker tracker)
     {
         if (_materializer != null)
@@ -206,13 +252,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         _dirtyBuffer.Clear();
         if (_tracker != null)
         {
-            foreach (var d in _tracker.GetDirtyEntities<TEntity>())
-            {
-                if (!_updated.Contains(d) && !_added.Contains(d))
-                {
-                    _dirtyBuffer.Add(d);
-                }
-            }
+            _tracker.CollectDirtyEntities(_dirtyBuffer);
         }
 
         var arena = _tracker?.Arena;
@@ -225,18 +265,13 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
         try
         {
-            await ((IInternalDbSet<TEntity>)_dbSet).CommitAsync(
-                _added, 
-                _removed, 
-                _removedIds, 
-                _updated, 
-                _dirtyBuffer,
-                _upsertBuffer,
-                _rawIdBuffer,
-                _modelBuffer,
-                _extractor,
-                _tracker!,
-                transaction, arena, cancellationToken);
+            var work = new CommitWork<TEntity>(_added.Values, _removed, _removedIds, Enumerable.Empty<TEntity>(), _dirtyBuffer);
+            var buffers = Buffers; // Reuse the class-based buffers
+            var session = new SessionState(_tracker!, transaction, arena);
+
+            var context = new CommitContext<TEntity>(work, buffers, session, _extractor);
+
+            await ((IInternalDbSet<TEntity>)_dbSet).CommitAsync(context, cancellationToken);
         }
         finally
         {
@@ -279,7 +314,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
         using var pipeline = new PooledList<BsonDocument>(16);
         pipeline.Add(new BsonDocument("$match", filter.Render(new RenderArgs<TEntity>(mongoSet.Collection.DocumentSerializer, mongoSet.Collection.Settings.SerializerRegistry))));
 
-        using var includeMaps = new PooledList<(string LocalField, string ForeignCollection, string AsField, Type ForeignType)>(8);
+        using var simpleMaps = new PooledList<(string AsField, Type ForeignType)>(_includes.Count);
 
         foreach (var (path, includeType) in _includes)
         {
@@ -292,10 +327,27 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
             if (_tracker is IDbContextSession sessionTyped)
             {
-                var foreignCollection = sessionTyped.GetDbContext().GetCollectionName(foreignType);
-                var asField = $"_included_{localField}";
-                pipeline.Add(new BsonDocument("$lookup", new BsonDocument { { "from", foreignCollection }, { "localField", localField }, { "foreignField", "_id" }, { "as", asField } }));
-                includeMaps.Add((localField, foreignCollection, asField, foreignType));
+                var context = sessionTyped.GetDbContext();
+                var contextType = context.GetType();
+                var key = (localField, foreignType, contextType);
+
+                if (!_lookupCache.TryGetValue(key, out var cached))
+                {
+                    var foreignCollection = context.GetCollectionName(foreignType);
+                    var asField = $"_included_{localField}";
+                    var lookupDoc = new BsonDocument("$lookup", new BsonDocument 
+                    { 
+                        { "from", foreignCollection }, 
+                        { "localField", localField }, 
+                        { "foreignField", "_id" }, 
+                        { "as", asField } 
+                    });
+                    cached = (lookupDoc, asField);
+                    _lookupCache.TryAdd(key, cached);
+                }
+
+                pipeline.Add(cached.Lookup);
+                simpleMaps.Add((cached.AsField, foreignType));
             }
             else
             {
@@ -308,11 +360,7 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
 
         // Use the new IncludeWrappingSerializer to reduce GC pressure and avoid full AST parsing
         var innerSerializer = mongoSet.Collection.DocumentSerializer;
-        var simpleMaps = new List<(string AsField, Type ForeignType)>(includeMaps.Count);
-        foreach (var map in includeMaps) simpleMaps.Add((map.AsField, map.ForeignType));
-        
         var wrappingSerializer = new IncludeWrappingSerializer<TEntity>(innerSerializer, _tracker!, simpleMaps);
-
         var pipelineDefinition = PipelineDefinition<TEntity, TEntity>.Create(pipeline, wrappingSerializer);
 
         List<TEntity> results;
@@ -327,10 +375,10 @@ public class MutableDbSet<TEntity> : IMutableDbSet<TEntity>, IMutableDbSetAdvanc
     private TEntity TrackSingle(TEntity entity)
     {
         if (_tracker == null) return entity;
-        var id = _idAccessor(entity);
-        if (id != null && _materializer != null && _differ != null)
+        var docId = entity.GetDocId(_docIdAccessor);
+        if (docId != default && _materializer != null && _differ != null)
         {
-            return _tracker.Track(entity, id, _materializer, _differ);
+            return _tracker.Track(entity, docId, _materializer, _differ);
         }
         return entity;
     }

@@ -2,6 +2,7 @@ using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using MongoDB.Driver.GridFS;
 using MongoZen;
 using Testcontainers.MongoDb;
 
@@ -18,9 +19,11 @@ public class ComparisonBenchmarks
     private MongoClient _client = null!;
     private IMongoDatabase _database = null!;
     private IMongoCollection<BenchmarkEntity> _collection = null!;
+    private IGridFSBucket _bucket = null!;
     private BenchmarkDbContext _dbContext = null!;
     private List<BenchmarkEntity> _testData = null!;
     private List<string> _testIds = null!;
+    private byte[] _attachmentData = null!;
 
     [Params(100, 1000)]
     public int EntityCount;
@@ -73,6 +76,7 @@ public class ComparisonBenchmarks
 
         _database = _client.GetDatabase("MongoZen_Benchmarks");
         _collection = _database.GetCollection<BenchmarkEntity>("Entities");
+        _bucket = new GridFSBucket(_database);
 
         var options = new DbContextOptions(_database);
         _dbContext = new BenchmarkDbContext(options);
@@ -93,6 +97,10 @@ public class ComparisonBenchmarks
         }).ToList();
 
         _testIds = _testData.Select(e => e.Id).ToList();
+
+        // 1MB attachment for GridFS tests
+        _attachmentData = new byte[1024 * 1024];
+        new Random(42).NextBytes(_attachmentData);
     }
 
     [GlobalCleanup]
@@ -132,20 +140,29 @@ public class ComparisonBenchmarks
         _collection.InsertOne(_testData[0]);
     }
 
+    [IterationSetup(Targets = [
+        nameof(Attachments_RawDriver_GridFSBucket),
+        nameof(Attachments_MongoZen_Optimized)])]
+    public void IterationSetup_GridFS()
+    {
+        _database.DropCollection("fs.files");
+        _database.DropCollection("fs.chunks");
+    }
+
     // -------------------------------------------------------------------------
     // Insert benchmarks
     // -------------------------------------------------------------------------
 
-    [BenchmarkCategory("Insert"), Benchmark(Baseline = true)]
+    [BenchmarkCategory("Insert"), Benchmark(Baseline = true, Description = "Raw: InsertManyAsync")]
     public async Task Insert_RawDriver_Bulk()
     {
         await _collection.InsertManyAsync(_testData);
     }
 
-    [BenchmarkCategory("Insert"), Benchmark]
+    [BenchmarkCategory("Insert"), Benchmark(Description = "Zen: Store() + SaveChangesAsync (Concurrency ON)")]
     public async Task Insert_MongoZen_OptimisticConcurrency()
     {
-        await using var session = _dbContext.StartSession();
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(_dbContext);
         foreach (var entity in _testData)
         {
             session.Store(entity);
@@ -153,12 +170,12 @@ public class ComparisonBenchmarks
         await session.SaveChangesAsync();
     }
 
-    [BenchmarkCategory("Insert"), Benchmark]
+    [BenchmarkCategory("Insert"), Benchmark(Description = "Zen: Store() + SaveChangesAsync (Concurrency OFF)")]
     public async Task Insert_MongoZen_NoConcurrency()
     {
         var options = new DbContextOptions(_database, new Conventions { ConcurrencyPropertyName = null });
         var db = new BenchmarkDbContext(options);
-        await using var session = db.StartSession();
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(db);
         foreach (var entity in _testData)
         {
             session.Store(entity);
@@ -170,7 +187,7 @@ public class ComparisonBenchmarks
     // Read + modify benchmarks
     // -------------------------------------------------------------------------
 
-    [BenchmarkCategory("ReadModify"), Benchmark(Baseline = true)]
+    [BenchmarkCategory("ReadModify"), Benchmark(Baseline = true, Description = "Raw: Find + ReplaceOne (Bulk)")]
     public async Task ReadAndModify_RawDriver_Replace_NoConcurrency()
     {
         var filter = Builders<BenchmarkEntity>.Filter.In(e => e.Id, _testIds);
@@ -190,7 +207,7 @@ public class ComparisonBenchmarks
         await _collection.BulkWriteAsync(writes);
     }
 
-    [BenchmarkCategory("ReadModify"), Benchmark]
+    [BenchmarkCategory("ReadModify"), Benchmark(Description = "Raw: Find + ReplaceOne (Manual Concurrency)")]
     public async Task ReadAndModify_RawDriver_Replace_ManualConcurrency()
     {
         var filter = Builders<BenchmarkEntity>.Filter.In(e => e.Id, _testIds);
@@ -219,7 +236,7 @@ public class ComparisonBenchmarks
         }
     }
 
-    [BenchmarkCategory("ReadModify"), Benchmark]
+    [BenchmarkCategory("ReadModify"), Benchmark(Description = "Raw: Find + UpdateOne.Set (Bulk)")]
     public async Task ReadAndModify_RawDriver_Set_NoConcurrency()
     {
         var filter = Builders<BenchmarkEntity>.Filter.In(e => e.Id, _testIds);
@@ -247,7 +264,7 @@ public class ComparisonBenchmarks
         await _collection.BulkWriteAsync(writes);
     }
 
-    [BenchmarkCategory("ReadModify"), Benchmark]
+    [BenchmarkCategory("ReadModify"), Benchmark(Description = "Raw: Find + UpdateOne.Set (Manual Concurrency)")]
     public async Task ReadAndModify_RawDriver_Set_ManualConcurrency()
     {
         var filter = Builders<BenchmarkEntity>.Filter.In(e => e.Id, _testIds);
@@ -286,10 +303,10 @@ public class ComparisonBenchmarks
         }
     }
 
-    [BenchmarkCategory("ReadModify"), Benchmark]
+    [BenchmarkCategory("ReadModify"), Benchmark(Description = "Zen: Query + Auto-Shadow + SaveChangesAsync (Concurrency ON)")]
     public async Task ReadAndModify_MongoZen_Set_OptimisticConcurrency()
     {
-        await using var session = _dbContext.StartSession();
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(_dbContext);
         var entities = await session.Entities.QueryAsync(e => _testIds.Contains(e.Id));
         foreach (var entity in entities)
         {
@@ -300,12 +317,12 @@ public class ComparisonBenchmarks
         await session.SaveChangesAsync();
     }
 
-    [BenchmarkCategory("ReadModify"), Benchmark]
+    [BenchmarkCategory("ReadModify"), Benchmark(Description = "Zen: Query + Auto-Shadow + SaveChangesAsync (Concurrency OFF)")]
     public async Task ReadAndModify_MongoZen_Set_NoConcurrency()
     {
         var options = new DbContextOptions(_database, new Conventions { ConcurrencyPropertyName = null });
         var db = new BenchmarkDbContext(options);
-        await using var session = db.StartSession();
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(db);
         var entities = await session.Entities.QueryAsync(e => _testIds.Contains(e.Id));
         foreach (var entity in entities)
         {
@@ -320,7 +337,7 @@ public class ComparisonBenchmarks
     // Identity Map / repeated-read benchmarks
     // -------------------------------------------------------------------------
 
-    [BenchmarkCategory("IdentityMap"), Benchmark(Baseline = true)]
+    [BenchmarkCategory("IdentityMap"), Benchmark(Baseline = true, Description = "Raw: Load 100x (No Tracking)")]
     public async Task IdentityMap_RawDriver_NoTracking()
     {
         var id = _testIds[0];
@@ -330,14 +347,55 @@ public class ComparisonBenchmarks
         }
     }
 
-    [BenchmarkCategory("IdentityMap"), Benchmark]
+    [BenchmarkCategory("IdentityMap"), Benchmark(Description = "Zen: Load 100x (From Identity Map)")]
     public async Task IdentityMap_MongoZen_FromMemory()
     {
         var id = _testIds[0];
-        await using var session = _dbContext.StartSession();
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(_dbContext);
         for (int i = 0; i < 100; i++)
         {
             await session.Entities.LoadAsync(id);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Attachments (GridFS) benchmarks
+    // -------------------------------------------------------------------------
+
+    [BenchmarkCategory("Attachments"), Benchmark(Baseline = true, Description = "Raw: GridFSBucket Upload + Download (1MB)")]
+    public async Task Attachments_RawDriver_GridFSBucket()
+    {
+        var id = "bench/raw";
+        using (var stream = new MemoryStream(_attachmentData))
+        {
+            await _bucket.UploadFromStreamAsync(id, stream);
+        }
+
+        using (var dest = new MemoryStream())
+        {
+            await _bucket.DownloadToStreamByNameAsync(id, dest);
+        }
+    }
+
+    [BenchmarkCategory("Attachments"), Benchmark(Description = "Zen: Attachments.Store + Get (1MB, Optimized)")]
+    public async Task Attachments_MongoZen_Optimized()
+    {
+        await using var session = await BenchmarkDbContextSession.OpenSessionAsync(_dbContext);
+        var entityId = "bench/zen";
+        var name = "file.bin";
+
+        using (var stream = new MemoryStream(_attachmentData))
+        {
+            await session.Attachments.StoreAsync(entityId, name, stream);
+        }
+
+        using (var downloadStream = await session.Attachments.GetAsync(entityId, name))
+        {
+            var buffer = new byte[8192];
+            while (await downloadStream.ReadAsync(buffer, 0, buffer.Length) > 0)
+            {
+                // Simulate processing
+            }
         }
     }
 }

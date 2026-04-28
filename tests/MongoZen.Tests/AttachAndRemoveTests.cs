@@ -23,7 +23,14 @@ public class AttachAndRemoveTests : IntegrationTestBase
     // we already updated the generator. Here we test the MutableDbSet logic directly.
     private sealed class ShopContextSession : DbContextSession<ShopContext>
     {
-        public ShopContextSession(ShopContext dbContext) : base(dbContext)
+        public static async Task<ShopContextSession> OpenSessionAsync(ShopContext dbContext)
+        {
+            var session = new ShopContextSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private ShopContextSession(ShopContext dbContext) : base(dbContext)
         {
             Products = new MutableDbSet<Product>(
                 _dbContext.Products,
@@ -79,7 +86,7 @@ public class AttachAndRemoveTests : IntegrationTestBase
 
         public override async Task SaveChangesAsync(CancellationToken cancellationToken = default)
         {
-            EnsureTransactionActive();
+            await EnsureTransactionActiveAsync(cancellationToken);
             await ((IInternalMutableDbSet)Products).CommitAsync(Transaction, cancellationToken);
             await CommitTransactionAsync();
             ClearTracking();
@@ -119,7 +126,7 @@ public class AttachAndRemoveTests : IntegrationTestBase
         await Database!.GetCollection<Product>("Products").InsertOneAsync(product);
 
         // 2. Attach and modify
-        await using (var session = new ShopContextSession(ctx))
+        await using (var session = await ShopContextSession.OpenSessionAsync(ctx))
         {
             // Create a NEW instance with same ID to simulate loading from elsewhere
             var existing = new Product { Id = productId, Name = "Laptop", Price = 1000m };
@@ -142,7 +149,7 @@ public class AttachAndRemoveTests : IntegrationTestBase
         var product = new Product { Name = "Mouse", Price = 25m };
         product.Id = null!; // Clear ID to force generation
 
-        await using (var session = new ShopContextSession(ctx))
+        await using (var session = await ShopContextSession.OpenSessionAsync(ctx))
         {
             session.Add(product);
             Assert.NotNull(product.Id); // ID should be generated
@@ -164,7 +171,7 @@ public class AttachAndRemoveTests : IntegrationTestBase
         var p2 = new Product { Name = "K2" };
         await Database!.GetCollection<Product>("Products").InsertManyAsync(new[] { p1, p2 });
 
-        await using (var session = new ShopContextSession(ctx))
+        await using (var session = await ShopContextSession.OpenSessionAsync(ctx))
         {
             session.Remove(p1);
             session.Remove(p2);
@@ -182,7 +189,7 @@ public class AttachAndRemoveTests : IntegrationTestBase
         var p1 = new Product { Name = "TrackMe" };
         await Database!.GetCollection<Product>("Products").InsertOneAsync(p1);
 
-        await using (var session = new ShopContextSession(ctx))
+        await using (var session = await ShopContextSession.OpenSessionAsync(ctx))
         {
             var loaded = await session.LoadAsync<Product>(p1.Id);
             Assert.NotNull(loaded);
@@ -206,7 +213,7 @@ public class AttachAndRemoveTests : IntegrationTestBase
         var p1 = new Product { Name = "DeleteMe" };
         await Database!.GetCollection<Product>("Products").InsertOneAsync(p1);
 
-        await using (var session = new ShopContextSession(ctx))
+        await using (var session = await ShopContextSession.OpenSessionAsync(ctx))
         {
             session.Remove<Product>(p1.Id);
             await session.SaveChangesAsync();

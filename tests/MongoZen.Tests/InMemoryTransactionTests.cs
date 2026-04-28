@@ -19,7 +19,14 @@ public class InMemoryTransactionTests
 
     private sealed class TestContextSession : DbContextSession<TestContext>
     {
-        public TestContextSession(TestContext dbContext) : base(dbContext)
+        public static async Task<TestContextSession> OpenSessionAsync(TestContext dbContext)
+        {
+            var session = new TestContextSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private TestContextSession(TestContext dbContext) : base(dbContext)
         {
             var userSet = new MutableDbSet<User>(
                 _dbContext.Users,
@@ -47,6 +54,11 @@ public class InMemoryTransactionTests
             if (typeof(TEntity) == typeof(User)) Users.Remove(id);
         }
 
+        public override void Delete<TEntity>(in DocId id) where TEntity : class
+        {
+            if (typeof(TEntity) == typeof(User)) Users.Remove(id);
+        }
+
         public async ValueTask<TEntity?> LoadAsync<TEntity>(object id, System.Threading.CancellationToken cancellationToken = default) where TEntity : class
         {
             if (typeof(TEntity) == typeof(User)) return (TEntity?)(object?)await Users.LoadAsync(id, cancellationToken);
@@ -61,7 +73,7 @@ public class InMemoryTransactionTests
 
         public override async Task SaveChangesAsync(System.Threading.CancellationToken cancellationToken = default)
         {
-            EnsureTransactionActive();
+            await EnsureTransactionActiveAsync(cancellationToken);
             await ((IInternalMutableDbSet)Users).CommitAsync(Transaction, cancellationToken);
             await CommitTransactionAsync();
             ClearTracking();
@@ -76,7 +88,7 @@ public class InMemoryTransactionTests
 
         var user = new User { Name = "Initial" };
 
-        await using (var session = new TestContextSession(ctx))
+        await using (var session = await TestContextSession.OpenSessionAsync(ctx))
         {
             session.Users.Add(user);
             
@@ -98,7 +110,7 @@ public class InMemoryTransactionTests
 
         var user = new User { Name = "Aborted" };
 
-        await using (var session = new TestContextSession(ctx))
+        await using (var session = await TestContextSession.OpenSessionAsync(ctx))
         {
             session.Users.Add(user);
             await session.AbortTransactionAsync();

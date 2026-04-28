@@ -1,11 +1,14 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
 using SharpArena.Allocators;
 
 namespace MongoZen.Benchmarks;
 
 [MemoryDiagnoser]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[CategoriesColumn]
 public class ShadowGenerationBenchmarks
 {
     private readonly ArenaAllocator _arena = new();
@@ -27,7 +30,7 @@ public class ShadowGenerationBenchmarks
     [IterationCleanup]
     public void IterationCleanup() => _arena.Reset();
 
-    [Benchmark]
+    [BenchmarkCategory("Materialize"), Benchmark(Description = "Zen: Materialize Shadow (Simple Entity)")]
     public unsafe IntPtr Materialize_Simple()
     {
         var ptr = _arena.Alloc((nuint)Unsafe.SizeOf<SimpleEntity_Shadow>());
@@ -36,7 +39,7 @@ public class ShadowGenerationBenchmarks
         return (IntPtr)ptr;
     }
 
-    [Benchmark]
+    [BenchmarkCategory("DirtyCheck"), Benchmark(Description = "Zen: IsDirty Check (Simple Entity)")]
     public unsafe bool DirtyCheck_Simple()
     {
         var ptr = _arena.Alloc((nuint)Unsafe.SizeOf<SimpleEntity_Shadow>());
@@ -45,7 +48,7 @@ public class ShadowGenerationBenchmarks
         return s.IsDirty(_simple);
     }
 
-    [Benchmark]
+    [BenchmarkCategory("Materialize"), Benchmark(Description = "Zen: Materialize Shadow (Large Entity)")]
     public unsafe IntPtr Materialize_Large()
     {
         var ptr = _arena.Alloc((nuint)Unsafe.SizeOf<LargeEntity_Shadow>());
@@ -54,7 +57,7 @@ public class ShadowGenerationBenchmarks
         return (IntPtr)ptr;
     }
 
-    [Benchmark]
+    [BenchmarkCategory("DirtyCheck"), Benchmark(Description = "Zen: IsDirty Check (Large Entity)")]
     public unsafe bool DirtyCheck_Large()
     {
         var ptr = _arena.Alloc((nuint)Unsafe.SizeOf<LargeEntity_Shadow>());

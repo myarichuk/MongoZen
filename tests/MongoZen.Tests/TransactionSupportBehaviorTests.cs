@@ -18,7 +18,14 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
 
     private sealed class TestDbContextSession : DbContextSession<TestDbContext>
     {
-        public TestDbContextSession(TestDbContext dbContext)
+        public static async Task<TestDbContextSession> OpenSessionAsync(TestDbContext dbContext)
+        {
+            var session = new TestDbContextSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private TestDbContextSession(TestDbContext dbContext)
             : base(dbContext)
         {
             Users = new MutableDbSet<User>(_dbContext.Users, () => Transaction, this, null, null, null, _dbContext.Options.Conventions);
@@ -28,7 +35,7 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
 
         public async ValueTask SaveChangesAsync()
         {
-            EnsureTransactionActive();
+            await EnsureTransactionActiveAsync();
             try
             {
                 await ((IInternalMutableDbSet)Users).CommitAsync(Transaction);
@@ -50,11 +57,11 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
     }
 
     [Fact]
-    public void StartSession_Throws_When_Transactions_Unsupported()
+    public async Task StartSession_Throws_When_Transactions_Unsupported()
     {
         var ctx = new TestDbContext(new DbContextOptions(Database!, new Conventions { DisableTransactions = true }));
 
-        var ex = Assert.Throws<InvalidOperationException>(() => new TestDbContextSession(ctx));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => TestDbContextSession.OpenSessionAsync(ctx));
         Assert.Contains("Transactions not supported.", ex.Message);
     }
 
@@ -63,7 +70,7 @@ public class TransactionSupportBehaviorTests : IntegrationTestBase
     {
         var conventions = new Conventions { TransactionSupportBehavior = TransactionSupportBehavior.Simulate, DisableTransactions = true };
         var ctx = new TestDbContext(new DbContextOptions(Database!, conventions));
-        await using var session = new TestDbContextSession(ctx);
+        await using var session = await TestDbContextSession.OpenSessionAsync(ctx);
 
         session.Users.Add(new User { Id = "2", Name = "Bob" });
 

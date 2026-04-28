@@ -8,51 +8,53 @@ namespace MongoZen;
 internal interface IEntityTracker : IDisposable
 {
     void RefreshShadows(ArenaAllocator arena, int generation);
-    void TrackDynamic(object entity, object id);
-    bool TryGetEntity(object id, out object? entity);
-    bool TryGetShadowPtr(object id, out ShadowPtr shadowPtr);
-    void Untrack(object id);
+    void TrackDynamic(object entity, in DocId id);
+    bool TryGetEntity(in DocId id, out object? entity);
+    bool TryGetShadowPtr(in DocId id, out ShadowPtr shadowPtr);
+    void Untrack(in DocId id);
+    void CollectDirtyEntities<T>(PooledList<T> buffer, int currentGeneration) where T : class;
+    IEnumerable<TEntity> GetDirtyEntities<TEntity>(int currentGeneration) where TEntity : class;
+    void Reset();
 }
 
 internal class EntityTracker<TEntity> : IEntityTracker where TEntity : class
 {
     private readonly Func<TEntity, IntPtr, bool>? _differ;
     private readonly Func<TEntity, ArenaAllocator, IntPtr>? _materializer;
-    public PooledDictionary<object, (TEntity Entity, ShadowPtr ShadowPtr)> Map;
+    public PooledDictionary<DocId, (TEntity Entity, ShadowPtr ShadowPtr)> Map;
 
     public EntityTracker()
     {
-        Map = new PooledDictionary<object, (TEntity Entity, ShadowPtr ShadowPtr)>(16);
+        Map = new PooledDictionary<DocId, (TEntity Entity, ShadowPtr ShadowPtr)>();
     }
 
     public EntityTracker(Func<TEntity, IntPtr, bool>? differ, Func<TEntity, ArenaAllocator, IntPtr>? materializer)
-        : this()
     {
         _differ = differ;
         _materializer = materializer;
+        Map = new PooledDictionary<DocId, (TEntity Entity, ShadowPtr ShadowPtr)>();
     }
 
     public void RefreshShadows(ArenaAllocator arena, int generation)
     {
-        if (_materializer == null) return;
+        if (_materializer == null || Map.Count == 0) return;
 
-        foreach (var kvp in Map)
+        Map.UpdateAllValues((_, entry) =>
         {
-            var entry = kvp.Value;
             var newShadowPtr = new ShadowPtr(_materializer(entry.Entity, arena), generation);
-            Map[kvp.Key] = (entry.Entity, newShadowPtr);
-        }
+            return (entry.Entity, newShadowPtr);
+        });
     }
 
-    public void TrackDynamic(object entity, object id)
+    public void TrackDynamic(object entity, in DocId id)
     {
-        if (!Map.ContainsKey(id))
+        if (!Map.TryGetValue(id, out _))
         {
             Map[id] = ((TEntity)entity, ShadowPtr.Zero);
         }
     }
 
-    public bool TryGetEntity(object id, out object? entity)
+    public bool TryGetEntity(in DocId id, out object? entity)
     {
         if (Map.TryGetValue(id, out var entry))
         {
@@ -63,7 +65,7 @@ internal class EntityTracker<TEntity> : IEntityTracker where TEntity : class
         return false;
     }
 
-    public bool TryGetShadowPtr(object id, out ShadowPtr shadowPtr)
+    public bool TryGetShadowPtr(in DocId id, out ShadowPtr shadowPtr)
     {
         if (Map.TryGetValue(id, out var entry))
         {
@@ -74,9 +76,30 @@ internal class EntityTracker<TEntity> : IEntityTracker where TEntity : class
         return false;
     }
 
-    public void Untrack(object id) => Map.Remove(id);
+    public void Untrack(in DocId id) => Map.Remove(id);
 
-    public IEnumerable<TEntity> GetDirtyEntities(int currentGeneration)
+    public void CollectDirtyEntities<T>(PooledList<T> buffer, int currentGeneration) where T : class
+    {
+        if (_differ == null) return;
+
+        foreach (var kvp in Map)
+        {
+            var entry = kvp.Value;
+            if (entry.ShadowPtr.IsZero) continue;
+#if DEBUG
+            if (entry.ShadowPtr.Generation != currentGeneration)
+            {
+                throw new InvalidOperationException("Attempted to access a shadow pointer from a previous arena generation. This pointer is stale and unsafe to use.");
+            }
+#endif
+            if (_differ(entry.Entity, entry.ShadowPtr))
+            {
+                buffer.Add((T)(object)entry.Entity);
+            }
+        }
+    }
+
+    public IEnumerable<TActualEntity> GetDirtyEntities<TActualEntity>(int currentGeneration) where TActualEntity : class
     {
         if (_differ == null) yield break;
 
@@ -92,12 +115,12 @@ internal class EntityTracker<TEntity> : IEntityTracker where TEntity : class
 #endif
             if (_differ(entry.Entity, entry.ShadowPtr))
             {
-                yield return entry.Entity;
+                yield return (TActualEntity)(object)entry.Entity;
             }
         }
     }
 
-    public TEntity Track(TEntity entity, object id, bool forceShadow, ArenaAllocator arena, int generation)
+    public TEntity Track(TEntity entity, in DocId id, bool forceShadow, ArenaAllocator arena, int generation)
     {
         if (Map.TryGetValue(id, out var existing))
         {
@@ -112,6 +135,12 @@ internal class EntityTracker<TEntity> : IEntityTracker where TEntity : class
 
         Map[id] = (entity, shadowPtr);
         return entity;
+    }
+
+    public void Reset()
+    {
+        Map.Dispose();
+        // Map will be lazily re-initialized on next use.
     }
 
     public void Dispose() => Map.Dispose();

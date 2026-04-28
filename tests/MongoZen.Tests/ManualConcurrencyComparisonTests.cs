@@ -49,7 +49,14 @@ public class ManualConcurrencyComparisonTests : IntegrationTestBase
 
     private class TestSession : DbContextSession<TestDbContext>
     {
-        public TestSession(TestDbContext dbContext) : base(dbContext)
+        public static async Task<TestSession> OpenSessionAsync(TestDbContext dbContext)
+        {
+            var session = new TestSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private TestSession(TestDbContext dbContext) : base(dbContext)
         {
             Entities = new MutableDbSet<VersionedEntity>(
                 _dbContext.Entities,
@@ -101,7 +108,7 @@ public class ManualConcurrencyComparisonTests : IntegrationTestBase
         Assert.Equal(1, resultA.MatchedCount);
 
         // User B tries to save with MongoZen
-        await using var sessionB = new TestSession(db);
+        await using var sessionB = await TestSession.OpenSessionAsync(db);
         var bEntity = await sessionB.Entities.LoadAsync("e1");
         Assert.NotNull(bEntity);
         // We need to simulate that bEntity was loaded BEFORE User A's save

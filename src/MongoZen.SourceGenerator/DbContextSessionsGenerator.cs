@@ -85,6 +85,10 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(" : MongoZen.DbContextSession<").Append(ctxSymbol.ToDisplayString()).AppendLine(">");
         sb.Append(indent).AppendLine("{");
 
+        // Session Pool
+        sb.Append(indent2).AppendLine("private static readonly System.Collections.Concurrent.ConcurrentStack<" + ctxSymbol.Name + "Session> Pool = new();");
+        sb.AppendLine();
+
         var mutableProps = new List<(string Name, string EntityType)>();
 
         foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
@@ -97,41 +101,98 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
             }
         }
 
+        // Factory methods with pooling
+        sb.Append(indent2).Append("public static async Task<").Append(ctxSymbol.Name).Append("Session> OpenSessionAsync(")
+          .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext, CancellationToken ct = default)")
+          .Append(indent2).AppendLine("{")
+          .Append(indent2).AppendLine("    if (!Pool.TryPop(out var session))")
+          .Append(indent2).AppendLine("    {")
+          .Append(indent2).Append("        session = new ").Append(ctxSymbol.Name).AppendLine("Session(dbContext);")
+          .Append(indent2).AppendLine("    }")
+          .Append(indent2).AppendLine("    else")
+          .Append(indent2).AppendLine("    {")
+          .Append(indent2).AppendLine("        session.Rebind(dbContext, startTransaction: true);");
+          foreach (var prop in mutableProps)
+          {
+              var fieldName = $"_{char.ToLower(prop.Name[0])}{prop.Name.Substring(1)}";
+              sb.Append(indent2).Append("        if (session.").Append(fieldName).AppendLine(" != null)")
+                .Append(indent2).Append("            ((IInternalMutableDbSet)session.").Append(fieldName).Append(").Rebind(dbContext.").Append(prop.Name).AppendLine(");");
+          }
+        sb.Append(indent2).AppendLine("    }")
+          .Append(indent2).AppendLine("    await session.Advanced.InitializeAsync(ct);")
+          .Append(indent2).AppendLine("    return session;")
+          .Append(indent2).AppendLine("}");
+        sb.AppendLine();
+
+        sb.Append(indent2).Append("public static async Task<").Append(ctxSymbol.Name).Append("Session> OpenSessionAsync(")
+          .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext, bool startTransaction, CancellationToken ct = default)")
+          .Append(indent2).AppendLine("{")
+          .Append(indent2).AppendLine("    if (!Pool.TryPop(out var session))")
+          .Append(indent2).AppendLine("    {")
+          .Append(indent2).Append("        session = new ").Append(ctxSymbol.Name).AppendLine("Session(dbContext, startTransaction);")
+          .Append(indent2).AppendLine("    }")
+          .Append(indent2).AppendLine("    else")
+          .Append(indent2).AppendLine("    {")
+          .Append(indent2).AppendLine("        session.Rebind(dbContext, startTransaction);");
+          foreach (var prop in mutableProps)
+          {
+              var fieldName = $"_{char.ToLower(prop.Name[0])}{prop.Name.Substring(1)}";
+              sb.Append(indent2).Append("        if (session.").Append(fieldName).AppendLine(" != null)")
+                .Append(indent2).Append("            ((IInternalMutableDbSet)session.").Append(fieldName).Append(").Rebind(dbContext.").Append(prop.Name).AppendLine(");");
+          }
+        sb.Append(indent2).AppendLine("    }")
+          .Append(indent2).AppendLine("    await session.Advanced.InitializeAsync(ct);")
+          .Append(indent2).AppendLine("    return session;")
+          .Append(indent2).AppendLine("}");
+        sb.AppendLine();
+
+        // Pooling logic in DisposeAsync override
+        sb.Append(indent2).AppendLine("public override async ValueTask DisposeAsync()");
+        sb.Append(indent2).AppendLine("{");
+        sb.Append(indent2).AppendLine("    Reset();");
+        sb.Append(indent2).AppendLine("    Pool.Push(this);");
+        sb.Append(indent2).AppendLine("    await Task.CompletedTask; // Keep signature async");
+        sb.Append(indent2).AppendLine("}");
+        sb.AppendLine();
+
         // Constructor
-        sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
+        sb.Append(indent2).Append("internal ").Append(ctxSymbol.Name).Append("Session(")
           .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext) : this(dbContext, startTransaction: true)");
         sb.Append(indent2).AppendLine("{");
         sb.Append(indent2).AppendLine("}");
         sb.AppendLine();
-        sb.Append(indent2).Append("public ").Append(ctxSymbol.Name).Append("Session(")
+        sb.Append(indent2).Append("internal ").Append(ctxSymbol.Name).Append("Session(")
           .Append(ctxSymbol.ToDisplayString()).AppendLine(" dbContext, bool startTransaction) : base(dbContext, startTransaction)");
         sb.Append(indent2).AppendLine("{");
-        sb.Append(indent2).AppendLine("    unsafe {");
-
-        foreach (var prop in mutableProps)
-        {
-            sb.Append(indent2).Append("        ").Append(prop.Name)
-                .Append(" = new MongoZen.MutableDbSet<")
-                .Append(prop.EntityType).Append(">(")
-                .Append("Context.").Append(prop.Name).Append(", ")
-                .Append("() => Transaction, ")
-                .Append("this, ") // Pass the session as ISessionTracker
-                .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, ")
-                .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
-                .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ")
-                .Append("Context.Options.Conventions")
-                .AppendLine(");");
-            sb.Append(indent2).Append("        RegisterDbSet((MongoZen.MutableDbSet<").Append(prop.EntityType).Append(">)").Append(prop.Name).AppendLine(");");
-        }
-        sb.Append(indent2).AppendLine("    }");
         sb.Append(indent2).AppendLine("}");
         sb.AppendLine();
 
         foreach (var prop in mutableProps)
         {
-            sb.Append(indent2).Append("public MongoZen.IMutableDbSet<")
-              .Append(prop.EntityType).Append("> ")
-              .Append(prop.Name).AppendLine(" { get; }");
+            var fieldName = $"_{char.ToLower(prop.Name[0])}{prop.Name.Substring(1)}";
+            sb.Append(indent2).Append("private MongoZen.MutableDbSet<").Append(prop.EntityType).Append(">? ").Append(fieldName).AppendLine(";");
+            sb.Append(indent2).Append("public MongoZen.IMutableDbSet<").Append(prop.EntityType).Append("> ").Append(prop.Name)
+              .Append(" => ").Append(fieldName).Append(" ??= Initialize").Append(prop.Name).AppendLine("();");
+            sb.AppendLine();
+
+            sb.Append(indent2).Append("private MongoZen.MutableDbSet<").Append(prop.EntityType).Append("> Initialize").Append(prop.Name).AppendLine("()");
+            sb.Append(indent2).AppendLine("{");
+            sb.Append(indent2).AppendLine("    unsafe {");
+            sb.Append(indent2).Append("        var set = new MongoZen.MutableDbSet<")
+                .Append(prop.EntityType).Append(">(")
+                .Append("((").Append(ctxSymbol.ToDisplayString()).Append(")GetDbContext()).").Append(prop.Name).Append(", ")
+                .Append("() => Transaction, ")
+                .Append("this, ")
+                .Append("(entity, arena) => { var ptr = arena.Alloc((nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<").Append(prop.EntityType).Append("_Shadow>()); ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>(ptr); s.From(entity, arena); return unchecked((System.IntPtr)ptr); }, ")
+                .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.IsDirty(entity); }, ")
+                .Append("(entity, ptr) => { ref var s = ref System.Runtime.CompilerServices.Unsafe.AsRef<").Append(prop.EntityType).Append("_Shadow>((void*)ptr); return s.ExtractChanges(entity); }, ")
+                .Append("((").Append(ctxSymbol.ToDisplayString()).Append(")GetDbContext()).Options.Conventions")
+                .AppendLine(");");
+            sb.Append(indent2).AppendLine("        RegisterDbSet(set);");
+            sb.Append(indent2).AppendLine("        return set;");
+            sb.Append(indent2).AppendLine("    }");
+            sb.Append(indent2).AppendLine("}");
+            sb.AppendLine();
         }
 
         // RavenDB-style API
@@ -150,7 +211,13 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.AppendLine();
         sb.Append(indent2).AppendLine("public override void Delete<TEntity>(object id) where TEntity : class");
         sb.Append(indent2).AppendLine("{");
-        GenerateGenericDispatchById(sb, indent2 + "    ", mutableProps, "Delete");
+        GenerateGenericDispatchById(sb, indent2 + "    ", mutableProps, "Delete", "id");
+        sb.Append(indent2).AppendLine("}");
+
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("public override void Delete<TEntity>(in global::MongoZen.DocId id) where TEntity : class");
+        sb.Append(indent2).AppendLine("{");
+        GenerateGenericDispatchById(sb, indent2 + "    ", mutableProps, "Delete", "id");
         sb.Append(indent2).AppendLine("}");
 
         sb.AppendLine();
@@ -184,6 +251,13 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.AppendLine();
         sb.Append(indent2).AppendLine("[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]");
         sb.Append(indent2).AppendLine("public void Remove<TEntity>(object id) where TEntity : class");
+        sb.Append(indent2).AppendLine("{");
+        sb.Append(indent2).AppendLine("    Delete<TEntity>(id);");
+        sb.Append(indent2).AppendLine("}");
+
+        sb.AppendLine();
+        sb.Append(indent2).AppendLine("[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]");
+        sb.Append(indent2).AppendLine("public void Remove<TEntity>(global::MongoZen.DocId id) where TEntity : class");
         sb.Append(indent2).AppendLine("{");
         sb.Append(indent2).AppendLine("    Delete<TEntity>(id);");
         sb.Append(indent2).AppendLine("}");
@@ -234,14 +308,14 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         }
     }
 
-    private static void GenerateGenericDispatchById(StringBuilder sb, string indent, List<(string Name, string EntityType)> props, string methodName)
+    private static void GenerateGenericDispatchById(StringBuilder sb, string indent, List<(string Name, string EntityType)> props, string methodName, string argName)
     {
         for (int i = 0; i < props.Count; i++)
         {
             var prop = props[i];
             sb.Append(indent).Append(i == 0 ? "if" : "else if").Append(" (typeof(TEntity) == typeof(").Append(prop.EntityType).AppendLine("))");
             sb.Append(indent).AppendLine("{");
-            sb.Append(indent).Append("    ").Append(prop.Name).Append(".").Append(methodName).AppendLine("(id);");
+            sb.Append(indent).Append("    ").Append(prop.Name).Append(".").Append(methodName).Append("(").Append(argName).AppendLine(");");
             sb.Append(indent).AppendLine("}");
         }
         if (props.Count > 0)

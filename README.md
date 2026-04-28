@@ -2,7 +2,7 @@
 
 MongoDB is nice and all, but the driver experience in C# usually sucks. You either end up with reflection-heavy "automagical" repositories, or you're writing manual BsonDocument boilerplate for aggregation pipelines like it's 2011.
 
-Now, the idea behind **MongoZen** is to take a Mongo driver then add "Unit of Work" and "Identity Map" patterns from EF Core or RavenDB. But I wanted them to actually be fast and as MongoDB-native as possible.
+Now, the idea behind **MongoZen** is to take a Mongo driver then add "Unit of Work" and "Identity Map" patterns from EF Core or RavenDB. But I wanted them to actually be fast and as MongoDB-native as possible. It's a lean library designed to stay out of your GC's way while giving you the high-level features you actually need.
 
 ## So, why should you care?
 
@@ -11,6 +11,7 @@ Now, the idea behind **MongoZen** is to take a Mongo driver then add "Unit of Wo
 *   **Automatic Change Tracking**: Modify POCOs directly. When you call `SaveChangesAsync()`, we figure out what changed and flush it in a **single bulk write operation** per collection. Or a transaction if supported.
 *   **RavenDB-inspired API**: `Store`, `Delete`, `LoadAsync`. It's a clean API that doesn't get in your way.
 *   **In-Memory Provider**: Write tests that run fast without spinning up a Docker "testcontainer" container every time.
+*   **Lean & Performance-First**: We aren't making "zero-allocation" marketing claims, but we are religiously focused on minimizing heap churn and maximizing throughput.
 
 ## Quick Start
 
@@ -101,25 +102,28 @@ We compare MongoZen against a **hand-optimized raw driver** baseline. The goal i
 
 | Method | Category | Count | Mean | Ratio | Allocated |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **IdentityMap_MongoZen_FromMemory** | **IdentityMap** | 1000 | **4.5 ms** | **0.01** | **36 KB** |
-| IdentityMap_RawDriver_NoTracking | IdentityMap | 1000 | 671.0 ms | 1.00 | 3245 KB |
-| **ReadModify_MongoZen_Set_OptimisticConcurrency** | **ReadModify** | 1000 | **144.7 ms** | **0.33** | **14544 KB** |
-| **ReadModify_MongoZen_Set_NoConcurrency** | **ReadModify** | 1000 | **97.9 ms** | **0.22** | **6410 KB** |
-| ReadModify_RawDriver_Replace_NoConcurrency | ReadModify | 1000 | 436.3 ms | 1.00 | 7205 KB |
-| ReadModify_RawDriver_Replace_ManualConcurrency | ReadModify | 1000 | 255.0 ms | 0.58 | 9605 KB |
-| ReadModify_RawDriver_Set_NoConcurrency | ReadModify | 1000 | 320.3 ms | 0.73 | 11334 KB |
-| ReadModify_RawDriver_Set_ManualConcurrency | ReadModify | 1000 | 504.6 ms | 1.16 | 16405 KB |
-| **Insert_MongoZen_OptimisticConcurrency** | **Insert** | 1000 | **231.3 ms** | **3.38** | **1902 KB** |
-| **Insert_MongoZen_NoConcurrency** | **Insert** | 1000 | **78.7 ms** | **1.15** | **1905 KB** |
-| Insert_RawDriver_Bulk | Insert | 1000 | 68.5 ms | 1.00 | 1782 KB |
+| **Zen: Load 100x (From Identity Map)** | **IdentityMap** | 1000 | **2.1 ms** | **0.02** | **33 KB** |
+| Raw: Load 100x (No Tracking) | IdentityMap | 1000 | 139.9 ms | 1.00 | 3274 KB |
+| **Zen: Query + Auto-Shadow + SaveChanges (Concurrency ON)** | **ReadModify** | 1000 | **73.8 ms** | **0.91** | **7795 KB** |
+| **Zen: Query + Auto-Shadow + SaveChanges (Concurrency OFF)** | **ReadModify** | 1000 | **81.0 ms** | **1.00** | **6404 KB** |
+| Raw: Find + ReplaceOne (Bulk) | ReadModify | 1000 | 81.4 ms | 1.00 | 7205 KB |
+| Raw: Find + ReplaceOne (Manual Concurrency) | ReadModify | 1000 | 125.4 ms | 1.54 | 9604 KB |
+| Raw: Find + UpdateOne.Set (Bulk) | ReadModify | 1000 | 95.1 ms | 1.17 | 11334 KB |
+| Raw: Find + UpdateOne.Set (Manual Concurrency) | ReadModify | 1000 | 135.4 ms | 1.66 | 16404 KB |
+| **Zen: Store() + SaveChanges (Concurrency ON)** | **Insert** | 1000 | **36.7 ms** | **1.11** | **1899 KB** |
+| Raw: InsertManyAsync | Insert | 1000 | 33.0 ms | 1.00 | 1784 KB |
+| **Zen: Attachments.Store + Get (1MB, Optimized)** | **Attachments** | 1000 | **57.1 ms** | **0.95** | **2331 KB** |
+| Raw: GridFSBucket Upload + Download (1MB) | Attachments | 1000 | 60.1 ms | 1.00 | 6791 KB |
 
 ### What these numbers mean:
 
-1.  **IdentityMap (Repeated Reads)**: Serving data from memory is always faster than hitting the wire. MongoZen is **~150x faster** for repeated loads because it bypasses the network and serialization entirely.
-2.  **ReadAndModify (Implicit vs. Manual Optimization)**: 
-    *   **The "Convenience" Comparison**: Compare `ReadModify_RawDriver_Replace_NoConcurrency` (436ms) with `ReadModify_MongoZen_Set_NoConcurrency` (98ms). Even though MongoZen is doing the work of tracking and diffing, it is **~4.5x faster** than the "easy" Raw Driver replacement approach because it generates precise `$set` updates.
-    *   **The "Expert" Comparison**: Compare `ReadModify_RawDriver_Set_ManualConcurrency` (505ms) with `ReadModify_MongoZen_Set_OptimisticConcurrency` (145ms). MongoZen is **~3.5x faster** than a hand-written partial update with manual concurrency management. Our internal batching and unmanaged diffing engine out-performs manual boilerplate.
-3.  **Insert (The "Tracking Tax")**: There is an overhead on inserts when concurrency tracking is enabled, primarily due to the initial setup of the versioning metadata and shadow creation. However, for non-versioned entities, the overhead is manageable (79ms vs 69ms). This is a highly favorable trade-off for the performance and safety gains achieved during the rest of the entity lifecycle.
+1.  **Identity Map (Repeated Reads)**: This is where we shine. Serving data from memory is ~65x faster than hitting the wire. If you already have the data, why ask for it again?
+2.  **Read-Modify-Save (The "Smart Batching" Win)**: 
+    *   Compare `Zen (Concurrency ON)` (73.8ms) vs `Raw (Manual Concurrency)` (135.4ms). Zen is **nearly 2x faster** than manually implementing a concurrency-safe bulk update. We handle the ceremony of diffing and batching more efficiently than you would by hand.
+    *   Even without concurrency checks, Zen matches or beats raw bulk operations by using a more efficient update pipeline.
+3.  **Insert (The Complexity Tax)**: We see a ~11% overhead on simple inserts. That's the price for setting up tracking and concurrency metadata. For a single-shot insert, raw is faster, but the moment you need a Unit of Work, Zen makes that time back on the next operation.
+4.  **GridFS (Memory Efficiency)**: Zen uses **~65% less memory** than the raw GridFS bucket. By implementing intelligent chunk batching and pooling our internal `ArenaAllocator`, we've optimized for throughput while keeping the GC happy.
+5.  **Allocations**: We focus on "lean" over "zero." By using single-pass diffing and direct BSON builders, we ensure that the overhead of change tracking doesn't turn into a GC nightmare.
 
 ## More Info
 

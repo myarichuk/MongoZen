@@ -5,6 +5,7 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 using MongoZen.Collections;
+using SharpArena.Collections;
 
 // ReSharper disable ComplexConditionExpression
 
@@ -13,6 +14,7 @@ namespace MongoZen;
 public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEntity : class
 {
     private readonly Func<TEntity, object?> _idAccessor;
+    private readonly Func<TEntity, DocId> _docIdAccessor;
     private readonly string _idFieldName;
     private readonly Conventions _conventions;
     private readonly IMongoCollection<TEntity> _collection;
@@ -23,6 +25,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
     {
         _conventions = conventions ?? new();
         _idAccessor = EntityIdAccessor<TEntity>.GetAccessor(_conventions.IdConvention);
+        _docIdAccessor = EntityIdAccessor<TEntity>.GetDocIdAccessor(_conventions.IdConvention);
         _idFieldName = _conventions.IdConvention.ResolveIdProperty<TEntity>()?.Name ?? "_id";
         _collection = collection;
     }
@@ -33,17 +36,9 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         return await (await _collection.FindAsync(filter, cancellationToken: cancellationToken)).FirstOrDefaultAsync(cancellationToken);
     }
 
-    public IDbSet<TEntity> Include(Expression<Func<TEntity, object?>> path)
-    {
-        // TODO: Implement RavenDB-style Include
-        return this;
-    }
+    public IDbSet<TEntity> Include(Expression<Func<TEntity, object?>> path) => this;
 
-    public IDbSet<TEntity> Include<TInclude>(Expression<Func<TEntity, object?>> path) where TInclude : class
-    {
-        // TODO: Implement RavenDB-style Include
-        return this;
-    }
+    public IDbSet<TEntity> Include<TInclude>(Expression<Func<TEntity, object?>> path) where TInclude : class => this;
 
     public async ValueTask<IEnumerable<TEntity>> QueryAsync(FilterDefinition<TEntity> filter, CancellationToken cancellationToken = default) =>
         await (await _collection.FindAsync(filter, cancellationToken: cancellationToken)).ToListAsync(cancellationToken);
@@ -71,76 +66,74 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 
-    async ValueTask IInternalDbSet<TEntity>.CommitAsync(
-        IEnumerable<TEntity> added, 
-        IEnumerable<TEntity> removed, 
-        IEnumerable<object> removedIds, 
-        IEnumerable<TEntity> updated, 
-        IEnumerable<TEntity> dirty, 
-        PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer,
-        PooledHashSet<object> rawIdBuffer,
-        PooledList<WriteModel<TEntity>> modelBuffer,
-        Func<TEntity, IntPtr, UpdateDefinition<TEntity>?>? extractor,
-        ISessionTracker tracker,
-        TransactionContext transaction, 
-        SharpArena.Allocators.ArenaAllocator arena,
-        CancellationToken cancellationToken)
+    async ValueTask IInternalDbSet<TEntity>.CommitAsync(CommitContext<TEntity> context, CancellationToken cancellationToken)
     {
-        modelBuffer.Clear();
-        upsertBuffer.Clear();
-        rawIdBuffer.Clear();
+        context.Buffers.ModelBuffer.Clear();
+        context.Buffers.UpsertBuffer.Clear();
+        context.Buffers.RawIdBuffer.Clear();
 
-        var dedupeBuffer = new ArenaHashSet<DocId>(arena, 128);
+        var dedupeBuffer = new ArenaHashSet<DocId>(context.Session.Arena, 128);
 
         // 1. Process Removals
-        BuildDeleteModels(removed, removedIds, ref dedupeBuffer, rawIdBuffer, modelBuffer);
+        BuildDeleteModels(context.Work.Removed, context.Work.RemovedIds, ref dedupeBuffer, context.Buffers.RawIdBuffer, context.Buffers.ModelBuffer);
 
-        // 2. Process Added
-        BuildInsertModels(added, ref dedupeBuffer, upsertBuffer, modelBuffer);
-        upsertBuffer.Clear();
+        // 2. Process Added (directly to models, not upsert buffer)
+        // Use a temporary map to ensure "last one wins" for Added entities with the same ID
+        using var addedMap = new PooledDictionary<DocId, TEntity>(16);
+        foreach (var entity in context.Work.Added)
+        {
+            if (entity == null) continue;
+            var docId = entity.GetDocId(_docIdAccessor);
+            if (docId != default && !dedupeBuffer.Contains(docId))
+            {
+                addedMap.AddOrUpdate(docId, entity);
+            }
+        }
 
-        // 3. Process Updated/Dirty
-        CollectUpdates(updated, dirty, ref dedupeBuffer, upsertBuffer);
+        foreach (var kvp in addedMap)
+        {
+            context.Buffers.ModelBuffer.Add(new InsertOneModel<TEntity>(kvp.Value));
+            dedupeBuffer.Add(kvp.Key);
+        }
+
+        // 3. Process Updated/Dirty (to upsert buffer for versioning/patching)
+        CollectUpdates(context.Work.Updated, context.Work.Dirty, ref dedupeBuffer, context.Buffers.UpsertBuffer);
 
         // 4. Apply Versions and Execute
-        if (upsertBuffer.Count > 0 || modelBuffer.Count > 0)
+        if (context.Buffers.UpsertBuffer.Count > 0 || context.Buffers.ModelBuffer.Count > 0)
         {
             var versionCtx = ResolveVersionContext();
-            var versionMap = new PooledDictionary<DocId, (object RawId, long Version)>(upsertBuffer.Count);
+            var versionMap = new ArenaDictionary<DocId, long>(context.Session.Arena, context.Buffers.UpsertBuffer.Count);
             var updateCount = 0;
 
             try
             {
-                foreach (var entry in upsertBuffer)
+                foreach (var entry in context.Buffers.UpsertBuffer)
                 {
-                    var model = PrepareUpdateOrReplaceModel(entry.Key, entry.Value.Entity, entry.Value.IsDirty, versionCtx, extractor, tracker, versionMap);
-                    modelBuffer.Add(model);
-                    if (versionCtx.IsValid && model is not ReplaceOneModel<TEntity> { IsUpsert: true })
+                    var model = PrepareUpdateOrReplaceModel(entry.Key, entry.Value.Entity, entry.Value.IsDirty, versionCtx, context.Extractor, context.Session.Tracker, ref versionMap);
+                    context.Buffers.ModelBuffer.Add(model);
+                    if (versionCtx.IsValid)
                     {
                         updateCount++;
                     }
                 }
 
-                if (modelBuffer.Count == 0) return;
+                if (context.Buffers.ModelBuffer.Count == 0) return;
 
-                BulkWriteResult result = transaction.Session != null 
-                    ? await _collection.BulkWriteAsync(transaction.Session, modelBuffer, cancellationToken: cancellationToken)
-                    : await _collection.BulkWriteAsync(modelBuffer, cancellationToken: cancellationToken);
+                BulkWriteResult result = context.Session.Transaction.Session != null 
+                    ? await _collection.BulkWriteAsync(context.Session.Transaction.Session, context.Buffers.ModelBuffer, cancellationToken: cancellationToken)
+                    : await _collection.BulkWriteAsync(context.Buffers.ModelBuffer, cancellationToken: cancellationToken);
 
                 if (updateCount > 0 && result.MatchedCount < updateCount)
                 {
-                    var failedIds = await FindConcurrencyConflictsAsync(versionMap, versionCtx.ElementName!, transaction.Session, cancellationToken);
+                    var failedIds = await FindConcurrencyConflictsAsync(context.Buffers.UpsertBuffer, versionMap, versionCtx.ElementName!, context.Session.Transaction.Session, cancellationToken);
                     throw new ConcurrencyException($"Optimistic concurrency check failed. Expected {updateCount} matches, but got {result.MatchedCount}.", failedIds);
                 }
             }
             catch
             {
-                if (versionCtx.IsValid) RevertVersions(upsertBuffer, versionMap, versionCtx.Setter!);
+                if (versionCtx.IsValid) RevertVersions(context.Buffers.UpsertBuffer, versionMap, versionCtx.Setter!);
                 throw;
-            }
-            finally
-            {
-                versionMap.Dispose();
             }
         }
     }
@@ -150,10 +143,10 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         foreach (var entity in removed)
         {
             if (entity == null) continue;
-            var rawId = entity.GetId(_idAccessor);
-            if (rawId != null && dedupeBuffer.Add(DocId.From(rawId)))
+            var docId = entity.GetDocId(_docIdAccessor);
+            if (docId != default && dedupeBuffer.Add(docId))
             {
-                rawIdBuffer.Add(rawId);
+                rawIdBuffer.Add(entity.GetId(_idAccessor));
             }
         }
         foreach (var rawId in removedIds)
@@ -170,43 +163,24 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 
-    private void BuildInsertModels(IEnumerable<TEntity> added, ref ArenaHashSet<DocId> dedupeBuffer, PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer, PooledList<WriteModel<TEntity>> modelBuffer)
-    {
-        foreach (var entity in added)
-        {
-            if (entity == null) continue;
-            var rawId = entity.GetId(_idAccessor);
-            if (rawId != null && !dedupeBuffer.Contains(DocId.From(rawId)))
-            {
-                upsertBuffer.AddOrUpdate(DocId.From(rawId), (entity, false));
-            }
-        }
-
-        foreach (var entry in upsertBuffer)
-        {
-            modelBuffer.Add(new InsertOneModel<TEntity>(entry.Value.Entity));
-            dedupeBuffer.Add(entry.Key); 
-        }
-    }
-
     private void CollectUpdates(IEnumerable<TEntity> updated, IEnumerable<TEntity> dirty, ref ArenaHashSet<DocId> dedupeBuffer, PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer)
     {
         foreach (var entity in updated)
         {
             if (entity == null) continue;
-            var rawId = entity.GetId(_idAccessor);
-            if (rawId != null && !dedupeBuffer.Contains(DocId.From(rawId)))
+            var docId = entity.GetDocId(_docIdAccessor);
+            if (docId != default && !dedupeBuffer.Contains(docId))
             {
-                upsertBuffer.AddOrUpdate(DocId.From(rawId), (entity, false));
+                upsertBuffer.AddOrUpdate(docId, (entity, false));
             }
         }
         foreach (var entity in dirty)
         {
             if (entity == null) continue;
-            var rawId = entity.GetId(_idAccessor);
-            if (rawId != null && !dedupeBuffer.Contains(DocId.From(rawId)))
+            var docId = entity.GetDocId(_docIdAccessor);
+            if (docId != default && !dedupeBuffer.Contains(docId))
             {
-                upsertBuffer.AddOrUpdate(DocId.From(rawId), (entity, true));
+                upsertBuffer.AddOrUpdate(docId, (entity, true));
             }
         }
     }
@@ -218,7 +192,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         VersionContext versionCtx,
         Func<TEntity, IntPtr, UpdateDefinition<TEntity>?>? extractor,
         ISessionTracker tracker,
-        PooledDictionary<DocId, (object RawId, long Version)> versionMap)
+        ref ArenaDictionary<DocId, long> versionMap)
     {
         var rawId = entity.GetId(_idAccessor);
         var filter = Builders<TEntity>.Filter.Eq(_idFieldName, rawId);
@@ -226,13 +200,13 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         if (versionCtx.IsValid && rawId != null)
         {
             var currentVersion = versionCtx.Getter!(entity);
-            versionMap[docId] = (rawId, currentVersion);
+            versionMap.AddOrUpdate(docId, currentVersion);
 
             filter = Builders<TEntity>.Filter.And(filter, Builders<TEntity>.Filter.Eq(versionCtx.ElementName!, currentVersion));
             versionCtx.Setter!(entity, currentVersion + 1);
 
             UpdateDefinition<TEntity>? update = null;
-            if (isDirty && extractor != null && tracker != null && tracker.TryGetShadowPtr<TEntity>(rawId, out var shadowPtr))
+            if (isDirty && extractor != null && tracker != null && tracker.TryGetShadowPtr<TEntity>(docId, out var shadowPtr))
             {
                 update = extractor(entity, shadowPtr);
             }
@@ -263,25 +237,33 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         return new VersionContext(getter, setter, elementName);
     }
 
-    private void RevertVersions(PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer, PooledDictionary<DocId, (object RawId, long Version)> versionMap, Action<TEntity, long> versionSetter)
+    private void RevertVersions(PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer, ArenaDictionary<DocId, long> versionMap, Action<TEntity, long> versionSetter)
     {
         foreach (var entry in upsertBuffer)
         {
             var entity = entry.Value.Entity;
-            var rawId = entity.GetId(_idAccessor);
-            if (rawId != null && versionMap.TryGetValue(DocId.From(rawId), out var original))
+            if (versionMap.TryGetValue(entry.Key, out var originalVersion))
             {
-                versionSetter(entity, original.Version);
+                versionSetter(entity, originalVersion);
             }
         }
     }
 
-    private async Task<List<object>> FindConcurrencyConflictsAsync(PooledDictionary<DocId, (object RawId, long Version)> versionMap, string concurrencyElementName, IClientSessionHandle? session, CancellationToken ct)
+    private async Task<List<object>> FindConcurrencyConflictsAsync(
+        PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer,
+        ArenaDictionary<DocId, long> versionMap, 
+        string concurrencyElementName, 
+        IClientSessionHandle? session, 
+        CancellationToken ct)
     {
         var ids = new List<object>(versionMap.Count);
         foreach (var kvp in versionMap)
         {
-            ids.Add(kvp.Value.RawId);
+            if (upsertBuffer.TryGetValue(kvp.Key, out var entry))
+            {
+                var id = entry.Entity.GetId(_idAccessor);
+                if (id != null) ids.Add(id);
+            }
         }
 
         var projection = Builders<TEntity>.Projection.Include(_idFieldName).Include(concurrencyElementName);
@@ -300,12 +282,16 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var docId = DocId.From(rawIdFromDb);
             foundIds.Add(docId);
 
-            if (versionMap.TryGetValue(docId, out var expected))
+            if (versionMap.TryGetValue(docId, out var expectedVersion))
             {
                 var actualVersion = BsonTypeMapper.MapToDotNetValue(doc[concurrencyElementName]);
-                if (Convert.ToInt64(actualVersion) != expected.Version)
+                if (Convert.ToInt64(actualVersion) != expectedVersion)
                 {
-                    conflicts.Add(expected.RawId);
+                    if (upsertBuffer.TryGetValue(docId, out var entry))
+                    {
+                        var id = entry.Entity.GetId(_idAccessor);
+                        if (id != null) conflicts.Add(id);
+                    }
                 }
             }
         }
@@ -314,7 +300,11 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         {
             if (!foundIds.Contains(entry.Key))
             {
-                conflicts.Add(entry.Value.RawId);
+                if (upsertBuffer.TryGetValue(entry.Key, out var upsertEntry))
+                {
+                    var id = upsertEntry.Entity.GetId(_idAccessor);
+                    if (id != null) conflicts.Add(id);
+                }
             }
         }
 

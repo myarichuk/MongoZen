@@ -20,7 +20,7 @@ public class DbContextSessionTests : IntegrationTestBase
     private sealed class TestDbContextSession(TestDbContext dbContext, bool startTransaction = true)
         : DbContextSession<TestDbContext>(dbContext, startTransaction)
     {
-        public void ExposeEnsureTransactionActive() => EnsureTransactionActive();
+        public Task ExposeEnsureTransactionActiveAsync() => EnsureTransactionActiveAsync();
     }
 
     [Fact]
@@ -28,6 +28,7 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         await using var session = new TestDbContextSession(ctx);
+        await session.Advanced.InitializeAsync();
 
         Assert.True(session.Transaction.IsActive);
         Assert.True(session.Transaction.IsInMemoryTransaction);
@@ -38,6 +39,7 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         var session = new TestDbContextSession(ctx);
+        await session.Advanced.InitializeAsync();
 
         await session.DisposeAsync();
 
@@ -50,6 +52,7 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         await using var session = new TestDbContextSession(ctx);
+        await session.Advanced.InitializeAsync();
 
         Assert.True(session.Transaction.IsActive);
         await session.AbortTransactionAsync();
@@ -62,14 +65,15 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         await using var session = new TestDbContextSession(ctx);
+        await session.Advanced.InitializeAsync();
 
         Assert.True(session.Transaction.IsActive);
         await session.CommitTransactionAsync();
 
         // For in-memory, we currently just set _inMemoryTransaction = false.
-        // It restarts on next EnsureTransactionActive() call.
+        // It restarts on next EnsureTransactionActiveAsync() call.
         Assert.False(session.Transaction.IsActive);
-        session.ExposeEnsureTransactionActive();
+        await session.ExposeEnsureTransactionActiveAsync();
         Assert.True(session.Transaction.IsActive);
     }
 
@@ -78,11 +82,12 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         await using var session = new TestDbContextSession(ctx);
+        await session.Advanced.InitializeAsync();
 
         await session.CommitTransactionAsync();
 
         // Should NOT throw anymore as we support session reuse
-        session.ExposeEnsureTransactionActive();
+        await session.ExposeEnsureTransactionActiveAsync();
         Assert.True(session.Transaction.IsActive);
     }
 
@@ -95,7 +100,7 @@ public class DbContextSessionTests : IntegrationTestBase
 
         Assert.Throws<NotSupportedException>(() => session.Store(user));
         Assert.Throws<NotSupportedException>(() => session.Delete(user));
-        Assert.Throws<NotSupportedException>(() => session.Delete<User>("123"));
+        Assert.Throws<NotSupportedException>(() => session.Delete<User>(DocId.From("123")));
     }
 
     [Fact]
@@ -104,7 +109,7 @@ public class DbContextSessionTests : IntegrationTestBase
         var ctx = new TestDbContext(new DbContextOptions());
         var session = new TestDbContextSession(ctx);
         var user = new User { Name = "Oren" };
-        var id = "user/1";
+        var id = DocId.From("user/1");
 
         // Manual track (infrastructure use)
         var tracked = session.Track(user, id, (u, a) => IntPtr.Zero, (u, p) => false);
@@ -120,7 +125,7 @@ public class DbContextSessionTests : IntegrationTestBase
         var ctx = new TestDbContext(new DbContextOptions());
         var session = new TestDbContextSession(ctx);
         var user = new User { Name = "Oren" };
-        var id = "user/1";
+        var id = DocId.From("user/1");
 
         // TrackDynamic is used when we don't have the shadow logic yet (e.g. Include)
         session.TrackDynamic(user, typeof(User), id);
@@ -135,7 +140,7 @@ public class DbContextSessionTests : IntegrationTestBase
         var ctx = new TestDbContext(new DbContextOptions());
         var session = new TestDbContextSession(ctx);
         var user = new User { Name = "Oren" };
-        var id = "user/1";
+        var id = DocId.From("user/1");
 
         session.TrackDynamic(user, typeof(User), id);
         session.Untrack<User>(id);
@@ -148,11 +153,11 @@ public class DbContextSessionTests : IntegrationTestBase
     {
         var ctx = new TestDbContext(new DbContextOptions());
         var session = new TestDbContextSession(ctx);
-        session.TrackDynamic(new User(), typeof(User), "1");
+        session.TrackDynamic(new User(), typeof(User), DocId.From("1"));
 
         session.Advanced.ClearTracking();
 
-        Assert.False(session.TryGetEntity<User>("1", out _));
+        Assert.False(session.TryGetEntity<User>(DocId.From("1"), out _));
     }
 
     [Fact]
@@ -163,7 +168,7 @@ public class DbContextSessionTests : IntegrationTestBase
         var user = new User { Name = "Oren" };
         
         // Track with shadow pointer (simulated) and a differ that always returns true
-        session.Track(user, "1", (u, a) => (IntPtr)1, (u, p) => true, forceShadow: true);
+        session.Track(user, DocId.From("1"), (u, a) => (IntPtr)1, (u, p) => true, forceShadow: true);
 
         var dirty = session.GetDirtyEntities<User>().ToList();
         Assert.Single(dirty);
@@ -178,9 +183,9 @@ public class DbContextSessionTests : IntegrationTestBase
         var user = new User { Name = "Oren" };
         IntPtr expectedPtr = unchecked((IntPtr)0xDEADBEEF);
         
-        session.Track(user, "1", (u, a) => expectedPtr, (u, p) => false, forceShadow: true);
+        session.Track(user, DocId.From("1"), (u, a) => expectedPtr, (u, p) => false, forceShadow: true);
 
-        Assert.True(session.TryGetShadowPtr<User>("1", out var shadowPtr));
+        Assert.True(session.TryGetShadowPtr<User>(DocId.From("1"), out var shadowPtr));
         Assert.Equal(expectedPtr, (IntPtr)shadowPtr);
     }
 }

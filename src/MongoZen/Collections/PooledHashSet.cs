@@ -5,7 +5,7 @@ using System.Runtime.CompilerServices;
 namespace MongoZen.Collections;
 
 /// <summary>
-/// A zero-allocation hash set struct that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
+/// A lean hash set class that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
 /// Uses open-addressing with linear probing. MUST be disposed.
 /// </summary>
 public class PooledHashSet<T> : IDisposable, IEnumerable<T>
@@ -14,9 +14,11 @@ public class PooledHashSet<T> : IDisposable, IEnumerable<T>
     private byte[]? _occupied; // 0 = empty, 1 = occupied
     private int _count;
     private int _capacityMask;
-    private readonly IEqualityComparer<T> _comparer;
+    private readonly IEqualityComparer<T>? _comparer;
 
-    public PooledHashSet(int initialCapacity = 16, IEqualityComparer<T>? comparer = null)
+    public PooledHashSet() : this(16) { }
+
+    public PooledHashSet(int initialCapacity, IEqualityComparer<T>? comparer = null)
     {
         int cap = NextPowerOfTwo(initialCapacity);
         _slots = ArrayPool<T>.Shared.Rent(cap);
@@ -25,13 +27,25 @@ public class PooledHashSet<T> : IDisposable, IEnumerable<T>
         
         _capacityMask = cap - 1;
         _count = 0;
-        _comparer = comparer ?? EqualityComparer<T>.Default;
+        _comparer = comparer;
     }
+
+    public PooledHashSet(IEqualityComparer<T> comparer)
+    {
+        _slots = null;
+        _occupied = null;
+        _count = 0;
+        _capacityMask = 0;
+        _comparer = comparer;
+    }
+
+    private IEqualityComparer<T> Comparer => _comparer ?? EqualityComparer<T>.Default;
 
     public int Count => _count;
 
     public bool Add(T item)
     {
+        if (_slots == null) Initialize(16);
         var slots = _slots!;
         if (_count * 100 >= slots.Length * 70)
         {
@@ -39,12 +53,12 @@ public class PooledHashSet<T> : IDisposable, IEnumerable<T>
             slots = _slots!;
         }
 
-        int hashCode = _comparer.GetHashCode(item!);
+        int hashCode = Comparer.GetHashCode(item!);
         int slot = hashCode & _capacityMask;
 
         while (_occupied![slot] != 0)
         {
-            if (_comparer.Equals(slots[slot], item))
+            if (Comparer.Equals(slots[slot], item))
                 return false;
             slot = (slot + 1) & _capacityMask;
         }
@@ -55,16 +69,26 @@ public class PooledHashSet<T> : IDisposable, IEnumerable<T>
         return true;
     }
 
+    private void Initialize(int capacity)
+    {
+        int cap = NextPowerOfTwo(capacity);
+        _slots = ArrayPool<T>.Shared.Rent(cap);
+        _occupied = ArrayPool<byte>.Shared.Rent(cap);
+        Array.Clear(_occupied, 0, cap);
+        _capacityMask = cap - 1;
+        _count = 0;
+    }
+
     public bool Contains(T item)
     {
         if (_count == 0 || _slots == null) return false;
 
-        int hashCode = _comparer.GetHashCode(item!);
+        int hashCode = Comparer.GetHashCode(item!);
         int slot = hashCode & _capacityMask;
 
         while (_occupied![slot] != 0)
         {
-            if (_comparer.Equals(_slots![slot], item))
+            if (Comparer.Equals(_slots![slot], item))
                 return true;
             slot = (slot + 1) & _capacityMask;
         }

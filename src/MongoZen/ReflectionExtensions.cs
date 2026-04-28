@@ -24,6 +24,19 @@ internal static class ReflectionExtensions
     }
 
     /// <summary>
+    /// Extracts the Id as a DocId from an entity using the given accessor delegate, throwing if not found.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DocId GetDocId<TEntity>([DisallowNull] this TEntity obj, Func<TEntity, DocId> idAccessor)
+    {
+        ArgumentNullException.ThrowIfNull(obj);
+        var id = idAccessor(obj);
+        if (id == default) throw new InvalidOperationException(
+            $"Object of type {obj.GetType().Name} doesn't expose an Id.");
+        return id;
+    }
+
+    /// <summary>
     /// Extracts the Id from an entity using the given accessor delegate, throwing if not found.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

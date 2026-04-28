@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 namespace MongoZen.Collections;
 
 /// <summary>
-/// A zero-allocation dictionary struct that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
+/// A lean dictionary class that rents its storage from <see cref="ArrayPool{T}.Shared"/>.
 /// Uses open-addressing with linear probing. MUST be disposed.
 /// </summary>
 public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValuePair<TKey, TValue>>
@@ -21,9 +21,11 @@ public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValueP
     private byte[]? _occupied;
     private int _count;
     private int _capacityMask;
-    private readonly IEqualityComparer<TKey> _comparer;
+    private readonly IEqualityComparer<TKey>? _comparer;
 
-    public PooledDictionary(int initialCapacity = 16, IEqualityComparer<TKey>? comparer = null)
+    public PooledDictionary() : this(16) { }
+
+    public PooledDictionary(int initialCapacity, IEqualityComparer<TKey>? comparer = null)
     {
         int cap = NextPowerOfTwo(initialCapacity);
         _entries = ArrayPool<Entry>.Shared.Rent(cap);
@@ -32,8 +34,19 @@ public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValueP
 
         _capacityMask = cap - 1;
         _count = 0;
-        _comparer = comparer ?? EqualityComparer<TKey>.Default;
+        _comparer = comparer;
     }
+
+    public PooledDictionary(IEqualityComparer<TKey> comparer)
+    {
+        _entries = null;
+        _occupied = null;
+        _count = 0;
+        _capacityMask = 0;
+        _comparer = comparer;
+    }
+
+    private IEqualityComparer<TKey> Comparer => _comparer ?? EqualityComparer<TKey>.Default;
 
     public int Count => _count;
 
@@ -49,19 +62,14 @@ public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValueP
 
     public void AddOrUpdate(TKey key, TValue value)
     {
+        if (_entries == null) Initialize(16);
         var entries = _entries!;
-        if (_count * 100 >= entries.Length * 70)
-        {
-            Grow();
-            entries = _entries!;
-        }
-
-        int hashCode = _comparer.GetHashCode(key!);
+        int hashCode = Comparer.GetHashCode(key!);
         int slot = hashCode & _capacityMask;
 
         while (_occupied![slot] != 0)
         {
-            if (_comparer.Equals(entries[slot].Key, key))
+            if (Comparer.Equals(entries[slot].Key, key))
             {
                 entries[slot].Value = value;
                 return;
@@ -69,9 +77,46 @@ public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValueP
             slot = (slot + 1) & _capacityMask;
         }
 
+        // It's a new key, check if we need to grow
+        if (_count * 100 >= entries.Length * 70)
+        {
+            Grow();
+            entries = _entries!;
+            _capacityMask = entries.Length - 1;
+            slot = hashCode & _capacityMask;
+
+            // Re-find the slot after grow
+            while (_occupied![slot] != 0)
+            {
+                slot = (slot + 1) & _capacityMask;
+            }
+        }
+
         entries[slot] = new Entry { Key = key, Value = value };
         _occupied[slot] = 1;
         _count++;
+    }
+
+    private void Initialize(int capacity)
+    {
+        int cap = NextPowerOfTwo(capacity);
+        _entries = ArrayPool<Entry>.Shared.Rent(cap);
+        _occupied = ArrayPool<byte>.Shared.Rent(cap);
+        Array.Clear(_occupied, 0, cap);
+        _capacityMask = cap - 1;
+        _count = 0;
+    }
+
+    public void UpdateAllValues(Func<TKey, TValue, TValue> transform)
+    {
+        if (_entries == null) return;
+        for (int i = 0; i < _entries.Length; i++)
+        {
+            if (_occupied![i] != 0)
+            {
+                _entries[i].Value = transform(_entries[i].Key, _entries[i].Value);
+            }
+        }
     }
 
     public bool TryGetValue(TKey key, [MaybeNullWhen(false)] out TValue value)
@@ -82,12 +127,12 @@ public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValueP
             return false;
         }
 
-        int hashCode = _comparer.GetHashCode(key!);
+        int hashCode = Comparer.GetHashCode(key!);
         int slot = hashCode & _capacityMask;
 
         while (_occupied![slot] != 0)
         {
-            if (_comparer.Equals(_entries![slot].Key, key))
+            if (Comparer.Equals(_entries![slot].Key, key))
             {
                 value = _entries[slot].Value;
                 return true;
@@ -101,16 +146,18 @@ public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValueP
 
     public bool ContainsKey(TKey key) => TryGetValue(key, out _);
 
+    public IEnumerable<TValue> Values => this.Select(kvp => kvp.Value);
+
     public bool Remove(TKey key)
     {
         if (_count == 0 || _entries == null) return false;
 
-        int hashCode = _comparer.GetHashCode(key!);
+        int hashCode = Comparer.GetHashCode(key!);
         int slot = hashCode & _capacityMask;
 
         while (_occupied![slot] != 0)
         {
-            if (_comparer.Equals(_entries![slot].Key, key))
+            if (Comparer.Equals(_entries![slot].Key, key))
             {
                 // Simple linear probing removal is tricky. 
                 // We'll use the "re-hash subsequent" approach for correctness.

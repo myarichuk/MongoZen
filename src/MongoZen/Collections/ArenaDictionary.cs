@@ -187,6 +187,8 @@ public unsafe struct ArenaDictionary<TKey, TValue>
             return ++_index < _count;
         }
 
+        public readonly KeyValuePair<TKey, TValue> Current => new(_entries[_index].Key, _entries[_index].Value);
+
         public readonly TKey Key => _entries[_index].Key;
         public readonly TValue Value => _entries[_index].Value;
     }

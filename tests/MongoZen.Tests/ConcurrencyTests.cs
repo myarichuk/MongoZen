@@ -45,7 +45,14 @@ public class ConcurrencyTests : IntegrationTestBase
 
     private class MyDbContextSession : DbContextSession<MyDbContext>
     {
-        public MyDbContextSession(MyDbContext dbContext) : base(dbContext)
+        public static async Task<MyDbContextSession> OpenSessionAsync(MyDbContext dbContext)
+        {
+            var session = new MyDbContextSession(dbContext);
+            await session.Advanced.InitializeAsync();
+            return session;
+        }
+
+        private MyDbContextSession(MyDbContext dbContext) : base(dbContext)
         {
             People = new MutableDbSet<Person>(
                 _dbContext.People,
@@ -76,15 +83,15 @@ public class ConcurrencyTests : IntegrationTestBase
         var db = new MyDbContext(new DbContextOptions(Database!));
 
         // 1. Initial setup
-        await using (var session = new MyDbContextSession(db))
+        await using (var session = await MyDbContextSession.OpenSessionAsync(db))
         {
             session.People.Add(new Person { Id = "p1", Name = "Alice", Version = 1 });
             await session.SaveChangesAsync();
         }
 
         // 2. Load in two concurrent sessions
-        await using var session1 = new MyDbContextSession(db);
-        await using var session2 = new MyDbContextSession(db);
+        await using var session1 = await MyDbContextSession.OpenSessionAsync(db);
+        await using var session2 = await MyDbContextSession.OpenSessionAsync(db);
 
         var p1 = await session1.People.LoadAsync("p1");
         var p2 = await session2.People.LoadAsync("p1");
@@ -113,19 +120,19 @@ public class ConcurrencyTests : IntegrationTestBase
         var db = new MyDbContext(new DbContextOptions(Database!));
 
         // 1. Initial setup
-        await using (var session = new MyDbContextSession(db))
+        await using (var session = await MyDbContextSession.OpenSessionAsync(db))
         {
             session.People.Add(new Person { Id = "p1", Name = "Alice", Version = 1 });
             await session.SaveChangesAsync();
         }
 
         // 2. Load in one session
-        await using var session1 = new MyDbContextSession(db);
+        await using var session1 = await MyDbContextSession.OpenSessionAsync(db);
         var p1 = await session1.People.LoadAsync("p1");
         Assert.NotNull(p1);
 
         // 3. Delete in another session
-        await using (var session2 = new MyDbContextSession(db))
+        await using (var session2 = await MyDbContextSession.OpenSessionAsync(db))
         {
             session2.People.Delete("p1");
             await session2.SaveChangesAsync();
@@ -146,15 +153,15 @@ public class ConcurrencyTests : IntegrationTestBase
         var db = new MyDbContext(options);
 
         // 1. Initial setup
-        await using (var session = new MyDbContextSession(db))
+        await using (var session = await MyDbContextSession.OpenSessionAsync(db))
         {
             session.People.Add(new Person { Id = "p1", Name = "Alice", Version = 1 });
             await session.SaveChangesAsync();
         }
 
         // 2. Load in two concurrent sessions
-        await using var session1 = new MyDbContextSession(db);
-        await using var session2 = new MyDbContextSession(db);
+        await using var session1 = await MyDbContextSession.OpenSessionAsync(db);
+        await using var session2 = await MyDbContextSession.OpenSessionAsync(db);
 
         var p1 = await session1.People.LoadAsync("p1");
         var p2 = await session2.People.LoadAsync("p1");

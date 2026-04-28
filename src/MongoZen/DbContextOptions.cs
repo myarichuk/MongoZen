@@ -24,6 +24,11 @@ public class DbContextOptions
     public IMongoDatabase? Mongo { get; init; }
 
     /// <summary>
+    /// Gets or sets the options for GridFS.
+    /// </summary>
+    public MongoDB.Driver.GridFS.GridFSBucketOptions? GridFSOptions { get; set; }
+
+    /// <summary>
     /// Gets or sets whether to automatically create indexes defined in index tasks.
     /// </summary>
     public bool AutoCreateIndexes { get; set; } = false;
