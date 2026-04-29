@@ -77,10 +77,10 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
         else
         {
             session.Rebind(dbContext, startTransaction: true);
-            if (_blogs != null)
-                ((IInternalMutableDbSet)_blogs).Rebind(dbContext.Blogs);
-            if (_posts != null)
-                ((IInternalMutableDbSet)_posts).Rebind(dbContext.Posts);
+            if (session._blogs != null)
+                ((IInternalMutableDbSet)session._blogs).Rebind(dbContext.Blogs);
+            if (session._posts != null)
+                ((IInternalMutableDbSet)session._posts).Rebind(dbContext.Posts);
         }
         await session.Advanced.InitializeAsync(ct);
         return session;
@@ -95,10 +95,10 @@ public sealed class BloggingContextSession : MongoZen.DbContextSession<BloggingC
         else
         {
             session.Rebind(dbContext, startTransaction);
-            if (_blogs != null)
-                ((IInternalMutableDbSet)_blogs).Rebind(dbContext.Blogs);
-            if (_posts != null)
-                ((IInternalMutableDbSet)_posts).Rebind(dbContext.Posts);
+            if (session._blogs != null)
+                ((IInternalMutableDbSet)session._blogs).Rebind(dbContext.Blogs);
+            if (session._posts != null)
+                ((IInternalMutableDbSet)session._posts).Rebind(dbContext.Posts);
         }
         await session.Advanced.InitializeAsync(ct);
         return session;
@@ -374,8 +374,8 @@ namespace MyNamespace
             else
             {
                 session.Rebind(dbContext, startTransaction: true);
-                if (_users != null)
-                    ((IInternalMutableDbSet)_users).Rebind(dbContext.Users);
+                if (session._users != null)
+                    ((IInternalMutableDbSet)session._users).Rebind(dbContext.Users);
             }
             await session.Advanced.InitializeAsync(ct);
             return session;
@@ -390,8 +390,8 @@ namespace MyNamespace
             else
             {
                 session.Rebind(dbContext, startTransaction);
-                if (_users != null)
-                    ((IInternalMutableDbSet)_users).Rebind(dbContext.Users);
+                if (session._users != null)
+                    ((IInternalMutableDbSet)session._users).Rebind(dbContext.Users);
             }
             await session.Advanced.InitializeAsync(ct);
             return session;

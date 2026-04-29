@@ -89,17 +89,27 @@ public sealed class DbContextSessionsGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("private static readonly System.Collections.Concurrent.ConcurrentStack<" + ctxSymbol.Name + "Session> Pool = new();");
         sb.AppendLine();
 
-        var mutableProps = new List<(string Name, string EntityType)>();
+        var mutablePropsMap = new Dictionary<string, string>();
 
-        foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
+        var current = ctxSymbol;
+        while (current != null && current.Name != "DbContext")
         {
-            if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
-                (namedType.Name == IDbSet || namedType.Name == IMutableDbSet))
+            foreach (var member in current.GetMembers().OfType<IPropertySymbol>())
             {
-                var entityType = namedType.TypeArguments[0].ToDisplayString();
-                mutableProps.Add((member.Name, entityType));
+                if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
+                    (namedType.Name == IDbSet || namedType.Name == IMutableDbSet))
+                {
+                    if (!mutablePropsMap.ContainsKey(member.Name))
+                    {
+                        var entityType = namedType.TypeArguments[0].ToDisplayString();
+                        mutablePropsMap.Add(member.Name, entityType);
+                    }
+                }
             }
+            current = current.BaseType;
         }
+
+        var mutableProps = mutablePropsMap.Select(kvp => (Name: kvp.Key, EntityType: kvp.Value)).ToList();
 
         // Factory methods with pooling
         sb.Append(indent2).Append("public static async Task<").Append(ctxSymbol.Name).Append("Session> OpenSessionAsync(")
