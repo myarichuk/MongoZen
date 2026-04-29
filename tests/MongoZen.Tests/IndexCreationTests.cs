@@ -47,6 +47,24 @@ public class IndexCreationTests : IntegrationTestBase
         public TestDbContext(DbContextOptions options) : base(options)
         {
         }
+
+        protected override void InitializeDbSets()
+        {
+            if (Options.UseInMemory)
+            {
+                IndexedEntities = new InMemoryDbSet<IndexedEntity>("IndexedEntities", Options.Conventions);
+            }
+            else
+            {
+                IndexedEntities = new DbSet<IndexedEntity>(Options.Mongo!.GetCollection<IndexedEntity>("IndexedEntities"), Options.Conventions);
+            }
+        }
+
+        public override string GetCollectionName(Type entityType)
+        {
+            if (entityType == typeof(IndexedEntity)) return "IndexedEntities";
+            throw new ArgumentException();
+        }
     }
 
     [Fact]

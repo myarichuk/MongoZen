@@ -34,6 +34,20 @@ public class PolymorphismTests : IntegrationTestBase
     private class TestDbContext(DbContextOptions options) : DbContext(options)
     {
         public IDbSet<Zoo> Zoos { get; set; } = null!;
+
+        protected override void InitializeDbSets()
+        {
+            if (Options.UseInMemory)
+                Zoos = new InMemoryDbSet<Zoo>("Zoos", Options.Conventions);
+            else
+                Zoos = new DbSet<Zoo>(Options.Mongo!.GetCollection<Zoo>("Zoos"), Options.Conventions);
+        }
+
+        public override string GetCollectionName(Type entityType)
+        {
+            if (entityType == typeof(Zoo)) return "Zoos";
+            throw new ArgumentException();
+        }
     }
 
     private class TestSession : DbContextSession<TestDbContext>

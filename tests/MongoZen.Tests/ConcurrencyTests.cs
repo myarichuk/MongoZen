@@ -41,6 +41,24 @@ public class ConcurrencyTests : IntegrationTestBase
     {
         public IDbSet<Person> People { get; set; } = null!;
         public MyDbContext(DbContextOptions options) : base(options) { }
+
+        protected override void InitializeDbSets()
+        {
+            if (Options.UseInMemory)
+            {
+                People = new InMemoryDbSet<Person>("People", Options.Conventions);
+            }
+            else
+            {
+                People = new DbSet<Person>(Options.Mongo!.GetCollection<Person>("People"), Options.Conventions);
+            }
+        }
+
+        public override string GetCollectionName(Type entityType)
+        {
+            if (entityType == typeof(Person)) return "People";
+            throw new ArgumentException();
+        }
     }
 
     private class MyDbContextSession : DbContextSession<MyDbContext>
@@ -189,3 +207,4 @@ public class ConcurrencyTests : IntegrationTestBase
         Assert.Equal("p1", ex.FailedIds[0]);
     }
 }
+

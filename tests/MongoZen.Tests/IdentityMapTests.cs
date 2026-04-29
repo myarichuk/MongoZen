@@ -39,6 +39,24 @@ public class IdentityMapTests : IntegrationTestBase
     private partial class TestDbContext(DbContextOptions options) : DbContext(options)
     {
         public IDbSet<User> Users { get; set; } = null!;
+
+        protected override void InitializeDbSets()
+        {
+            if (Options.UseInMemory)
+            {
+                Users = new InMemoryDbSet<User>("Users", Options.Conventions);
+            }
+            else
+            {
+                Users = new DbSet<User>(Options.Mongo!.GetCollection<User>("Users"), Options.Conventions);
+            }
+        }
+
+        public override string GetCollectionName(Type entityType)
+        {
+            if (entityType == typeof(User)) return "Users";
+            throw new ArgumentException();
+        }
     }
 
     private sealed class TestDbContextSession : DbContextSession<TestDbContext>
@@ -173,3 +191,4 @@ public class IdentityMapTests : IntegrationTestBase
         }
     }
 }
+
