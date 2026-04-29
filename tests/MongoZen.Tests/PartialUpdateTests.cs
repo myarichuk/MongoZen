@@ -1,4 +1,5 @@
 using MongoDB.Driver;
+using SharpArena.Collections;
 using MongoZen.Collections;
 using SharpArena.Allocators;
 using Xunit;
@@ -109,6 +110,20 @@ public class PartialUpdateIntegrationTests : IntegrationTestBase
     private class TestDbContext(DbContextOptions options) : DbContext(options)
     {
         public IDbSet<ComplexEntity> Entities { get; set; } = null!;
+
+        protected override void InitializeDbSets()
+        {
+            if (Options.UseInMemory)
+                Entities = new InMemoryDbSet<ComplexEntity>("Entities", Options.Conventions);
+            else
+                Entities = new DbSet<ComplexEntity>(Options.Mongo!.GetCollection<ComplexEntity>("Entities"), Options.Conventions);
+        }
+
+        public override string GetCollectionName(Type entityType)
+        {
+            if (entityType == typeof(ComplexEntity)) return "Entities";
+            throw new ArgumentException();
+        }
     }
 
     private class TestSession : DbContextSession<TestDbContext>
@@ -200,3 +215,4 @@ public class PartialUpdateIntegrationTests : IntegrationTestBase
         Assert.Equal(new[] { 1, 2 }, fresh.Scores);
     }
 }
+

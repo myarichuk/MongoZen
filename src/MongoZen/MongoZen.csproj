@@ -21,7 +21,7 @@
   <ItemGroup>
     <!-- Reference MongoDB Driver -->
     <PackageReference Include="MongoDB.Driver" Version="3.3.0" />
-    <PackageReference Include="SharpArena" Version="0.7.21" />
+    <PackageReference Include="SharpArena" Version="0.8.0" />
     <PackageReference Include="System.IO.Hashing" Version="10.0.7" />
     <!-- resolve CVE-2026-26171 -->
     <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.6">

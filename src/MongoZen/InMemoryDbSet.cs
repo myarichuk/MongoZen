@@ -3,6 +3,7 @@ using System.Linq.Expressions;
 using MongoDB.Driver;
 using MongoZen.Collections;
 using SharpArena.Allocators;
+using SharpArena.Collections;
 
 namespace MongoZen;
 
@@ -109,7 +110,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
         context.Buffers.UpsertBuffer.Clear();
         context.Buffers.RawIdBuffer.Clear();
 
-        var dedupeBuffer = new ArenaHashSet<DocId>(context.Session.Arena, 128);
+        var dedupeBuffer = new ArenaSet<DocId>(context.Session.Arena, 128);
         var versionGetter = ConcurrencyVersionAccessor<T>.GetGetter(_conventions.ConcurrencyPropertyName);
         var versionSetter = ConcurrencyVersionAccessor<T>.GetSetter(_conventions.ConcurrencyPropertyName);
 
@@ -172,7 +173,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
             if (id == null) continue;
             var docId = DocId.From(id);
             if (!dedupeBuffer.Contains(docId))
-                context.Buffers.UpsertBuffer.AddOrUpdate(docId, (entity, false));
+                context.Buffers.UpsertBuffer[docId] = (entity, false);
         }
         foreach (var entity in context.Work.Dirty)
         {
@@ -181,7 +182,7 @@ public class InMemoryDbSet<T> : IDbSet<T>, IInternalDbSet<T> where T : class
             if (id == null) continue;
             var docId = DocId.From(id);
             if (!dedupeBuffer.Contains(docId))
-                context.Buffers.UpsertBuffer.AddOrUpdate(docId, (entity, true));
+                context.Buffers.UpsertBuffer[docId] = (entity, true);
         }
 
         var conflicts = new List<object>();

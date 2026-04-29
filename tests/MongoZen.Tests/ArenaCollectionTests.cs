@@ -1,5 +1,6 @@
 using System;
 using SharpArena.Allocators;
+using SharpArena.Collections;
 using MongoZen.Collections;
 using Xunit;
 
@@ -8,10 +9,10 @@ namespace MongoZen.Tests;
 public class ArenaCollectionTests
 {
     [Fact]
-    public void ArenaHashSet_BasicOperations()
+    public void ArenaSet_BasicOperations()
     {
         using var arena = new ArenaAllocator();
-        var set = new ArenaHashSet<int>(arena, 8);
+        var set = new ArenaSet<int>(arena, 8);
 
         Assert.True(set.Add(1));
         Assert.True(set.Add(2));
@@ -31,10 +32,10 @@ public class ArenaCollectionTests
     }
 
     [Fact]
-    public void ArenaHashSet_Growth()
+    public void ArenaSet_Growth()
     {
         using var arena = new ArenaAllocator();
-        var set = new ArenaHashSet<int>(arena, 8);
+        var set = new ArenaSet<int>(arena, 8);
 
         for (int i = 0; i < 100; i++)
         {
@@ -90,10 +91,10 @@ public class ArenaCollectionTests
     }
 
     [Fact]
-    public void ArenaHashSet_DocId_Support()
+    public void ArenaSet_DocId_Support()
     {
         using var arena = new ArenaAllocator();
-        var set = new ArenaHashSet<DocId>(arena, 8);
+        var set = new ArenaSet<DocId>(arena, 8);
 
         var id1 = DocId.From("id-1");
         var id2 = DocId.From("id-2");
@@ -105,3 +106,5 @@ public class ArenaCollectionTests
         Assert.True(set.Contains(id1));
     }
 }
+
+
