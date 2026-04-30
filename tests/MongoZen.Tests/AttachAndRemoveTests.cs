@@ -16,6 +16,24 @@ public class AttachAndRemoveTests : IntegrationTestBase
     public partial class ShopContext(DbContextOptions options) : DbContext(options)
     {
         public IDbSet<Product> Products { get; set; } = null!;
+
+        protected override void InitializeDbSets()
+        {
+            if (Options.UseInMemory)
+            {
+                Products = new InMemoryDbSet<Product>("Products", Options.Conventions);
+            }
+            else
+            {
+                Products = new DbSet<Product>(Options.Mongo!.GetCollection<Product>("Products"), Options.Conventions);
+            }
+        }
+
+        public override string GetCollectionName(Type entityType)
+        {
+            if (entityType == typeof(Product)) return "Products";
+            throw new ArgumentException();
+        }
     }
 
     // Hand-written session to simulate what the generator would produce
@@ -223,3 +241,4 @@ public class AttachAndRemoveTests : IntegrationTestBase
         Assert.Equal(0, count);
     }
 }
+

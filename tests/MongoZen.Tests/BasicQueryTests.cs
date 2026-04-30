@@ -4,9 +4,9 @@ using MongoZen;
 
 namespace MongoZen.Tests;
 
-public class BasicQueryTests : IntegrationTestBase
+public partial class BasicQueryTests : IntegrationTestBase
 {
-    private class User
+    public class User
     {
         [BsonId]
         public string Id { get; set; } = null!;
@@ -14,11 +14,6 @@ public class BasicQueryTests : IntegrationTestBase
         public string? Name { get; set; }
 
         public int Age { get; set; }
-    }
-
-    private class TestDbContext(DbContextOptions options) : DbContext(options)
-    {
-        public IDbSet<User> Users { get; set; } = null!;
     }
 
     private async Task<IEnumerable<User>> InsertTestUsersAsync()
@@ -110,4 +105,38 @@ public class BasicQueryTests : IntegrationTestBase
         Assert.Single(result);
         Assert.Equal("Bob", result.First().Name);
     }
+
+    private partial class User_For_TestDbContext
+    {
+        [BsonId]
+        public string Id { get; set; } = null!;
+
+        public string? Name { get; set; }
+
+        public int Age { get; set; }
+    }
 }
+
+internal partial class TestDbContext(DbContextOptions options) : DbContext(options)
+{
+    public IDbSet<BasicQueryTests.User> Users { get; set; } = null!;
+
+    protected override void InitializeDbSets()
+    {
+        if (Options.UseInMemory)
+        {
+            Users = new InMemoryDbSet<BasicQueryTests.User>("Users", Options.Conventions);
+        }
+        else
+        {
+            Users = new DbSet<BasicQueryTests.User>(Options.Mongo!.GetCollection<BasicQueryTests.User>("Users"), Options.Conventions);
+        }
+    }
+
+    public override string GetCollectionName(Type entityType)
+    {
+        if (entityType == typeof(BasicQueryTests.User)) return "Users";
+        throw new ArgumentException();
+    }
+}
+

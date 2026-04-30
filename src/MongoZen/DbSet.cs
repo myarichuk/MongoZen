@@ -72,7 +72,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         context.Buffers.UpsertBuffer.Clear();
         context.Buffers.RawIdBuffer.Clear();
 
-        var dedupeBuffer = new ArenaHashSet<DocId>(context.Session.Arena, 128);
+        var dedupeBuffer = new ArenaSet<DocId>(context.Session.Arena, 128);
 
         // 1. Process Removals
         BuildDeleteModels(context.Work.Removed, context.Work.RemovedIds, ref dedupeBuffer, context.Buffers.RawIdBuffer, context.Buffers.ModelBuffer);
@@ -86,7 +86,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var docId = entity.GetDocId(_docIdAccessor);
             if (docId != default && !dedupeBuffer.Contains(docId))
             {
-                addedMap.AddOrUpdate(docId, entity);
+                addedMap[docId] = entity;
             }
         }
 
@@ -138,7 +138,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 
-    private void BuildDeleteModels(IEnumerable<TEntity> removed, IEnumerable<object> removedIds, ref ArenaHashSet<DocId> dedupeBuffer, PooledHashSet<object> rawIdBuffer, PooledList<WriteModel<TEntity>> modelBuffer)
+    private void BuildDeleteModels(IEnumerable<TEntity> removed, IEnumerable<object> removedIds, ref ArenaSet<DocId> dedupeBuffer, PooledHashSet<object> rawIdBuffer, PooledList<WriteModel<TEntity>> modelBuffer)
     {
         foreach (var entity in removed)
         {
@@ -163,7 +163,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         }
     }
 
-    private void CollectUpdates(IEnumerable<TEntity> updated, IEnumerable<TEntity> dirty, ref ArenaHashSet<DocId> dedupeBuffer, PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer)
+    private void CollectUpdates(IEnumerable<TEntity> updated, IEnumerable<TEntity> dirty, ref ArenaSet<DocId> dedupeBuffer, PooledDictionary<DocId, (TEntity Entity, bool IsDirty)> upsertBuffer)
     {
         foreach (var entity in updated)
         {
@@ -171,7 +171,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var docId = entity.GetDocId(_docIdAccessor);
             if (docId != default && !dedupeBuffer.Contains(docId))
             {
-                upsertBuffer.AddOrUpdate(docId, (entity, false));
+                upsertBuffer[docId] = (entity, false);
             }
         }
         foreach (var entity in dirty)
@@ -180,7 +180,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
             var docId = entity.GetDocId(_docIdAccessor);
             if (docId != default && !dedupeBuffer.Contains(docId))
             {
-                upsertBuffer.AddOrUpdate(docId, (entity, true));
+                upsertBuffer[docId] = (entity, true);
             }
         }
     }
@@ -200,7 +200,7 @@ public class DbSet<TEntity> : IDbSet<TEntity>, IInternalDbSet<TEntity> where TEn
         if (versionCtx.IsValid && rawId != null)
         {
             var currentVersion = versionCtx.Getter!(entity);
-            versionMap.AddOrUpdate(docId, currentVersion);
+            versionMap[docId] = currentVersion;
 
             filter = Builders<TEntity>.Filter.And(filter, Builders<TEntity>.Filter.Eq(versionCtx.ElementName!, currentVersion));
             versionCtx.Setter!(entity, currentVersion + 1);

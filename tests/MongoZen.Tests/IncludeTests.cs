@@ -24,6 +24,27 @@ public class IncludeTests : IntegrationTestBase
     {
         public IDbSet<Customer> Customers { get; set; } = null!;
         public IDbSet<Order> Orders { get; set; } = null!;
+
+        protected override void InitializeDbSets()
+        {
+            if (Options.UseInMemory)
+            {
+                Customers = new InMemoryDbSet<Customer>("Customers", Options.Conventions);
+                Orders = new InMemoryDbSet<Order>("Orders", Options.Conventions);
+            }
+            else
+            {
+                Customers = new DbSet<Customer>(Options.Mongo!.GetCollection<Customer>("Customers"), Options.Conventions);
+                Orders = new DbSet<Order>(Options.Mongo!.GetCollection<Order>("Orders"), Options.Conventions);
+            }
+        }
+
+        public override string GetCollectionName(Type entityType)
+        {
+            if (entityType == typeof(Customer)) return "Customers";
+            if (entityType == typeof(Order)) return "Orders";
+            throw new ArgumentException();
+        }
     }
 
     private sealed class TestContextSession : DbContextSession<TestContext>

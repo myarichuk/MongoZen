@@ -45,6 +45,20 @@ public class ManualConcurrencyComparisonTests : IntegrationTestBase
     {
         public IDbSet<VersionedEntity> Entities { get; set; } = null!;
         public TestDbContext(DbContextOptions options) : base(options) { }
+
+        protected override void InitializeDbSets()
+        {
+            if (Options.UseInMemory)
+                Entities = new InMemoryDbSet<VersionedEntity>("Entities", Options.Conventions);
+            else
+                Entities = new DbSet<VersionedEntity>(Options.Mongo!.GetCollection<VersionedEntity>("Entities"), Options.Conventions);
+        }
+
+        public override string GetCollectionName(Type entityType)
+        {
+            if (entityType == typeof(VersionedEntity)) return "Entities";
+            throw new ArgumentException();
+        }
     }
 
     private class TestSession : DbContextSession<TestDbContext>
@@ -131,3 +145,4 @@ public class ManualConcurrencyComparisonTests : IntegrationTestBase
         Assert.Equal(2, final.Version);
     }
 }
+

@@ -109,15 +109,13 @@ public sealed class DbContextInitializerGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("    if (Options.UseInMemory)");
         sb.Append(indent2).AppendLine("    {");
         
-        foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
+        var allProps = GetAllDbSetProperties(ctxSymbol);
+
+        foreach (var prop in allProps)
         {
-            if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
-                (namedType.Name == "IDbSet" || namedType.AllInterfaces.Any(i => i.Name == "IDbSet")))
-            {
-                var entityType = namedType.TypeArguments[0].ToDisplayString();
-                sb.Append(indent2).Append("        this.").Append(member.Name)
-                  .Append(" = new MongoZen.InMemoryDbSet<").Append(entityType).Append(">(\"").Append(member.Name).AppendLine("\", Options.Conventions);");
-            }
+            var entityType = ((INamedTypeSymbol)prop.Type).TypeArguments[0].ToDisplayString();
+            sb.Append(indent2).Append("        this.").Append(prop.Name)
+                .Append(" = new MongoZen.InMemoryDbSet<").Append(entityType).Append(">(\"").Append(prop.Name).AppendLine("\", Options.Conventions);");
         }
         
         sb.Append(indent2).AppendLine("    }");
@@ -125,15 +123,11 @@ public sealed class DbContextInitializerGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("    {");
         sb.Append(indent2).AppendLine("        if (Options.Mongo == null) throw new System.InvalidOperationException(\"Mongo database not configured.\");");
 
-        foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
+        foreach (var prop in allProps)
         {
-            if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
-                (namedType.Name == "IDbSet" || namedType.AllInterfaces.Any(i => i.Name == "IDbSet")))
-            {
-                var entityType = namedType.TypeArguments[0].ToDisplayString();
-                sb.Append(indent2).Append("        this.").Append(member.Name)
-                  .Append(" = new MongoZen.DbSet<").Append(entityType).Append(">(Options.Mongo.GetCollection<").Append(entityType).Append(">(\"").Append(member.Name).AppendLine("\"), Options.Conventions);");
-            }
+            var entityType = ((INamedTypeSymbol)prop.Type).TypeArguments[0].ToDisplayString();
+            sb.Append(indent2).Append("        this.").Append(prop.Name)
+                .Append(" = new MongoZen.DbSet<").Append(entityType).Append(">(Options.Mongo.GetCollection<").Append(entityType).Append(">(\"").Append(prop.Name).AppendLine("\"), Options.Conventions);");
         }
         
         sb.Append(indent2).AppendLine("    }");
@@ -145,17 +139,13 @@ public sealed class DbContextInitializerGenerator : IIncrementalGenerator
         sb.Append(indent2).AppendLine("    return entityType switch");
         sb.Append(indent2).AppendLine("    {");
 
-        foreach (var member in ctxSymbol.GetMembers().OfType<IPropertySymbol>())
+        foreach (var prop in allProps)
         {
-            if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
-                (namedType.Name == "IDbSet" || namedType.AllInterfaces.Any(i => i.Name == "IDbSet")))
-            {
-                var entityType = namedType.TypeArguments[0].ToDisplayString();
-                sb.Append(indent2).Append("        var t when t == typeof(").Append(entityType).Append(") => \"").Append(member.Name).AppendLine("\",");
-            }
+            var entityType = ((INamedTypeSymbol)prop.Type).TypeArguments[0].ToDisplayString();
+            sb.Append(indent2).Append("        var t when t == typeof(").Append(entityType).Append(") => \"").Append(prop.Name).AppendLine("\",");
         }
 
-        sb.Append(indent2).AppendLine("        _ => base.GetCollectionName(entityType)");
+        sb.Append(indent2).AppendLine("        _ => throw new System.ArgumentException($\"Entity type {entityType.Name} is not registered in this DbContext.\")");
         sb.Append(indent2).AppendLine("    };");
         sb.Append(indent2).AppendLine("}");
 
@@ -168,4 +158,24 @@ public sealed class DbContextInitializerGenerator : IIncrementalGenerator
 
         return sb.ToString();
     }
+
+    private static List<IPropertySymbol> GetAllDbSetProperties(INamedTypeSymbol ctxSymbol)
+    {
+        var props = new List<IPropertySymbol>();
+        var current = ctxSymbol;
+        while (current != null && current.Name != "DbContext")
+        {
+            foreach (var member in current.GetMembers().OfType<IPropertySymbol>())
+            {
+                if (member.Type is INamedTypeSymbol { IsGenericType: true } namedType &&
+                    (namedType.Name == "IDbSet" || namedType.AllInterfaces.Any(i => i.Name == "IDbSet")))
+                {
+                    props.Add(member);
+                }
+            }
+            current = current.BaseType;
+        }
+        return props;
+    }
 }
+

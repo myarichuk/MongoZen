@@ -1,5 +1,6 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
+using SharpArena.Collections;
 using MongoZen.Collections;
 using SharpArena.Allocators;
 
@@ -42,10 +43,10 @@ public class ArenaCollectionBenchmarks
         return count;
     }
 
-    [BenchmarkCategory("HashSet"), Benchmark(Description = "Zen: ArenaHashSet<int> (Zero-GC)")]
-    public int ArenaHashSet_Int()
+    [BenchmarkCategory("HashSet"), Benchmark(Description = "Zen: ArenaSet<int> (Zero-GC)")]
+    public int ArenaSet_Int()
     {
-        var set = new ArenaHashSet<int>(_arena, ItemCount);
+        var set = new ArenaSet<int>(_arena, ItemCount);
         foreach (var i in _data) set.Add(i);
         int count = 0;
         foreach (var i in _data) if (set.Contains(i)) count++;
@@ -99,3 +100,5 @@ public class ArenaCollectionBenchmarks
         return sum;
     }
 }
+
+

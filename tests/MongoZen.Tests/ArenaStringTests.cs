@@ -1,6 +1,8 @@
+using SharpArena.Collections;
 using MongoZen.Collections;
 using SharpArena.Allocators;
 using Xunit;
+using System.Runtime.InteropServices;
 
 namespace MongoZen.Tests;
 
@@ -41,11 +43,13 @@ public class ArenaStringTests
         using var arena = new ArenaAllocator();
         var arenaString = ArenaString.Clone(s, arena);
 
-        var expectedBytes = System.Text.Encoding.UTF8.GetBytes(s);
-        var expectedHash64 = System.IO.Hashing.XxHash3.HashToUInt64(expectedBytes);
-        int expectedHash32 = (int)expectedHash64 ^ (int)(expectedHash64 >> 32);
+        // SharpArena uses System.HashCode on UTF-16 bytes
+        var hash = new HashCode();
+        hash.Add(s.Length);
+        hash.AddBytes(MemoryMarshal.AsBytes(s.AsSpan()));
+        int expectedHash = hash.ToHashCode();
 
-        Assert.Equal(expectedHash32, arenaString.GetHashCode());
-        Assert.Equal(ArenaString.GetHashCode(s), arenaString.GetHashCode());
+        Assert.Equal(expectedHash, arenaString.GetHashCode());
+        Assert.Equal(ArenaExtensions.GetHashCode(s), arenaString.GetHashCode());
     }
 }
