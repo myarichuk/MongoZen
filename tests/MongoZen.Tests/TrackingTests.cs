@@ -41,7 +41,7 @@ public class IgnoreEntity
 [Document]
 public class CollectionEntity
 {
-    public List<string> Tags { get; set; } = new();
+    public List<string> Tags { get; set; } = [];
 }
 
 public class TrackingTests : IDisposable
@@ -99,7 +99,7 @@ public class TrackingTests : IDisposable
     [Fact]
     public void Should_Detect_Collection_Changes()
     {
-        var entity = new CollectionEntity { Tags = new List<string> { "tag1", "tag2" } };
+        var entity = new CollectionEntity { Tags = ["tag1", "tag2"] };
         var shadow = CollectionEntityShadow.Create(entity, _allocator);
 
         // Unchanged

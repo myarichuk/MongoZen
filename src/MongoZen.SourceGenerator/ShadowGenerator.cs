@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -134,7 +131,7 @@ public class ShadowGenerator : IIncrementalGenerator
             return TypeCategory.Collection;
         }
 
-        if (type.TypeKind == TypeKind.Class || type.TypeKind == TypeKind.Struct)
+        if (type.TypeKind is TypeKind.Class or TypeKind.Struct)
         {
             var ns = type.ContainingNamespace.ToDisplayString();
             if (!ns.StartsWith("System") && !ns.StartsWith("MongoDB") && !ns.StartsWith("Microsoft"))
@@ -161,7 +158,7 @@ public class ShadowGenerator : IIncrementalGenerator
         return false;
     }
 
-    private bool IsCollection(ITypeSymbol type, out ITypeSymbol? elementType)
+    private static bool IsCollection(ITypeSymbol type, out ITypeSymbol? elementType)
     {
         elementType = null;
         var collectionInterface = type.AllInterfaces.FirstOrDefault(i => i.IsGenericType && i.ConstructedFrom.ToDisplayString() == "System.Collections.Generic.ICollection<T>");
@@ -192,19 +189,20 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine("using MongoDB.Driver;");
         sb.AppendLine("using MongoDB.Bson;");
         sb.AppendLine();
-        sb.AppendLine("namespace " + info.Symbol.ContainingNamespace.ToDisplayString() + ";");
+        sb.AppendLine($"namespace {info.Symbol.ContainingNamespace.ToDisplayString()};");
         sb.AppendLine();
-        sb.AppendLine("public readonly unsafe struct " + info.Name + "Shadow");
+        sb.AppendLine($"public readonly unsafe struct {info.Name}Shadow");
         sb.AppendLine("{");
         sb.AppendLine("    public readonly bool _HasValue;");
 
         foreach (var prop in info.Properties)
         {
-            sb.AppendLine("    public readonly " + GetShadowType(prop) + " " + prop.Symbol.Name + ";");
+            sb.AppendLine($"    public readonly {GetShadowType(prop)} {prop.Symbol.Name};");
         }
 
         sb.AppendLine();
-        sb.AppendLine("    public static " + info.Name + "Shadow Create(" + info.Symbol.ToDisplayString() + "? entity, ArenaAllocator arena)");
+        sb.AppendLine(
+            $"    public static {info.Name}Shadow Create({info.Symbol.ToDisplayString()}? entity, ArenaAllocator arena)");
         sb.AppendLine("    {");
         sb.AppendLine("        if (entity == null) return default;");
         sb.AppendLine();
@@ -214,13 +212,15 @@ public class ShadowGenerator : IIncrementalGenerator
             if (prop.Category == TypeCategory.Collection)
             {
                 var elemShadow = GetCollectionElementShadowType(prop.NestedType!);
-                sb.AppendLine("        var " + prop.Symbol.Name + "_cloned = default(ArenaList<" + elemShadow + ">);");
-                sb.AppendLine("        if (entity." + prop.Symbol.Name + " != null)");
+                sb.AppendLine($"        var {prop.Symbol.Name}_cloned = default(ArenaList<{elemShadow}>);");
+                sb.AppendLine($"        if (entity.{prop.Symbol.Name} != null)");
                 sb.AppendLine("        {");
-                sb.AppendLine("            " + prop.Symbol.Name + "_cloned = new ArenaList<" + elemShadow + ">(arena, entity." + prop.Symbol.Name + ".Count);");
-                sb.AppendLine("            foreach (var item in entity." + prop.Symbol.Name + ")");
+                sb.AppendLine(
+                    $"            {prop.Symbol.Name}_cloned = new ArenaList<{elemShadow}>(arena, entity.{prop.Symbol.Name}.Count);");
+                sb.AppendLine($"            foreach (var item in entity.{prop.Symbol.Name})");
                 sb.AppendLine("            {");
-                sb.AppendLine("                " + prop.Symbol.Name + "_cloned.Add(" + GenerateElementCloneExpr(prop.NestedType!, "item") + ");");
+                sb.AppendLine(
+                    $"                {prop.Symbol.Name}_cloned.Add({GenerateElementCloneExpr(prop.NestedType!, "item")});");
                 sb.AppendLine("            }");
                 sb.AppendLine("        }");
             }
@@ -228,19 +228,22 @@ public class ShadowGenerator : IIncrementalGenerator
             {
                 var keyShadow = GetCollectionElementShadowType(prop.NestedType!);
                 var valShadow = GetCollectionElementShadowType(prop.SecondaryNestedType!);
-                sb.AppendLine("        var " + prop.Symbol.Name + "_cloned = default(ArenaDictionary<" + keyShadow + ", " + valShadow + ">);");
-                sb.AppendLine("        if (entity." + prop.Symbol.Name + " != null)");
+                sb.AppendLine(
+                    $"        var {prop.Symbol.Name}_cloned = default(ArenaDictionary<{keyShadow}, {valShadow}>);");
+                sb.AppendLine($"        if (entity.{prop.Symbol.Name} != null)");
                 sb.AppendLine("        {");
-                sb.AppendLine("            " + prop.Symbol.Name + "_cloned = new ArenaDictionary<" + keyShadow + ", " + valShadow + ">(arena, entity." + prop.Symbol.Name + ".Count);");
-                sb.AppendLine("            foreach (var kvp in entity." + prop.Symbol.Name + ")");
+                sb.AppendLine(
+                    $"            {prop.Symbol.Name}_cloned = new ArenaDictionary<{keyShadow}, {valShadow}>(arena, entity.{prop.Symbol.Name}.Count);");
+                sb.AppendLine($"            foreach (var kvp in entity.{prop.Symbol.Name})");
                 sb.AppendLine("            {");
-                sb.AppendLine("                " + prop.Symbol.Name + "_cloned.Add(" + GenerateElementCloneExpr(prop.NestedType!, "kvp.Key") + ", " + GenerateElementCloneExpr(prop.SecondaryNestedType!, "kvp.Value") + ");");
+                sb.AppendLine(
+                    $"                {prop.Symbol.Name}_cloned.Add({GenerateElementCloneExpr(prop.NestedType!, "kvp.Key")}, {GenerateElementCloneExpr(prop.SecondaryNestedType!, "kvp.Value")});");
                 sb.AppendLine("            }");
                 sb.AppendLine("        }");
             }
         }
 
-        sb.AppendLine("        return new " + info.Name + "Shadow(");
+        sb.AppendLine($"        return new {info.Name}Shadow(");
         sb.AppendLine("            true,");
         
         for (int i = 0; i < info.Properties.Count; i++)
@@ -250,66 +253,68 @@ public class ShadowGenerator : IIncrementalGenerator
 
             var expr = prop.Category switch
             {
-                TypeCategory.Primitive => "entity." + prop.Symbol.Name,
-                TypeCategory.String => "entity." + prop.Symbol.Name + " == null ? default : ArenaUtf16String.Clone(entity." + prop.Symbol.Name + ".AsSpan(), arena)",
-                TypeCategory.Nullable => "entity." + prop.Symbol.Name,
-                TypeCategory.Document => prop.NestedType!.Name + "Shadow.Create(entity." + prop.Symbol.Name + ", arena)",
-                TypeCategory.Collection => prop.Symbol.Name + "_cloned",
-                TypeCategory.Dictionary => prop.Symbol.Name + "_cloned",
-                _ => "entity." + prop.Symbol.Name
+                TypeCategory.Primitive => $"entity.{prop.Symbol.Name}",
+                TypeCategory.String =>
+                    $"entity.{prop.Symbol.Name} == null ? default : ArenaUtf8String.Clone(entity.{prop.Symbol.Name}, arena)",
+                TypeCategory.Nullable => $"entity.{prop.Symbol.Name}",
+                TypeCategory.Document => $"{prop.NestedType!.Name}Shadow.Create(entity.{prop.Symbol.Name}, arena)",
+                TypeCategory.Collection => $"{prop.Symbol.Name}_cloned",
+                TypeCategory.Dictionary => $"{prop.Symbol.Name}_cloned",
+                _ => $"entity.{prop.Symbol.Name}"
             };
-            sb.AppendLine("            " + expr + comma);
+            sb.AppendLine($"            {expr}{comma}");
         }
         sb.AppendLine("        );");
         sb.AppendLine("    }");
 
         sb.AppendLine();
-        sb.AppendLine("    private " + info.Name + "Shadow(bool hasValue,");
+        sb.AppendLine($"    private {info.Name}Shadow(bool hasValue,");
         for (int i = 0; i < info.Properties.Count; i++)
         {
             var prop = info.Properties[i];
             var type = GetShadowType(prop);
             var comma = i < info.Properties.Count - 1 ? "," : "";
-            sb.AppendLine("        " + type + " " + prop.Symbol.Name.ToLower() + comma);
+            sb.AppendLine($"        {type} {prop.Symbol.Name.ToLower()}{comma}");
         }
         sb.AppendLine("    )");
         sb.AppendLine("    {");
         sb.AppendLine("        this._HasValue = hasValue;");
         foreach (var prop in info.Properties)
         {
-            sb.AppendLine("        this." + prop.Symbol.Name + " = " + prop.Symbol.Name.ToLower() + ";");
+            sb.AppendLine($"        this.{prop.Symbol.Name} = {prop.Symbol.Name.ToLower()};");
         }
         sb.AppendLine("    }");
 
         sb.AppendLine();
-        sb.AppendLine("    public bool Equals(" + info.Symbol.ToDisplayString() + "? entity)");
+        sb.AppendLine($"    public bool Equals({info.Symbol.ToDisplayString()}? entity)");
         sb.AppendLine("    {");
         sb.AppendLine("        if (entity == null) return !this._HasValue;");
         sb.AppendLine("        if (!this._HasValue) return false;");
         sb.AppendLine();
         foreach (var prop in info.Properties)
         {
-            var access = "entity." + prop.Symbol.Name;
-            var shadow = "this." + prop.Symbol.Name;
+            var access = $"entity.{prop.Symbol.Name}";
+            var shadow = $"this.{prop.Symbol.Name}";
 
             switch (prop.Category)
             {
                 case TypeCategory.Primitive:
                 case TypeCategory.Nullable:
-                    sb.AppendLine("        if (" + access + " != " + shadow + ") return false;");
+                    sb.AppendLine($"        if ({access} != {shadow}) return false;");
                     break;
                 case TypeCategory.String:
-                    sb.AppendLine("        if (string.IsNullOrEmpty(" + access + ")) { if (!" + shadow + ".IsEmpty) return false; }");
-                    sb.AppendLine("        else if (!" + shadow + ".Equals(" + access + ".AsSpan())) return false;");
+                    sb.AppendLine(
+                        $"        if (string.IsNullOrEmpty({access})) {{ if (!{shadow}.IsEmpty) return false; }}");
+                    sb.AppendLine($"        else if (!{shadow}.Equals({access})) return false;");
                     break;
                 case TypeCategory.Document:
-                    sb.AppendLine("        if (!" + shadow + ".Equals(" + access + ")) return false;");
+                    sb.AppendLine($"        if (!{shadow}.Equals({access})) return false;");
                     break;
                 case TypeCategory.Collection:
-                    sb.AppendLine("        if (!Is" + prop.Symbol.Name + "Equal(" + access + ")) return false;");
+                    sb.AppendLine($"        if (!Is{prop.Symbol.Name}Equal({access})) return false;");
                     break;
                 case TypeCategory.Dictionary:
-                    sb.AppendLine("        if (!Is" + prop.Symbol.Name + "Equal(" + access + ")) return false;");
+                    sb.AppendLine($"        if (!Is{prop.Symbol.Name}Equal({access})) return false;");
                     break;
             }
         }
@@ -317,7 +322,8 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine("    }");
 
         sb.AppendLine();
-        sb.AppendLine("    public UpdateDefinition<BsonDocument>? BuildUpdate(" + info.Symbol.ToDisplayString() + " entity, UpdateDefinitionBuilder<BsonDocument> builder)");
+        sb.AppendLine(
+            $"    public UpdateDefinition<BsonDocument>? BuildUpdate({info.Symbol.ToDisplayString()} entity, UpdateDefinitionBuilder<BsonDocument> builder)");
         sb.AppendLine("    {");
         sb.AppendLine("        UpdateDefinition<BsonDocument>? combined = null;");
         sb.AppendLine("        this.BuildUpdate(entity, \"\", builder, ref combined);");
@@ -325,89 +331,102 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine("    }");
 
         sb.AppendLine();
-        sb.AppendLine("    public void BuildUpdate(" + info.Symbol.ToDisplayString() + "? entity, string pathPrefix, UpdateDefinitionBuilder<BsonDocument> builder, ref UpdateDefinition<BsonDocument>? combined)");
+        sb.AppendLine(
+            $"    public void BuildUpdate({info.Symbol.ToDisplayString()}? entity, string pathPrefix, UpdateDefinitionBuilder<BsonDocument> builder, ref UpdateDefinition<BsonDocument>? combined)");
         sb.AppendLine("    {");
         sb.AppendLine("        if (this.Equals(entity)) return;");
 
         foreach (var prop in info.Properties)
         {
             var propName = prop.Symbol.Name;
-            var access = "entity." + propName;
-            var path = "(string.IsNullOrEmpty(pathPrefix) ? \"" + propName + "\" : pathPrefix + \"" + propName + "\")";
+            var access = $"entity.{propName}";
+            var path = $"(string.IsNullOrEmpty(pathPrefix) ? \"{propName}\" : pathPrefix + \"{propName}\")";
 
             sb.AppendLine();
-            sb.AppendLine("        // " + propName);
+            sb.AppendLine($"        // {propName}");
             switch (prop.Category)
             {
                 case TypeCategory.Primitive:
-                    sb.AppendLine("        if (entity != null && " + access + " != this." + propName + ")");
-                    sb.AppendLine("            combined = (combined == null) ? builder.Set(" + path + ", " + access + ") : builder.Combine(combined, builder.Set(" + path + ", " + access + "));");
+                    sb.AppendLine($"        if (entity != null && {access} != this.{propName})");
+                    sb.AppendLine(
+                        $"            combined = (combined == null) ? builder.Set({path}, {access}) : builder.Combine(combined, builder.Set({path}, {access}));");
                     break;
 
                 case TypeCategory.String:
                     sb.AppendLine("        if (entity != null)");
                     sb.AppendLine("        {");
-                    sb.AppendLine("            var cur = " + access + ";");
+                    sb.AppendLine($"            var cur = {access};");
                     sb.AppendLine("            if (string.IsNullOrEmpty(cur))");
                     sb.AppendLine("            {");
-                    sb.AppendLine("                if (!this." + propName + ".IsEmpty) combined = (combined == null) ? builder.Unset(" + path + ") : builder.Combine(combined, builder.Unset(" + path + "));");
+                    sb.AppendLine(
+                        $"                if (!this.{propName}.IsEmpty) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
                     sb.AppendLine("            }");
-                    sb.AppendLine("            else if (!this." + propName + ".Equals(cur.AsSpan()))");
+                    sb.AppendLine($"            else if (!this.{propName}.Equals(cur))");
                     sb.AppendLine("            {");
-                    sb.AppendLine("                combined = (combined == null) ? builder.Set(" + path + ", cur) : builder.Combine(combined, builder.Set(" + path + ", cur));");
+                    sb.AppendLine(
+                        $"                combined = (combined == null) ? builder.Set({path}, cur) : builder.Combine(combined, builder.Set({path}, cur));");
                     sb.AppendLine("            }");
                     sb.AppendLine("        }");
                     break;
 
                 case TypeCategory.Nullable:
-                    sb.AppendLine("        if (entity != null && " + access + " != this." + propName + ")");
+                    sb.AppendLine($"        if (entity != null && {access} != this.{propName})");
                     sb.AppendLine("        {");
-                    sb.AppendLine("            if (" + access + " == null) combined = (combined == null) ? builder.Unset(" + path + ") : builder.Combine(combined, builder.Unset(" + path + "));");
-                    sb.AppendLine("            else combined = (combined == null) ? builder.Set(" + path + ", " + access + ") : builder.Combine(combined, builder.Set(" + path + ", " + access + "));");
+                    sb.AppendLine(
+                        $"            if ({access} == null) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
+                    sb.AppendLine(
+                        $"            else combined = (combined == null) ? builder.Set({path}, {access}) : builder.Combine(combined, builder.Set({path}, {access}));");
                     sb.AppendLine("        }");
                     break;
 
                 case TypeCategory.Document:
-                    sb.AppendLine("        var child_" + propName + " = " + access + ";");
-                    sb.AppendLine("        if (child_" + propName + " == null)");
+                    sb.AppendLine($"        var child_{propName} = {access};");
+                    sb.AppendLine($"        if (child_{propName} == null)");
                     sb.AppendLine("        {");
-                    sb.AppendLine("            if (this." + propName + "._HasValue) combined = (combined == null) ? builder.Unset(" + path + ") : builder.Combine(combined, builder.Unset(" + path + "));");
+                    sb.AppendLine(
+                        $"            if (this.{propName}._HasValue) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
                     sb.AppendLine("        }");
-                    sb.AppendLine("        else if (!this." + propName + "._HasValue)");
+                    sb.AppendLine($"        else if (!this.{propName}._HasValue)");
                     sb.AppendLine("        {");
-                    sb.AppendLine("            combined = (combined == null) ? builder.Set(" + path + ", child_" + propName + ") : builder.Combine(combined, builder.Set(" + path + ", child_" + propName + "));");
+                    sb.AppendLine(
+                        $"            combined = (combined == null) ? builder.Set({path}, child_{propName}) : builder.Combine(combined, builder.Set({path}, child_{propName}));");
                     sb.AppendLine("        }");
                     sb.AppendLine("        else");
                     sb.AppendLine("        {");
-                    sb.AppendLine("            this." + propName + ".BuildUpdate(child_" + propName + ", " + path + " + \".\", builder, ref combined);");
+                    sb.AppendLine(
+                        $"            this.{propName}.BuildUpdate(child_{propName}, {path} + \".\", builder, ref combined);");
                     sb.AppendLine("        }");
                     break;
 
                 case TypeCategory.Collection:
-                    sb.AppendLine("        var coll_" + propName + " = " + access + ";");
+                    sb.AppendLine($"        var coll_{propName} = {access};");
                     sb.AppendLine("        if (entity != null)");
                     sb.AppendLine("        {");
-                    sb.AppendLine("            if (coll_" + propName + " == null)");
+                    sb.AppendLine($"            if (coll_{propName} == null)");
                     sb.AppendLine("            {");
-                    sb.AppendLine("                if (this." + propName + ".Length != 0) combined = (combined == null) ? builder.Unset(" + path + ") : builder.Combine(combined, builder.Unset(" + path + "));");
+                    sb.AppendLine(
+                        $"                if (this.{propName}.Length != 0) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
                     sb.AppendLine("            }");
-                    sb.AppendLine("            else if (!Is" + propName + "Equal(coll_" + propName + "))");
+                    sb.AppendLine($"            else if (!Is{propName}Equal(coll_{propName}))");
                     sb.AppendLine("            {");
-                    sb.AppendLine("                combined = (combined == null) ? builder.Set(" + path + ", coll_" + propName + ") : builder.Combine(combined, builder.Set(" + path + ", coll_" + propName + "));");
+                    sb.AppendLine(
+                        $"                combined = (combined == null) ? builder.Set({path}, coll_{propName}) : builder.Combine(combined, builder.Set({path}, coll_{propName}));");
                     sb.AppendLine("            }");
                     sb.AppendLine("        }");
                     break;
                 case TypeCategory.Dictionary:
-                    sb.AppendLine("        var dict_" + propName + " = " + access + ";");
+                    sb.AppendLine($"        var dict_{propName} = {access};");
                     sb.AppendLine("        if (entity != null)");
                     sb.AppendLine("        {");
-                    sb.AppendLine("            if (dict_" + propName + " == null)");
+                    sb.AppendLine($"            if (dict_{propName} == null)");
                     sb.AppendLine("            {");
-                    sb.AppendLine("                if (this." + propName + ".Count != 0) combined = (combined == null) ? builder.Unset(" + path + ") : builder.Combine(combined, builder.Unset(" + path + "));");
+                    sb.AppendLine(
+                        $"                if (this.{propName}.Count != 0) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
                     sb.AppendLine("            }");
-                    sb.AppendLine("            else if (!Is" + propName + "Equal(dict_" + propName + "))");
+                    sb.AppendLine($"            else if (!Is{propName}Equal(dict_{propName}))");
                     sb.AppendLine("            {");
-                    sb.AppendLine("                combined = (combined == null) ? builder.Set(" + path + ", dict_" + propName + ") : builder.Combine(combined, builder.Set(" + path + ", dict_" + propName + "));");
+                    sb.AppendLine(
+                        $"                combined = (combined == null) ? builder.Set({path}, dict_{propName}) : builder.Combine(combined, builder.Set({path}, dict_{propName}));");
                     sb.AppendLine("            }");
                     sb.AppendLine("        }");
                     break;
@@ -416,14 +435,14 @@ public class ShadowGenerator : IIncrementalGenerator
 
         sb.AppendLine("    }");
 
-        foreach (var prop in info.Properties.Where(p => p.Category == TypeCategory.Collection || p.Category == TypeCategory.Dictionary))
+        foreach (var prop in info.Properties.Where(p => p.Category is TypeCategory.Collection or TypeCategory.Dictionary))
         {
             GenerateCollectionEqualityHelper(sb, prop);
         }
 
         sb.AppendLine("}");
 
-        context.AddSource(info.Name + ".Shadow.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
+        context.AddSource($"{info.Name}.Shadow.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
     }
 
     private void GenerateElementEqualityCheck(StringBuilder sb, ITypeSymbol elemType, string managed, string shadow, bool useReturn)
@@ -436,14 +455,14 @@ public class ShadowGenerator : IIncrementalGenerator
         {
             case TypeCategory.Primitive:
             case TypeCategory.Nullable:
-                sb.AppendLine(indent + "if (" + managed + " != " + shadow + ")" + suffix);
+                sb.AppendLine($"{indent}if ({managed} != {shadow}){suffix}");
                 break;
             case TypeCategory.String:
-                sb.AppendLine(indent + "if (string.IsNullOrEmpty(" + managed + ")) { if (!" + shadow + ".IsEmpty)" + suffix + " }");
-                sb.AppendLine(indent + "else if (!" + shadow + ".Equals(" + managed + ".AsSpan()))" + suffix);
+                sb.AppendLine($"{indent}if (string.IsNullOrEmpty({managed})) {{ if (!{shadow}.IsEmpty){suffix} }}");
+                sb.AppendLine($"{indent}else if (!{shadow}.Equals({managed})){suffix}");
                 break;
             case TypeCategory.Document:
-                sb.AppendLine(indent + "if (!" + shadow + ".Equals(" + managed + "))" + suffix);
+                sb.AppendLine($"{indent}if (!{shadow}.Equals({managed})){suffix}");
                 break;
         }
     }
@@ -454,12 +473,12 @@ public class ShadowGenerator : IIncrementalGenerator
         var managedType = prop.Symbol.Type.ToDisplayString();
         if (prop.Category == TypeCategory.Collection)
         {
-            sb.AppendLine("    private bool Is" + prop.Symbol.Name + "Equal(" + managedType + "? current)");
+            sb.AppendLine($"    private bool Is{prop.Symbol.Name}Equal({managedType}? current)");
             sb.AppendLine("    {");
-            sb.AppendLine("        if (current == null) return this." + prop.Symbol.Name + ".Length == 0;");
-            sb.AppendLine("        if (current.Count != this." + prop.Symbol.Name + ".Length) return false;");
+            sb.AppendLine($"        if (current == null) return this.{prop.Symbol.Name}.Length == 0;");
+            sb.AppendLine($"        if (current.Count != this.{prop.Symbol.Name}.Length) return false;");
             sb.AppendLine("        var idx = 0;");
-            sb.AppendLine("        var span = this." + prop.Symbol.Name + ".AsReadOnlySpan();");
+            sb.AppendLine($"        var span = this.{prop.Symbol.Name}.AsReadOnlySpan();");
             sb.AppendLine("        foreach (var item in current)");
             sb.AppendLine("        {");
             sb.AppendLine("            var s = span[idx++];");
@@ -470,13 +489,14 @@ public class ShadowGenerator : IIncrementalGenerator
         }
         else if (prop.Category == TypeCategory.Dictionary)
         {
-            sb.AppendLine("    private bool Is" + prop.Symbol.Name + "Equal(" + managedType + "? current)");
+            sb.AppendLine($"    private bool Is{prop.Symbol.Name}Equal({managedType}? current)");
             sb.AppendLine("    {");
-            sb.AppendLine("        if (current == null) return this." + prop.Symbol.Name + ".Count == 0;");
-            sb.AppendLine("        if (current.Count != this." + prop.Symbol.Name + ".Count) return false;");
+            sb.AppendLine($"        if (current == null) return this.{prop.Symbol.Name}.Count == 0;");
+            sb.AppendLine($"        if (current.Count != this.{prop.Symbol.Name}.Count) return false;");
             sb.AppendLine("        foreach (var kvp in current)");
             sb.AppendLine("        {");
-            sb.AppendLine("            if (!this." + prop.Symbol.Name + ".TryGetValue(" + GenerateKeyAccess(prop.NestedType!, "kvp.Key") + ", out var sv)) return false;");
+            sb.AppendLine(
+                $"            if (!this.{prop.Symbol.Name}.TryGetValue(kvp.Key, out var sv)) return false;");
             GenerateElementEqualityCheck(sb, prop.SecondaryNestedType!, "kvp.Value", "sv", true);
             sb.AppendLine("        }");
             sb.AppendLine("        return true;");
@@ -490,9 +510,9 @@ public class ShadowGenerator : IIncrementalGenerator
         return category switch
         {
             TypeCategory.Primitive => access,
-            TypeCategory.String => access + " == null ? default : ArenaUtf16String.Clone(" + access + ".AsSpan(), arena)",
+            TypeCategory.String => $"{access} == null ? default : ArenaUtf8String.Clone({access}, arena)",
             TypeCategory.Nullable => access,
-            TypeCategory.Document => nested!.Name + "Shadow.Create(" + access + ", arena)",
+            TypeCategory.Document => $"{nested!.Name}Shadow.Create({access}, arena)",
             _ => access
         };
     }
@@ -502,11 +522,12 @@ public class ShadowGenerator : IIncrementalGenerator
         return prop.Category switch
         {
             TypeCategory.Primitive => prop.Symbol.Type.ToDisplayString(),
-            TypeCategory.String => "ArenaUtf16String",
+            TypeCategory.String => "ArenaUtf8String",
             TypeCategory.Nullable => prop.Symbol.Type.ToDisplayString(),
-            TypeCategory.Document => prop.NestedType!.Name + "Shadow",
-            TypeCategory.Collection => "ArenaList<" + GetCollectionElementShadowType(prop.NestedType!) + ">",
-            TypeCategory.Dictionary => "ArenaDictionary<" + GetCollectionElementShadowType(prop.NestedType!) + ", " + GetCollectionElementShadowType(prop.SecondaryNestedType!) + ">",
+            TypeCategory.Document => $"{prop.NestedType!.Name}Shadow",
+            TypeCategory.Collection => $"ArenaList<{GetCollectionElementShadowType(prop.NestedType!)}>",
+            TypeCategory.Dictionary =>
+                $"ArenaDictionary<{GetCollectionElementShadowType(prop.NestedType!)}, {GetCollectionElementShadowType(prop.SecondaryNestedType!)}>",
             _ => "object?"
         };
     }
@@ -517,16 +538,16 @@ public class ShadowGenerator : IIncrementalGenerator
         return category switch
         {
             TypeCategory.Primitive => elemType.ToDisplayString(),
-            TypeCategory.String => "ArenaUtf16String",
+            TypeCategory.String => "ArenaUtf8String",
             TypeCategory.Nullable => elemType.ToDisplayString(),
-            TypeCategory.Document => nested!.Name + "Shadow",
+            TypeCategory.Document => $"{nested!.Name}Shadow",
             _ => "object?"
         };
     }
 
     private string GenerateKeyAccess(ITypeSymbol keyType, string managedAccess)
     {
-        if (keyType.SpecialType == SpecialType.System_String) return managedAccess + ".AsSpan()";
+        if (keyType.SpecialType == SpecialType.System_String) return managedAccess;
         return managedAccess;
     }
 

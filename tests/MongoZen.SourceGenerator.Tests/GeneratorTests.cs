@@ -57,7 +57,7 @@ public readonly unsafe struct SimpleEntityShadow
 {
     public readonly bool _HasValue;
     public readonly int Id;
-    public readonly ArenaUtf16String Name;
+    public readonly ArenaUtf8String Name;
 
     public static SimpleEntityShadow Create(TestNamespace.SimpleEntity? entity, ArenaAllocator arena)
     {
@@ -66,13 +66,13 @@ public readonly unsafe struct SimpleEntityShadow
         return new SimpleEntityShadow(
             true,
             entity.Id,
-            entity.Name == null ? default : ArenaUtf16String.Clone(entity.Name.AsSpan(), arena)
+            entity.Name == null ? default : ArenaUtf8String.Clone(entity.Name, arena)
         );
     }
 
     private SimpleEntityShadow(bool hasValue,
         int id,
-        ArenaUtf16String name
+        ArenaUtf8String name
     )
     {
         this._HasValue = hasValue;
@@ -87,7 +87,7 @@ public readonly unsafe struct SimpleEntityShadow
 
         if (entity.Id != this.Id) return false;
         if (string.IsNullOrEmpty(entity.Name)) { if (!this.Name.IsEmpty) return false; }
-        else if (!this.Name.Equals(entity.Name.AsSpan())) return false;
+        else if (!this.Name.Equals(entity.Name)) return false;
         return true;
     }
 
@@ -114,7 +114,7 @@ public readonly unsafe struct SimpleEntityShadow
             {
                 if (!this.Name.IsEmpty) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name"")));
             }
-            else if (!this.Name.Equals(cur.AsSpan()))
+            else if (!this.Name.Equals(cur))
             {
                 combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name""), cur) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name""), cur));
             }
@@ -183,19 +183,19 @@ public readonly unsafe struct ComplexEntityShadow
     public readonly bool _HasValue;
     public readonly int Id;
     public readonly AddressShadow Home;
-    public readonly ArenaList<ArenaUtf16String> Tags;
+    public readonly ArenaList<ArenaUtf8String> Tags;
 
     public static ComplexEntityShadow Create(TestNamespace.ComplexEntity? entity, ArenaAllocator arena)
     {
         if (entity == null) return default;
 
-        var Tags_cloned = default(ArenaList<ArenaUtf16String>);
+        var Tags_cloned = default(ArenaList<ArenaUtf8String>);
         if (entity.Tags != null)
         {
-            Tags_cloned = new ArenaList<ArenaUtf16String>(arena, entity.Tags.Count);
+            Tags_cloned = new ArenaList<ArenaUtf8String>(arena, entity.Tags.Count);
             foreach (var item in entity.Tags)
             {
-                Tags_cloned.Add(item == null ? default : ArenaUtf16String.Clone(item.AsSpan(), arena));
+                Tags_cloned.Add(item == null ? default : ArenaUtf8String.Clone(item, arena));
             }
         }
         return new ComplexEntityShadow(
@@ -209,7 +209,7 @@ public readonly unsafe struct ComplexEntityShadow
     private ComplexEntityShadow(bool hasValue,
         int id,
         AddressShadow home,
-        ArenaList<ArenaUtf16String> tags
+        ArenaList<ArenaUtf8String> tags
     )
     {
         this._HasValue = hasValue;
@@ -284,7 +284,7 @@ public readonly unsafe struct ComplexEntityShadow
         {
             var s = span[idx++];
                 if (string.IsNullOrEmpty(item)) { if (!s.IsEmpty) return false; }
-                else if (!s.Equals(item.AsSpan())) return false;
+                else if (!s.Equals(item)) return false;
         }
         return true;
     }
@@ -304,7 +304,7 @@ namespace TestNamespace;
 public readonly unsafe struct AddressShadow
 {
     public readonly bool _HasValue;
-    public readonly ArenaUtf16String City;
+    public readonly ArenaUtf8String City;
 
     public static AddressShadow Create(TestNamespace.Address? entity, ArenaAllocator arena)
     {
@@ -312,12 +312,12 @@ public readonly unsafe struct AddressShadow
 
         return new AddressShadow(
             true,
-            entity.City == null ? default : ArenaUtf16String.Clone(entity.City.AsSpan(), arena)
+            entity.City == null ? default : ArenaUtf8String.Clone(entity.City, arena)
         );
     }
 
     private AddressShadow(bool hasValue,
-        ArenaUtf16String city
+        ArenaUtf8String city
     )
     {
         this._HasValue = hasValue;
@@ -330,7 +330,7 @@ public readonly unsafe struct AddressShadow
         if (!this._HasValue) return false;
 
         if (string.IsNullOrEmpty(entity.City)) { if (!this.City.IsEmpty) return false; }
-        else if (!this.City.Equals(entity.City.AsSpan())) return false;
+        else if (!this.City.Equals(entity.City)) return false;
         return true;
     }
 
@@ -353,7 +353,7 @@ public readonly unsafe struct AddressShadow
             {
                 if (!this.City.IsEmpty) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City"")));
             }
-            else if (!this.City.Equals(cur.AsSpan()))
+            else if (!this.City.Equals(cur))
             {
                 combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City""), cur) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City""), cur));
             }
