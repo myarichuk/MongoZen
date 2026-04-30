@@ -1,10 +1,17 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
 using MongoDB.Bson;
 #nullable enable
 
 namespace MongoZen;
+
+
+
+public interface IIdConvention
+{
+    PropertyInfo? ResolveIdProperty<TEntity>();
+}
 
 /// <summary>
 /// Caches compiled Id‑accessor delegates per (TEntity, IIdConvention‑type) pair.

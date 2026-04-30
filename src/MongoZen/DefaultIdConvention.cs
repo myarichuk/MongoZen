@@ -1,16 +1,33 @@
-using System.Reflection;
+﻿using System.Reflection;
 using MongoDB.Bson.Serialization.Attributes;
 
 namespace MongoZen;
 
-internal sealed record DefaultIdConvention : IIdConvention
+internal sealed class DefaultIdConvention : IIdConvention
 {
-    public PropertyInfo? ResolveIdProperty<TEntity>()
+    public PropertyInfo? ResolveIdProperty<TEntity>() =>
+        Cache<TEntity>.Property;
+
+    private static class Cache<TEntity>
     {
-        var type = typeof(TEntity);
-        var props = type.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        
-        return props.FirstOrDefault(p => p.IsDefined(typeof(BsonIdAttribute), true) && p.CanRead)
-            ?? props.FirstOrDefault(p => string.Equals(p.Name, "Id", StringComparison.OrdinalIgnoreCase) && p.CanRead);
+        // ReSharper disable once StaticMemberInGenericType
+        public static readonly PropertyInfo? Property = Resolve();
+
+        private static PropertyInfo? Resolve()
+        {
+            var type = typeof(TEntity);
+
+            var props = type.GetProperties(
+                BindingFlags.Instance |
+                BindingFlags.Public |
+                BindingFlags.NonPublic);
+
+            return props.FirstOrDefault(p =>
+                       p.CanRead &&
+                       p.IsDefined(typeof(BsonIdAttribute), true))
+                   ?? props.FirstOrDefault(p =>
+                       p.CanRead &&
+                       string.Equals(p.Name, "Id", StringComparison.OrdinalIgnoreCase));
+        }
     }
 }
