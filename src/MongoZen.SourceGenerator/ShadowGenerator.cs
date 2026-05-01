@@ -76,6 +76,18 @@ public class ShadowGenerator : IIncrementalGenerator
                 return false; 
             }
 
+            var elementName = prop.Name;
+            var bsonElementAttr = prop.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == "BsonElementAttribute" || a.AttributeClass?.ToDisplayString() == "MongoDB.Bson.Serialization.Attributes.BsonElementAttribute");
+            if (bsonElementAttr != null && bsonElementAttr.ConstructorArguments.Length > 0)
+            {
+                elementName = bsonElementAttr.ConstructorArguments[0].Value?.ToString() ?? prop.Name;
+            }
+            var bsonIdAttr = prop.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == "BsonIdAttribute" || a.AttributeClass?.ToDisplayString() == "MongoDB.Bson.Serialization.Attributes.BsonIdAttribute");
+            if (bsonIdAttr != null)
+            {
+                elementName = "_id";
+            }
+
             if (category == TypeCategory.Document && nestedType is INamedTypeSymbol namedNested)
             {
                 queue.Enqueue(namedNested);
@@ -97,10 +109,19 @@ public class ShadowGenerator : IIncrementalGenerator
                 if (valCategory == TypeCategory.Document && valNested is INamedTypeSymbol namedVal) queue.Enqueue(namedVal);
             }
 
-            info.Properties.Add(new PropertyInfo(prop, category, nestedType, secondaryNestedType));
+            info.Properties.Add(new PropertyInfo(prop, elementName, category, nestedType, secondaryNestedType));
         }
 
         return true;
+    }
+
+    private static bool IsPolymorphic(ITypeSymbol type)
+    {
+        if (type.TypeKind == TypeKind.Interface) return true;
+        if (type.IsAbstract) return true;
+        if (type.SpecialType == SpecialType.System_Object) return true;
+        if (type.GetAttributes().Any(a => a.AttributeClass?.Name == "BsonKnownTypesAttribute" || a.AttributeClass?.Name == "BsonKnownTypes")) return true;
+        return false;
     }
 
     private TypeCategory CategorizeType(ITypeSymbol type, out ITypeSymbol? nestedType, out ITypeSymbol? secondaryNestedType)
@@ -136,6 +157,7 @@ public class ShadowGenerator : IIncrementalGenerator
             var ns = type.ContainingNamespace.ToDisplayString();
             if (!ns.StartsWith("System") && !ns.StartsWith("MongoDB") && !ns.StartsWith("Microsoft"))
             {
+                if (IsPolymorphic(type)) return TypeCategory.Polymorphic;
                 nestedType = type;
                 return TypeCategory.Document;
             }
@@ -244,13 +266,11 @@ public class ShadowGenerator : IIncrementalGenerator
         }
 
         sb.AppendLine($"        return new {info.Name}Shadow(");
-        sb.AppendLine("            true,");
+        sb.Append("            true");
         
         for (int i = 0; i < info.Properties.Count; i++)
         {
             var prop = info.Properties[i];
-            var comma = i < info.Properties.Count - 1 ? "," : "";
-
             var expr = prop.Category switch
             {
                 TypeCategory.Primitive => $"entity.{prop.Symbol.Name}",
@@ -258,24 +278,28 @@ public class ShadowGenerator : IIncrementalGenerator
                     $"entity.{prop.Symbol.Name} == null ? default : ArenaUtf8String.Clone(entity.{prop.Symbol.Name}, arena)",
                 TypeCategory.Nullable => $"entity.{prop.Symbol.Name}",
                 TypeCategory.Document => $"{prop.NestedType!.Name}Shadow.Create(entity.{prop.Symbol.Name}, arena)",
+                TypeCategory.Polymorphic => $"ClonePolymorphic<{(prop.Symbol.Type as INamedTypeSymbol)?.ToDisplayString() ?? "object"}>(entity.{prop.Symbol.Name}, arena)",
                 TypeCategory.Collection => $"{prop.Symbol.Name}_cloned",
                 TypeCategory.Dictionary => $"{prop.Symbol.Name}_cloned",
                 _ => $"entity.{prop.Symbol.Name}"
             };
-            sb.AppendLine($"            {expr}{comma}");
+            sb.AppendLine(",");
+            sb.Append($"            {expr}");
         }
+        sb.AppendLine();
         sb.AppendLine("        );");
         sb.AppendLine("    }");
 
         sb.AppendLine();
-        sb.AppendLine($"    private {info.Name}Shadow(bool hasValue,");
+        sb.Append($"    private {info.Name}Shadow(bool hasValue");
         for (int i = 0; i < info.Properties.Count; i++)
         {
             var prop = info.Properties[i];
             var type = GetShadowType(prop);
-            var comma = i < info.Properties.Count - 1 ? "," : "";
-            sb.AppendLine($"        {type} {prop.Symbol.Name.ToLower()}{comma}");
+            sb.AppendLine(",");
+            sb.Append($"        {type} {prop.Symbol.Name.ToLower()}");
         }
+        sb.AppendLine();
         sb.AppendLine("    )");
         sb.AppendLine("    {");
         sb.AppendLine("        this._HasValue = hasValue;");
@@ -283,6 +307,16 @@ public class ShadowGenerator : IIncrementalGenerator
         {
             sb.AppendLine($"        this.{prop.Symbol.Name} = {prop.Symbol.Name.ToLower()};");
         }
+        sb.AppendLine("    }");
+
+        sb.AppendLine();
+        sb.AppendLine("    private static global::MongoZen.ArenaBsonBytes ClonePolymorphic<T>(T? obj, ArenaAllocator arena)");
+        sb.AppendLine("    {");
+        sb.AppendLine("        if (obj == null) return default;");
+        sb.AppendLine("        var bytes = obj.ToBson<T>();");
+        sb.AppendLine("        var ptr = (byte*)arena.Alloc((UIntPtr)bytes.Length, (UIntPtr)1);");
+        sb.AppendLine("        new ReadOnlySpan<byte>(bytes).CopyTo(new Span<byte>(ptr, bytes.Length));");
+        sb.AppendLine("        return new global::MongoZen.ArenaBsonBytes(ptr, bytes.Length);");
         sb.AppendLine("    }");
 
         sb.AppendLine();
@@ -309,6 +343,14 @@ public class ShadowGenerator : IIncrementalGenerator
                     break;
                 case TypeCategory.Document:
                     sb.AppendLine($"        if (!{shadow}.Equals({access})) return false;");
+                    break;
+                case TypeCategory.Polymorphic:
+                    var polyType = (prop.Symbol.Type as INamedTypeSymbol)?.ToDisplayString() ?? "object";
+                    sb.AppendLine($"        {{");
+                    sb.AppendLine($"            var curPoly = {access}?.ToBson<{polyType}>();");
+                    sb.AppendLine($"            if ((curPoly == null) != ({shadow}.RawPtr == null)) return false;");
+                    sb.AppendLine($"            if (curPoly != null && !curPoly.AsSpan().SequenceEqual({shadow}.AsReadOnlySpan())) return false;");
+                    sb.AppendLine($"        }}");
                     break;
                 case TypeCategory.Collection:
                     sb.AppendLine($"        if (!Is{prop.Symbol.Name}Equal({access})) return false;");
@@ -341,7 +383,7 @@ public class ShadowGenerator : IIncrementalGenerator
         {
             var propName = prop.Symbol.Name;
             var access = $"entity.{propName}";
-            var path = $"(string.IsNullOrEmpty(pathPrefix) ? \"{propName}\" : pathPrefix + \"{propName}\")";
+            var path = $"(string.IsNullOrEmpty(pathPrefix) ? \"{prop.ElementName}\" : pathPrefix + \"{prop.ElementName}\")";
 
             sb.AppendLine();
             sb.AppendLine($"        // {propName}");
@@ -395,6 +437,19 @@ public class ShadowGenerator : IIncrementalGenerator
                     sb.AppendLine("        {");
                     sb.AppendLine(
                         $"            this.{propName}.BuildUpdate(child_{propName}, {path} + \".\", builder, ref combined);");
+                    sb.AppendLine("        }");
+                    break;
+
+                case TypeCategory.Polymorphic:
+                    var polyType = (prop.Symbol.Type as INamedTypeSymbol)?.ToDisplayString() ?? "object";
+                    sb.AppendLine($"        var poly_{propName} = {access}?.ToBson<{polyType}>();");
+                    sb.AppendLine($"        if (poly_{propName} == null)");
+                    sb.AppendLine("        {");
+                    sb.AppendLine($"            if (this.{propName}.RawPtr != null) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
+                    sb.AppendLine("        }");
+                    sb.AppendLine($"        else if (this.{propName}.RawPtr == null || !poly_{propName}.AsSpan().SequenceEqual(this.{propName}.AsReadOnlySpan()))");
+                    sb.AppendLine("        {");
+                    sb.AppendLine($"            combined = (combined == null) ? builder.Set({path}, {access}) : builder.Combine(combined, builder.Set({path}, {access}));");
                     sb.AppendLine("        }");
                     break;
 
@@ -458,6 +513,12 @@ public class ShadowGenerator : IIncrementalGenerator
             case TypeCategory.Document:
                 sb.AppendLine($"{indent}if (!{shadow}.Equals({managed})){suffix}");
                 break;
+            case TypeCategory.Polymorphic:
+                var polyType = elemType.ToDisplayString();
+                sb.AppendLine($"{indent}var curPoly = {managed}?.ToBson<{polyType}>();");
+                sb.AppendLine($"{indent}if ((curPoly == null) != ({shadow}.RawPtr == null)){suffix}");
+                sb.AppendLine($"{indent}if (curPoly != null && !curPoly.AsSpan().SequenceEqual({shadow}.AsReadOnlySpan())){suffix}");
+                break;
         }
     }
 
@@ -507,6 +568,7 @@ public class ShadowGenerator : IIncrementalGenerator
             TypeCategory.String => $"{access} == null ? default : ArenaUtf8String.Clone({access}, arena)",
             TypeCategory.Nullable => access,
             TypeCategory.Document => $"{nested!.Name}Shadow.Create({access}, arena)",
+            TypeCategory.Polymorphic => $"ClonePolymorphic<{elemType.ToDisplayString()}>({access}, arena)",
             _ => access
         };
     }
@@ -519,6 +581,7 @@ public class ShadowGenerator : IIncrementalGenerator
             TypeCategory.String => "ArenaUtf8String",
             TypeCategory.Nullable => prop.Symbol.Type.ToDisplayString(),
             TypeCategory.Document => $"{prop.NestedType!.Name}Shadow",
+            TypeCategory.Polymorphic => "global::MongoZen.ArenaBsonBytes",
             TypeCategory.Collection => $"ArenaList<{GetCollectionElementShadowType(prop.NestedType!)}>",
             TypeCategory.Dictionary =>
                 $"ArenaDictionary<{GetCollectionElementShadowType(prop.NestedType!)}, {GetCollectionElementShadowType(prop.SecondaryNestedType!)}>",
@@ -535,6 +598,7 @@ public class ShadowGenerator : IIncrementalGenerator
             TypeCategory.String => "ArenaUtf8String",
             TypeCategory.Nullable => elemType.ToDisplayString(),
             TypeCategory.Document => $"{nested!.Name}Shadow",
+            TypeCategory.Polymorphic => "global::MongoZen.ArenaBsonBytes",
             _ => "object?"
         };
     }
@@ -560,13 +624,15 @@ public class ShadowGenerator : IIncrementalGenerator
     private class PropertyInfo
     {
         public IPropertySymbol Symbol { get; }
+        public string ElementName { get; }
         public TypeCategory Category { get; }
         public ITypeSymbol? NestedType { get; }
         public ITypeSymbol? SecondaryNestedType { get; }
 
-        public PropertyInfo(IPropertySymbol symbol, TypeCategory category, ITypeSymbol? nestedType, ITypeSymbol? secondaryNestedType)
+        public PropertyInfo(IPropertySymbol symbol, string elementName, TypeCategory category, ITypeSymbol? nestedType, ITypeSymbol? secondaryNestedType)
         {
             Symbol = symbol;
+            ElementName = elementName;
             Category = category;
             NestedType = nestedType;
             SecondaryNestedType = secondaryNestedType;
@@ -581,6 +647,7 @@ public class ShadowGenerator : IIncrementalGenerator
         Collection,
         Dictionary,
         Document,
+        Polymorphic,
         Unsupported
     }
 }

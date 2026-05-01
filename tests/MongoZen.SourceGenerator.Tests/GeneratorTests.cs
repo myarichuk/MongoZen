@@ -19,6 +19,17 @@ namespace MongoZen;
 public class DocumentAttribute : System.Attribute { }
 ";
 
+    private const string ArenaBsonBytesSource = @"
+namespace MongoZen;
+public readonly unsafe struct ArenaBsonBytes
+{
+    public readonly byte* RawPtr;
+    public readonly int Length;
+    public ArenaBsonBytes(byte* ptr, int length) { RawPtr = ptr; Length = length; }
+    public System.ReadOnlySpan<byte> AsReadOnlySpan() => RawPtr == null ? default : new System.ReadOnlySpan<byte>(RawPtr, Length);
+}
+";
+
     [Fact]
     public async Task Should_Generate_Simple_Shadow()
     {
@@ -39,7 +50,7 @@ public class SimpleEntity
         {
             TestState =
             {
-                Sources = { AttributeSource, inputSource },
+                Sources = { AttributeSource, ArenaBsonBytesSource, inputSource },
                 GeneratedSources =
                 {
                     (typeof(ShadowGenerator), "SimpleEntity.Shadow.g.cs", @"#nullable enable
@@ -78,6 +89,15 @@ public readonly unsafe struct SimpleEntityShadow
         this._HasValue = hasValue;
         this.Id = id;
         this.Name = name;
+    }
+
+    private static global::MongoZen.ArenaBsonBytes ClonePolymorphic<T>(T? obj, ArenaAllocator arena)
+    {
+        if (obj == null) return default;
+        var bytes = obj.ToBson<T>();
+        var ptr = (byte*)arena.Alloc((UIntPtr)bytes.Length, (UIntPtr)1);
+        new ReadOnlySpan<byte>(bytes).CopyTo(new Span<byte>(ptr, bytes.Length));
+        return new global::MongoZen.ArenaBsonBytes(ptr, bytes.Length);
     }
 
     public bool Equals(TestNamespace.SimpleEntity? entity)
@@ -164,7 +184,7 @@ public class ComplexEntity
         {
             TestState =
             {
-                Sources = { AttributeSource, inputSource },
+                Sources = { AttributeSource, ArenaBsonBytesSource, inputSource },
                 GeneratedSources =
                 {
                     (typeof(ShadowGenerator), "ComplexEntity.Shadow.g.cs", @"#nullable enable
@@ -216,6 +236,15 @@ public readonly unsafe struct ComplexEntityShadow
         this.Id = id;
         this.Home = home;
         this.Tags = tags;
+    }
+
+    private static global::MongoZen.ArenaBsonBytes ClonePolymorphic<T>(T? obj, ArenaAllocator arena)
+    {
+        if (obj == null) return default;
+        var bytes = obj.ToBson<T>();
+        var ptr = (byte*)arena.Alloc((UIntPtr)bytes.Length, (UIntPtr)1);
+        new ReadOnlySpan<byte>(bytes).CopyTo(new Span<byte>(ptr, bytes.Length));
+        return new global::MongoZen.ArenaBsonBytes(ptr, bytes.Length);
     }
 
     public bool Equals(TestNamespace.ComplexEntity? entity)
@@ -320,6 +349,15 @@ public readonly unsafe struct AddressShadow
     {
         this._HasValue = hasValue;
         this.City = city;
+    }
+
+    private static global::MongoZen.ArenaBsonBytes ClonePolymorphic<T>(T? obj, ArenaAllocator arena)
+    {
+        if (obj == null) return default;
+        var bytes = obj.ToBson<T>();
+        var ptr = (byte*)arena.Alloc((UIntPtr)bytes.Length, (UIntPtr)1);
+        new ReadOnlySpan<byte>(bytes).CopyTo(new Span<byte>(ptr, bytes.Length));
+        return new global::MongoZen.ArenaBsonBytes(ptr, bytes.Length);
     }
 
     public bool Equals(TestNamespace.Address? entity)
