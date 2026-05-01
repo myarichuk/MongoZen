@@ -31,7 +31,7 @@ public static class DocumentTypeTracker
     /// </summary>
     public static string GetDefaultCollectionName(Type type)
     {
-        // Simple pluralization for now. In a real app, this would be more sophisticated.
-        return type.Name + "s";
+        // TODO: create conventions and make this is the default. Consider doing semantic plural for this
+        return $"{type.Name}s";
     }
 }
