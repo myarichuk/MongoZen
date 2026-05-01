@@ -210,6 +210,27 @@ public class TrackingTests : IDisposable
         public string? Value { get; set; }
     }
 
+    [Document]
+    public class ElementEntity
+    {
+        [BsonElement("custom_field_name")]
+        public string Name { get; set; } = string.Empty;
+    }
+
+    [BsonKnownTypes(typeof(Dog), typeof(Cat))]
+    public abstract class Animal
+    {
+        public string Name { get; set; } = string.Empty;
+    }
+    public class Dog : Animal { public int BarkVolume { get; set; } }
+    public class Cat : Animal { public bool IsGrumpy { get; set; } }
+
+    [Document]
+    public class Zoo
+    {
+        public Animal MainAttraction { get; set; } = null!;
+    }
+
     [Fact]
     public void Should_Distinguish_Null_And_Empty_Strings()
     {
@@ -231,6 +252,48 @@ public class TrackingTests : IDisposable
         bson = RenderUpdate(update);
         Assert.True(bson.Contains("$unset"));
         Assert.Equal(1, bson["$unset"].AsBsonDocument["Value"].ToInt32());
+    }
+
+    [Fact]
+    public void Should_Respect_BsonElement()
+    {
+        var entity = new ElementEntity { Name = "Old" };
+        var shadow = ElementEntityShadow.Create(entity, _allocator);
+
+        entity.Name = "New";
+        var update = shadow.BuildUpdate(entity, _builder);
+        Assert.NotNull(update);
+
+        var bson = RenderUpdate(update);
+        Assert.True(bson.Contains("$set"));
+        Assert.True(bson["$set"].AsBsonDocument.Contains("custom_field_name"));
+        Assert.Equal("New", bson["$set"].AsBsonDocument["custom_field_name"].AsString);
+    }
+
+    [Fact]
+    public void Should_Detect_Polymorphic_Changes()
+    {
+        var entity = new Zoo { MainAttraction = new Dog { Name = "Rex", BarkVolume = 10 } };
+        var shadow = ZooShadow.Create(entity, _allocator);
+
+        // No change
+        var update = shadow.BuildUpdate(entity, _builder);
+        Assert.Null(update);
+
+        // Mutate derived field (this will trigger because BsonDocument comparison fails)
+        ((Dog)entity.MainAttraction).BarkVolume = 100;
+        update = shadow.BuildUpdate(entity, _builder);
+        Assert.NotNull(update);
+
+        var bson = RenderUpdate(update);
+        Assert.True(bson.Contains("$set"));
+        Assert.True(bson["$set"].AsBsonDocument.Contains("MainAttraction"));
+        Assert.Equal(100, bson["$set"].AsBsonDocument["MainAttraction"].AsBsonDocument["BarkVolume"].AsInt32);
+        
+        // Swap polymorphic types completely
+        entity.MainAttraction = new Cat { Name = "Fluffy", IsGrumpy = true };
+        update = shadow.BuildUpdate(entity, _builder);
+        Assert.NotNull(update);
     }
 
     public void Dispose() => _allocator.Dispose();
