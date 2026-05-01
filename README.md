@@ -13,6 +13,22 @@ Now, the idea behind **MongoZen** is to take a Mongo driver then add "Unit of Wo
 *   **In-Memory Provider**: Write tests that run fast without spinning up a Docker "testcontainer" container every time.
 *   **Lean & Performance-First**: We aren't making "zero-allocation" marketing claims, but we are religiously focused on minimizing heap churn and maximizing throughput.
 
+## Identity Map & Identity Representation
+
+MongoZen uses an internal **Identity Map** to ensure that if you load the same document twice in one session, you get the same instance. This is powered by a high-performance `DocId` struct.
+
+### DocId: The 20-byte Fingerprint
+
+To keep the Identity Map as fast as possible, all document IDs are converted into a fixed-size, 20-byte blittable `DocId` struct. 
+
+- **Native Types**: `ObjectId`, `Guid`, `int`, and `long` are stored directly without any data loss.
+- **Hashed Types**: `string` and other complex IDs are stored as a **128-bit hash** (using `XxHash128`).
+
+#### Transparent Trade-off: Hash Collisions
+By using 128-bit hashes for string IDs, we gain massive performance and memory efficiency (avoiding millions of string allocations in the map). However, this introduces a theoretical risk of hash collisions. 
+
+The probability of a collision is $2^{-64}$ for a 50% chance after seeing $2^{64}$ unique IDs. For context, if you generate **1 billion unique IDs every second**, it would take approximately **500 years** to reach a 1% probability of a collision. For the scope of a single session, this risk is considered non-existent for all practical engineering purposes.
+
 ## Quick Start
 
 ### 1. Define your Context

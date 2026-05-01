@@ -304,8 +304,8 @@ public class ShadowGenerator : IIncrementalGenerator
                     break;
                 case TypeCategory.String:
                     sb.AppendLine(
-                        $"        if (string.IsNullOrEmpty({access})) {{ if (!{shadow}.IsEmpty) return false; }}");
-                    sb.AppendLine($"        else if (!{shadow}.Equals({access})) return false;");
+                        $"        if ({access} == null) {{ if ({shadow}.RawPtr != null) return false; }}");
+                    sb.AppendLine($"        else if ({shadow}.RawPtr == null || !{shadow}.Equals({access})) return false;");
                     break;
                 case TypeCategory.Document:
                     sb.AppendLine($"        if (!{shadow}.Equals({access})) return false;");
@@ -335,6 +335,7 @@ public class ShadowGenerator : IIncrementalGenerator
             $"    public void BuildUpdate({info.Symbol.ToDisplayString()}? entity, string pathPrefix, UpdateDefinitionBuilder<BsonDocument> builder, ref UpdateDefinition<BsonDocument>? combined)");
         sb.AppendLine("    {");
         sb.AppendLine("        if (this.Equals(entity)) return;");
+        sb.AppendLine("        if (entity == null) return;");
 
         foreach (var prop in info.Properties)
         {
@@ -347,21 +348,20 @@ public class ShadowGenerator : IIncrementalGenerator
             switch (prop.Category)
             {
                 case TypeCategory.Primitive:
-                    sb.AppendLine($"        if (entity != null && {access} != this.{propName})");
+                    sb.AppendLine($"        if ({access} != this.{propName})");
                     sb.AppendLine(
                         $"            combined = (combined == null) ? builder.Set({path}, {access}) : builder.Combine(combined, builder.Set({path}, {access}));");
                     break;
 
                 case TypeCategory.String:
-                    sb.AppendLine("        if (entity != null)");
                     sb.AppendLine("        {");
                     sb.AppendLine($"            var cur = {access};");
-                    sb.AppendLine("            if (string.IsNullOrEmpty(cur))");
+                    sb.AppendLine("            if (cur == null)");
                     sb.AppendLine("            {");
                     sb.AppendLine(
-                        $"                if (!this.{propName}.IsEmpty) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
+                        $"                if (this.{propName}.RawPtr != null) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
                     sb.AppendLine("            }");
-                    sb.AppendLine($"            else if (!this.{propName}.Equals(cur))");
+                    sb.AppendLine($"            else if (this.{propName}.RawPtr == null || !this.{propName}.Equals(cur))");
                     sb.AppendLine("            {");
                     sb.AppendLine(
                         $"                combined = (combined == null) ? builder.Set({path}, cur) : builder.Combine(combined, builder.Set({path}, cur));");
@@ -370,7 +370,7 @@ public class ShadowGenerator : IIncrementalGenerator
                     break;
 
                 case TypeCategory.Nullable:
-                    sb.AppendLine($"        if (entity != null && {access} != this.{propName})");
+                    sb.AppendLine($"        if ({access} != this.{propName})");
                     sb.AppendLine("        {");
                     sb.AppendLine(
                         $"            if ({access} == null) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
@@ -400,34 +400,28 @@ public class ShadowGenerator : IIncrementalGenerator
 
                 case TypeCategory.Collection:
                     sb.AppendLine($"        var coll_{propName} = {access};");
-                    sb.AppendLine("        if (entity != null)");
+                    sb.AppendLine($"        if (coll_{propName} == null)");
                     sb.AppendLine("        {");
-                    sb.AppendLine($"            if (coll_{propName} == null)");
-                    sb.AppendLine("            {");
                     sb.AppendLine(
-                        $"                if (this.{propName}.Length != 0) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
-                    sb.AppendLine("            }");
-                    sb.AppendLine($"            else if (!Is{propName}Equal(coll_{propName}))");
-                    sb.AppendLine("            {");
+                        $"            if (this.{propName}.Length != 0) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
+                    sb.AppendLine("        }");
+                    sb.AppendLine($"        else if (!Is{propName}Equal(coll_{propName}))");
+                    sb.AppendLine("        {");
                     sb.AppendLine(
-                        $"                combined = (combined == null) ? builder.Set({path}, coll_{propName}) : builder.Combine(combined, builder.Set({path}, coll_{propName}));");
-                    sb.AppendLine("            }");
+                        $"            combined = (combined == null) ? builder.Set({path}, coll_{propName}) : builder.Combine(combined, builder.Set({path}, coll_{propName}));");
                     sb.AppendLine("        }");
                     break;
                 case TypeCategory.Dictionary:
                     sb.AppendLine($"        var dict_{propName} = {access};");
-                    sb.AppendLine("        if (entity != null)");
+                    sb.AppendLine($"        if (dict_{propName} == null)");
                     sb.AppendLine("        {");
-                    sb.AppendLine($"            if (dict_{propName} == null)");
-                    sb.AppendLine("            {");
                     sb.AppendLine(
-                        $"                if (this.{propName}.Count != 0) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
-                    sb.AppendLine("            }");
-                    sb.AppendLine($"            else if (!Is{propName}Equal(dict_{propName}))");
-                    sb.AppendLine("            {");
+                        $"            if (this.{propName}.Count != 0) combined = (combined == null) ? builder.Unset({path}) : builder.Combine(combined, builder.Unset({path}));");
+                    sb.AppendLine("        }");
+                    sb.AppendLine($"        else if (!Is{propName}Equal(dict_{propName}))");
+                    sb.AppendLine("        {");
                     sb.AppendLine(
-                        $"                combined = (combined == null) ? builder.Set({path}, dict_{propName}) : builder.Combine(combined, builder.Set({path}, dict_{propName}));");
-                    sb.AppendLine("            }");
+                        $"            combined = (combined == null) ? builder.Set({path}, dict_{propName}) : builder.Combine(combined, builder.Set({path}, dict_{propName}));");
                     sb.AppendLine("        }");
                     break;
             }
@@ -458,8 +452,8 @@ public class ShadowGenerator : IIncrementalGenerator
                 sb.AppendLine($"{indent}if ({managed} != {shadow}){suffix}");
                 break;
             case TypeCategory.String:
-                sb.AppendLine($"{indent}if (string.IsNullOrEmpty({managed})) {{ if (!{shadow}.IsEmpty){suffix} }}");
-                sb.AppendLine($"{indent}else if (!{shadow}.Equals({managed})){suffix}");
+                sb.AppendLine($"{indent}if ({managed} == null) {{ if ({shadow}.RawPtr != null){suffix} }}");
+                sb.AppendLine($"{indent}else if ({shadow}.RawPtr == null || !{shadow}.Equals({managed})){suffix}");
                 break;
             case TypeCategory.Document:
                 sb.AppendLine($"{indent}if (!{shadow}.Equals({managed})){suffix}");

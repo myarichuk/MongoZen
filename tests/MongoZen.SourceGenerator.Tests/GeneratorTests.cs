@@ -86,8 +86,8 @@ public readonly unsafe struct SimpleEntityShadow
         if (!this._HasValue) return false;
 
         if (entity.Id != this.Id) return false;
-        if (string.IsNullOrEmpty(entity.Name)) { if (!this.Name.IsEmpty) return false; }
-        else if (!this.Name.Equals(entity.Name)) return false;
+        if (entity.Name == null) { if (this.Name.RawPtr != null) return false; }
+        else if (this.Name.RawPtr == null || !this.Name.Equals(entity.Name)) return false;
         return true;
     }
 
@@ -101,20 +101,20 @@ public readonly unsafe struct SimpleEntityShadow
     public void BuildUpdate(TestNamespace.SimpleEntity? entity, string pathPrefix, UpdateDefinitionBuilder<BsonDocument> builder, ref UpdateDefinition<BsonDocument>? combined)
     {
         if (this.Equals(entity)) return;
+        if (entity == null) return;
 
         // Id
-        if (entity != null && entity.Id != this.Id)
+        if (entity.Id != this.Id)
             combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Id"" : pathPrefix + ""Id""), entity.Id) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Id"" : pathPrefix + ""Id""), entity.Id));
 
         // Name
-        if (entity != null)
         {
             var cur = entity.Name;
-            if (string.IsNullOrEmpty(cur))
+            if (cur == null)
             {
-                if (!this.Name.IsEmpty) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name"")));
+                if (this.Name.RawPtr != null) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name"")));
             }
-            else if (!this.Name.Equals(cur))
+            else if (this.Name.RawPtr == null || !this.Name.Equals(cur))
             {
                 combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name""), cur) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name""), cur));
             }
@@ -239,9 +239,10 @@ public readonly unsafe struct ComplexEntityShadow
     public void BuildUpdate(TestNamespace.ComplexEntity? entity, string pathPrefix, UpdateDefinitionBuilder<BsonDocument> builder, ref UpdateDefinition<BsonDocument>? combined)
     {
         if (this.Equals(entity)) return;
+        if (entity == null) return;
 
         // Id
-        if (entity != null && entity.Id != this.Id)
+        if (entity.Id != this.Id)
             combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Id"" : pathPrefix + ""Id""), entity.Id) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Id"" : pathPrefix + ""Id""), entity.Id));
 
         // Home
@@ -261,16 +262,13 @@ public readonly unsafe struct ComplexEntityShadow
 
         // Tags
         var coll_Tags = entity.Tags;
-        if (entity != null)
+        if (coll_Tags == null)
         {
-            if (coll_Tags == null)
-            {
-                if (this.Tags.Length != 0) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags"")));
-            }
-            else if (!IsTagsEqual(coll_Tags))
-            {
-                combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags""), coll_Tags) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags""), coll_Tags));
-            }
+            if (this.Tags.Length != 0) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags"")));
+        }
+        else if (!IsTagsEqual(coll_Tags))
+        {
+            combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags""), coll_Tags) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags""), coll_Tags));
         }
     }
 
@@ -283,8 +281,8 @@ public readonly unsafe struct ComplexEntityShadow
         foreach (var item in current)
         {
             var s = span[idx++];
-                if (string.IsNullOrEmpty(item)) { if (!s.IsEmpty) return false; }
-                else if (!s.Equals(item)) return false;
+                if (item == null) { if (s.RawPtr != null) return false; }
+                else if (s.RawPtr == null || !s.Equals(item)) return false;
         }
         return true;
     }
@@ -329,8 +327,8 @@ public readonly unsafe struct AddressShadow
         if (entity == null) return !this._HasValue;
         if (!this._HasValue) return false;
 
-        if (string.IsNullOrEmpty(entity.City)) { if (!this.City.IsEmpty) return false; }
-        else if (!this.City.Equals(entity.City)) return false;
+        if (entity.City == null) { if (this.City.RawPtr != null) return false; }
+        else if (this.City.RawPtr == null || !this.City.Equals(entity.City)) return false;
         return true;
     }
 
@@ -344,16 +342,16 @@ public readonly unsafe struct AddressShadow
     public void BuildUpdate(TestNamespace.Address? entity, string pathPrefix, UpdateDefinitionBuilder<BsonDocument> builder, ref UpdateDefinition<BsonDocument>? combined)
     {
         if (this.Equals(entity)) return;
+        if (entity == null) return;
 
         // City
-        if (entity != null)
         {
             var cur = entity.City;
-            if (string.IsNullOrEmpty(cur))
+            if (cur == null)
             {
-                if (!this.City.IsEmpty) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City"")));
+                if (this.City.RawPtr != null) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City"")));
             }
-            else if (!this.City.Equals(cur))
+            else if (this.City.RawPtr == null || !this.City.Equals(cur))
             {
                 combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City""), cur) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City""), cur));
             }

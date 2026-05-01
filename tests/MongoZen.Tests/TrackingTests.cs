@@ -204,5 +204,34 @@ public class TrackingTests : IDisposable
         Assert.NotNull(update);
     }
 
+    [Document]
+    public class StringEntity
+    {
+        public string? Value { get; set; }
+    }
+
+    [Fact]
+    public void Should_Distinguish_Null_And_Empty_Strings()
+    {
+        var entity = new StringEntity { Value = "initial" };
+        var shadow = StringEntityShadow.Create(entity, _allocator);
+
+        // Transition to Empty String -> Should be $set
+        entity.Value = "";
+        var update = shadow.BuildUpdate(entity, _builder);
+        Assert.NotNull(update);
+        var bson = RenderUpdate(update);
+        Assert.True(bson.Contains("$set"));
+        Assert.Equal("", bson["$set"].AsBsonDocument["Value"].AsString);
+
+        // Transition to Null -> Should be $unset
+        entity.Value = null;
+        update = shadow.BuildUpdate(entity, _builder);
+        Assert.NotNull(update);
+        bson = RenderUpdate(update);
+        Assert.True(bson.Contains("$unset"));
+        Assert.Equal(1, bson["$unset"].AsBsonDocument["Value"].ToInt32());
+    }
+
     public void Dispose() => _allocator.Dispose();
 }
