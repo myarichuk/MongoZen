@@ -129,7 +129,10 @@ public readonly struct DocId : IEquatable<DocId>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DocId From(object? rawId)
     {
-        if (rawId == null) return default;
+        if (rawId == null)
+        {
+            return default;
+        }
 
         return rawId switch
         {

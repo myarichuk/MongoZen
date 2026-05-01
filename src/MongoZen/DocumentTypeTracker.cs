@@ -31,7 +31,12 @@ public static class DocumentTypeTracker
     /// </summary>
     public static string GetDefaultCollectionName(Type type)
     {
-        // TODO: create conventions and make this is the default. Consider doing semantic plural for this
-        return $"{type.Name}s";
+        var docAttr = type.GetCustomAttribute<DocumentAttribute>();
+        if (docAttr?.CollectionName != null)
+        {
+            return docAttr.CollectionName;
+        }
+
+        return Conventions.FindCollectionName(type);
     }
 }

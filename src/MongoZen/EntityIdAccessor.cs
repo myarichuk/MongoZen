@@ -44,7 +44,10 @@ internal static class EntityIdAccessor<TEntity>
     private static Func<TEntity, DocId> BuildDocIdGetter(IIdConvention convention)
     {
         var prop = convention.ResolveIdProperty<TEntity>();
-        if (prop is null) return _ => default;
+        if (prop is null)
+        {
+            return _ => default;
+        }
 
         var parameter = Expression.Parameter(typeof(TEntity), "entity");
         var propertyAccess = Expression.Property(parameter, prop);
