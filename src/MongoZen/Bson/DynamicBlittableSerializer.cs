@@ -47,7 +47,8 @@ public static class DynamicBlittableSerializer<T>
             foreach (var prop in GetValidProperties(type))
             {
                 var propValue = Expression.Property(objParam, prop);
-                var nameSpan = Expression.Call(AsSpanMethod, Expression.Constant(prop.Name));
+                var elementName = GetElementName(prop);
+                var nameSpan = Expression.Call(AsSpanMethod, Expression.Constant(elementName));
                 
                 body.Add(EmitPropertyWrite(writerParam, nameSpan, propValue, prop.PropertyType));
             }

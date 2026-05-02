@@ -77,7 +77,7 @@ public unsafe class DynamicSerializerTests
         var doc = writer.Commit(arena);
 
         // Verify BSON structure
-        Assert.Equal("parent-1", doc.GetString("Id"));
+        Assert.Equal("parent-1", doc.GetString("_id"));
         var nestedDoc = doc.GetDocument("Child", arena);
         Assert.Equal("child-1", nestedDoc.GetString("Name"));
 

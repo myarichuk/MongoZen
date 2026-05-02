@@ -31,6 +31,9 @@ public sealed class DocumentSession : IDisposable
 
     public IAttachmentsSessionOperations Attachments => _attachments ??= new AttachmentsSessionOperations(_database, _clientSession);
 
+    /// <summary>
+    /// Starts a new MongoDB transaction within this session.
+    /// </summary>
     public async Task StartTransactionAsync(CancellationToken cancellationToken = default)
     {
         _clientSession ??= await _database.Client.StartSessionAsync(cancellationToken: cancellationToken);
@@ -44,12 +47,18 @@ public sealed class DocumentSession : IDisposable
         }
     }
 
+    /// <summary>
+    /// Commits the current MongoDB transaction.
+    /// </summary>
     public async Task CommitTransactionAsync(CancellationToken cancellationToken = default)
     {
         if (_clientSession == null) throw new InvalidOperationException("No transaction in progress.");
         await _clientSession.CommitTransactionAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Aborts the current MongoDB transaction.
+    /// </summary>
     public async Task AbortTransactionAsync(CancellationToken cancellationToken = default)
     {
         if (_clientSession == null) throw new InvalidOperationException("No transaction in progress.");
