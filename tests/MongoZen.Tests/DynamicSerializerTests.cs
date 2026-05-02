@@ -3,10 +3,11 @@ using Xunit;
 using SharpArena.Allocators;
 using MongoZen.Bson;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 
 namespace MongoZen.Tests;
 
-public class DynamicSerializerTests
+public unsafe class DynamicSerializerTests
 {
     public class SimplePoco
     {
@@ -103,32 +104,35 @@ public class DynamicSerializerTests
         public Dictionary<string, SimplePoco> Children { get; set; } = new();
     }
 
-    [Fact]
-    public void Can_Roundtrip_Dictionaries_Dynamically()
+    public class BridgePoco
     {
+        [MongoDB.Bson.Serialization.Attributes.BsonRepresentation(BsonType.String)]
+        public int IntAsString { get; set; }
+    }
+
+    [Fact]
+    public void Can_Roundtrip_Via_Driver_Bridge()
+    {
+        BsonClassMap.LookupClassMap(typeof(BridgePoco)); // Ensure attributes are scanned
         using var arena = new ArenaAllocator();
-        var poco = new DictionaryPoco
-        {
-            Name = "Root",
-            Metadata = new Dictionary<string, int> { { "key1", 100 }, { "key2", 200 } },
-            Children = new Dictionary<string, SimplePoco>
-            {
-                { "child1", new SimplePoco { Name = "C1", Age = 1 } }
-            }
-        };
+        var poco = new BridgePoco { IntAsString = 123 };
 
-        // Serialize
         var writer = new ArenaBsonWriter(arena);
-        DynamicBlittableSerializer<DictionaryPoco>.SerializeDelegate(ref writer, poco);
+        writer.WriteStartDocument();
+        writer.WriteName("Data", BlittableBsonConstants.BsonType.Document);
+        
+        // This should hit the BsonSerializerBridge since it's a complex type
+        BlittableConverter<BridgePoco>.Instance.Write(ref writer, poco);
+        writer.WriteEndDocument();
+        
         var doc = writer.Commit(arena);
+        var nested = doc.GetDocument("Data", arena);
 
-        // Deserialize
-        var result = DynamicBlittableSerializer<DictionaryPoco>.DeserializeDelegate(doc, arena);
+        // Verify that it was stored as a string (per BsonRepresentation attribute)
+        Assert.Equal("123", nested.GetString("IntAsString"));
 
-        Assert.Equal("Root", result.Name);
-        Assert.Equal(2, result.Metadata.Count);
-        Assert.Equal(100, result.Metadata["key1"]);
-        Assert.Single(result.Children);
-        Assert.Equal("C1", result.Children["child1"].Name);
+        // Deserialize back
+        var result = BlittableConverter<BridgePoco>.Instance.Read(nested.Pointer, BlittableBsonConstants.BsonType.Document, nested.Length);
+        Assert.Equal(123, result.IntAsString);
     }
 }

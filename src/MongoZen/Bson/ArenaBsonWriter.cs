@@ -1,3 +1,4 @@
+using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -111,16 +112,83 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
     public void WriteBoolean(ReadOnlySpan<char> name, bool value)
     {
         WriteName(name, BlittableBsonConstants.BsonType.Boolean);
-        _buffer.Add(value ? (byte)1 : (byte)0);
+        WriteBooleanValue(value);
     }
 
     public void WriteString(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
         WriteName(name, BlittableBsonConstants.BsonType.String);
-        
+        WriteStringValue(value);
+    }
+
+    public void WriteObjectId(ReadOnlySpan<char> name, ObjectId value)
+    {
+        WriteName(name, BlittableBsonConstants.BsonType.ObjectId);
+        WriteObjectIdValue(value);
+    }
+
+    public void WriteDateTime(ReadOnlySpan<char> name, DateTime value)
+    {
+        WriteName(name, BlittableBsonConstants.BsonType.DateTime);
+        WriteDateTimeValue(value);
+    }
+
+    public void WriteNull(ReadOnlySpan<char> name)
+    {
+        WriteName(name, BlittableBsonConstants.BsonType.Null);
+    }
+
+    public void WriteBinary(ReadOnlySpan<char> name, ReadOnlySpan<byte> bytes, byte subtype = 0)
+    {
+        WriteName(name, BlittableBsonConstants.BsonType.Binary);
+        WriteBinaryValue(bytes, subtype);
+    }
+
+    public void WriteGuid(ReadOnlySpan<char> name, Guid value)
+    {
+        WriteName(name, BlittableBsonConstants.BsonType.Binary);
+        WriteGuidValue(value);
+    }
+
+    public void WriteStartDocument(ReadOnlySpan<char> name)
+    {
+        WriteName(name, BlittableBsonConstants.BsonType.Document);
+        WriteStartDocument();
+    }
+
+    public void WriteStartArray(ReadOnlySpan<char> name)
+    {
+        WriteName(name, BlittableBsonConstants.BsonType.Array);
+        WriteStartArray();
+    }
+
+    // Value-only versions for converters
+    public void WriteInt32Value(int value)
+    {
+        Span<byte> bytes = stackalloc byte[4];
+        Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(bytes), value);
+        _buffer.AddRange(bytes);
+    }
+
+    public void WriteInt64Value(long value)
+    {
+        Span<byte> bytes = stackalloc byte[8];
+        Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(bytes), value);
+        _buffer.AddRange(bytes);
+    }
+
+    public void WriteDoubleValue(double value)
+    {
+        Span<byte> bytes = stackalloc byte[8];
+        Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(bytes), value);
+        _buffer.AddRange(bytes);
+    }
+
+    public void WriteBooleanValue(bool value) => _buffer.Add(value ? (byte)1 : (byte)0);
+
+    public void WriteStringValue(ReadOnlySpan<char> value)
+    {
         int byteCount = Encoding.UTF8.GetByteCount(value);
-        
-        // BSON string length includes null terminator
         WriteInt32Value(byteCount + 1);
 
         if (byteCount <= 512)
@@ -146,45 +214,40 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         _buffer.Add(0);
     }
 
-    public void WriteObjectId(ReadOnlySpan<char> name, ObjectId value)
+    public void WriteObjectIdValue(ObjectId value)
     {
-        WriteName(name, BlittableBsonConstants.BsonType.ObjectId);
-        
-        // Use ArrayPool to avoid heap allocation while ensuring correct endianness via the driver
-        byte[] bytes = ArrayPool<byte>.Shared.Rent(12);
-        try
-        {
-            value.ToByteArray(bytes, 0);
-            _buffer.AddRange(new ReadOnlySpan<byte>(bytes, 0, 12));
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(bytes);
-        }
+        // Use ArrayPool for correct endianness via the driver if we must, 
+        // but for writing to buffer, we can just use stackalloc if it's 12 bytes.
+        Span<byte> bytes = stackalloc byte[12];
+        // Note: ObjectId doesn't have TryWriteBytes(Span) in some versions.
+        // We'll use the ToByteArray which unfortunately allocates, or fixed.
+        byte[] arr = value.ToByteArray(); // fallback for now to be safe with endianness
+        _buffer.AddRange(arr);
     }
 
-    public void WriteDateTime(ReadOnlySpan<char> name, DateTime value)
+    public void WriteDateTimeValue(DateTime value)
     {
-        WriteName(name, BlittableBsonConstants.BsonType.DateTime);
         long ms = (long)(value.ToUniversalTime() - DateTime.UnixEpoch).TotalMilliseconds;
         WriteInt64Value(ms);
     }
 
-    public void WriteNull(ReadOnlySpan<char> name)
+    public void WriteBinaryValue(ReadOnlySpan<byte> bytes, byte subtype = 0)
     {
-        WriteName(name, BlittableBsonConstants.BsonType.Null);
+        WriteInt32Value(bytes.Length);
+        _buffer.Add(subtype);
+        _buffer.AddRange(bytes);
     }
 
-    public void WriteStartDocument(ReadOnlySpan<char> name)
+    public void WriteGuidValue(Guid value)
     {
-        WriteName(name, BlittableBsonConstants.BsonType.Document);
-        WriteStartDocument();
+        Span<byte> bytes = stackalloc byte[16];
+        value.TryWriteBytes(bytes, bigEndian: true, out _);
+        WriteBinaryValue(bytes, 4);
     }
 
-    public void WriteStartArray(ReadOnlySpan<char> name)
+    public void WriteRaw(ReadOnlySpan<byte> bytes)
     {
-        WriteName(name, BlittableBsonConstants.BsonType.Array);
-        WriteStartArray();
+        _buffer.AddRange(bytes);
     }
 
     // Value-only versions for arrays (using index as string key)
@@ -200,26 +263,5 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         Span<char> name = stackalloc char[11];
         index.TryFormat(name, out int charsWritten);
         WriteString(name.Slice(0, charsWritten), value);
-    }
-
-    private void WriteInt32Value(int value)
-    {
-        Span<byte> bytes = stackalloc byte[4];
-        Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(bytes), value);
-        _buffer.AddRange(bytes);
-    }
-
-    private void WriteInt64Value(long value)
-    {
-        Span<byte> bytes = stackalloc byte[8];
-        Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(bytes), value);
-        _buffer.AddRange(bytes);
-    }
-
-    private void WriteDoubleValue(double value)
-    {
-        Span<byte> bytes = stackalloc byte[8];
-        Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(bytes), value);
-        _buffer.AddRange(bytes);
     }
 }
