@@ -24,7 +24,26 @@ public readonly unsafe struct BlittableBsonDocument
 
     public ReadOnlySpan<byte> AsReadOnlySpan() => new(_bsonBytes, _length);
 
-    public IEnumerable<ArenaUtf8String> Keys => _index.Keys;
+    public KeysCollection Keys => new(_index);
+
+    public readonly struct KeysCollection(ArenaDictionary<ArenaUtf8String, int> index) : IEnumerable<ArenaUtf8String>
+    {
+        public Enumerator GetEnumerator() => new(index);
+        IEnumerator<ArenaUtf8String> IEnumerable<ArenaUtf8String>.GetEnumerator() => GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public struct Enumerator(ArenaDictionary<ArenaUtf8String, int> index) : IEnumerator<ArenaUtf8String>
+        {
+            private IEnumerator<ArenaUtf8String> _inner = index.Keys.GetEnumerator();
+            public ArenaUtf8String Current => _inner.Current;
+            object? System.Collections.IEnumerator.Current => Current;
+            public bool MoveNext() => _inner.MoveNext();
+            public void Reset() => _inner.Reset();
+            public void Dispose() => _inner.Dispose();
+        }
+    }
+
+    public IEnumerable<ArenaUtf8String> KeysEnumerable => _index.Keys;
 
     public bool TryGetElementOffset(ReadOnlySpan<char> name, out int offset)
     {
@@ -134,8 +153,7 @@ public readonly unsafe struct BlittableBsonDocument
             throw new InvalidCastException($"Cannot cast {type} to ObjectId");
         }
         
-        // TODO: Make a PR to MongoDB driver for Span-based constructor
-        var bytes = new byte[12];
+        byte[] bytes = new byte[12];
         for (int i = 0; i < 12; i++) bytes[i] = p[i];
         return new ObjectId(bytes);
     }
