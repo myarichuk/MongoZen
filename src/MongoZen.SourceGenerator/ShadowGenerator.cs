@@ -43,7 +43,10 @@ public class ShadowGenerator : IIncrementalGenerator
         while (queue.Count > 0)
         {
             var type = queue.Dequeue();
-            if (typesToGenerate.ContainsKey(type)) continue;
+            if (typesToGenerate.ContainsKey(type))
+            {
+                continue;
+            }
 
             var info = new TypeInfo(type);
             if (AnalyzeType(info, queue, context))
@@ -66,7 +69,9 @@ public class ShadowGenerator : IIncrementalGenerator
         foreach (var prop in members)
         {
             if (prop.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == "MongoDB.Bson.Serialization.Attributes.BsonIgnoreAttribute" || a.AttributeClass?.Name == "BsonIgnoreAttribute"))
+            {
                 continue;
+            }
 
             var category = CategorizeType(prop.Type, out var nestedType, out var secondaryNestedType);
 
@@ -103,10 +108,16 @@ public class ShadowGenerator : IIncrementalGenerator
             else if (category == TypeCategory.Dictionary && nestedType != null && secondaryNestedType != null)
             {
                 var keyCategory = CategorizeType(nestedType, out var keyNested, out _);
-                if (keyCategory == TypeCategory.Document && keyNested is INamedTypeSymbol namedKey) queue.Enqueue(namedKey);
+                if (keyCategory == TypeCategory.Document && keyNested is INamedTypeSymbol namedKey)
+                {
+                    queue.Enqueue(namedKey);
+                }
 
                 var valCategory = CategorizeType(secondaryNestedType, out var valNested, out _);
-                if (valCategory == TypeCategory.Document && valNested is INamedTypeSymbol namedVal) queue.Enqueue(namedVal);
+                if (valCategory == TypeCategory.Document && valNested is INamedTypeSymbol namedVal)
+                {
+                    queue.Enqueue(namedVal);
+                }
             }
 
             info.Properties.Add(new PropertyInfo(prop, elementName, category, nestedType, secondaryNestedType));
@@ -117,10 +128,26 @@ public class ShadowGenerator : IIncrementalGenerator
 
     private static bool IsPolymorphic(ITypeSymbol type)
     {
-        if (type.TypeKind == TypeKind.Interface) return true;
-        if (type.IsAbstract) return true;
-        if (type.SpecialType == SpecialType.System_Object) return true;
-        if (type.GetAttributes().Any(a => a.AttributeClass?.Name == "BsonKnownTypesAttribute" || a.AttributeClass?.Name == "BsonKnownTypes")) return true;
+        if (type.TypeKind == TypeKind.Interface)
+        {
+            return true;
+        }
+
+        if (type.IsAbstract)
+        {
+            return true;
+        }
+
+        if (type.SpecialType == SpecialType.System_Object)
+        {
+            return true;
+        }
+
+        if (type.GetAttributes().Any(a => a.AttributeClass?.Name == "BsonKnownTypesAttribute" || a.AttributeClass?.Name == "BsonKnownTypes"))
+        {
+            return true;
+        }
+
         return false;
     }
 
@@ -129,7 +156,10 @@ public class ShadowGenerator : IIncrementalGenerator
         nestedType = null;
         secondaryNestedType = null;
 
-        if (type.SpecialType == SpecialType.System_String) return TypeCategory.String;
+        if (type.SpecialType == SpecialType.System_String)
+        {
+            return TypeCategory.String;
+        }
 
         if (type is INamedTypeSymbol named && named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
         {
@@ -137,7 +167,10 @@ public class ShadowGenerator : IIncrementalGenerator
             return TypeCategory.Nullable;
         }
 
-        if (type.IsUnmanagedType) return TypeCategory.Primitive;
+        if (type.IsUnmanagedType)
+        {
+            return TypeCategory.Primitive;
+        }
 
         if (IsDictionary(type, out var keyType, out var valueType))
         {
@@ -157,7 +190,11 @@ public class ShadowGenerator : IIncrementalGenerator
             var ns = type.ContainingNamespace.ToDisplayString();
             if (!ns.StartsWith("System") && !ns.StartsWith("MongoDB") && !ns.StartsWith("Microsoft"))
             {
-                if (IsPolymorphic(type)) return TypeCategory.Polymorphic;
+                if (IsPolymorphic(type))
+                {
+                    return TypeCategory.Polymorphic;
+                }
+
                 nestedType = type;
                 return TypeCategory.Document;
             }
@@ -605,7 +642,11 @@ public class ShadowGenerator : IIncrementalGenerator
 
     private string GenerateKeyAccess(ITypeSymbol keyType, string managedAccess)
     {
-        if (keyType.SpecialType == SpecialType.System_String) return managedAccess;
+        if (keyType.SpecialType == SpecialType.System_String)
+        {
+            return managedAccess;
+        }
+
         return managedAccess;
     }
 
@@ -613,7 +654,7 @@ public class ShadowGenerator : IIncrementalGenerator
     {
         public INamedTypeSymbol Symbol { get; }
         public string Name => Symbol.Name;
-        public List<PropertyInfo> Properties { get; } = new();
+        public List<PropertyInfo> Properties { get; } = [];
 
         public TypeInfo(INamedTypeSymbol symbol)
         {

@@ -1,8 +1,5 @@
-using System;
-using System.Collections.Generic;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
-using MongoZen;
 using SharpArena.Allocators;
 using MongoDB.Driver;
 using MongoDB.Bson;
@@ -34,7 +31,7 @@ public class ComplexEntity
 {
     public int Id { get; set; }
     public Customer Customer { get; set; } = new();
-    public List<string> Tags { get; set; } = new();
+    public List<string> Tags { get; set; } = [];
     public Dictionary<string, int> Metadata { get; set; } = new();
 }
 
@@ -62,7 +59,7 @@ public class ChangeTrackingBenchmarks
         {
             Id = 1,
             Customer = new Customer { Name = "Customer", Address = new Address { City = "City" } },
-            Tags = new List<string> { "tag1", "tag2", "tag3" },
+            Tags = ["tag1", "tag2", "tag3"],
             Metadata = new Dictionary<string, int> { { "k1", 1 }, { "k2", 2 } }
         };
         _complexShadow = ComplexEntityShadow.Create(_complexEntity, _allocator);

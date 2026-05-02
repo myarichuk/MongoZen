@@ -1,12 +1,6 @@
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
 using Xunit;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Threading.Tasks;
-using System.IO;
 
 namespace MongoZen.SourceGenerator.Tests;
 
