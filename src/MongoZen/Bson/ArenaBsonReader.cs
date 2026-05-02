@@ -3,8 +3,13 @@ using SharpArena.Collections;
 
 namespace MongoZen.Bson;
 
-internal static unsafe class ArenaBsonReader
+public static unsafe class ArenaBsonReader
 {
+    public static BlittableBsonDocument Read(byte[] bytes, ArenaAllocator arena)
+    {
+        return Read(new ReadOnlySpan<byte>(bytes), arena);
+    }
+
     public static BlittableBsonDocument Read(ReadOnlySpan<byte> bytes, ArenaAllocator arena)
     {
         var len = bytes.Length;

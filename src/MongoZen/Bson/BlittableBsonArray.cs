@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using SharpArena.Allocators;
 using SharpArena.Collections;
+using MongoDB.Bson;
 
 namespace MongoZen.Bson;
 
@@ -126,7 +127,40 @@ public readonly unsafe struct BlittableBsonArray : IReadOnlyList<BlittableBsonAr
             return System.Text.Encoding.UTF8.GetString(_p + 4, len - 1);
         }
 
-        public T Get<T>() => BlittableConverter<T>.Instance.Read(_p, _type, _length);
+        public T Get<T>()
+        {
+            if (typeof(T) == typeof(int)) return (T)(object)GetInt32();
+            if (typeof(T) == typeof(string)) return (T)(object)GetString();
+            if (typeof(T) == typeof(long))
+            {
+                if (_type != BlittableBsonConstants.BsonType.Int64) throw new InvalidCastException($"Cannot cast {_type} to Int64");
+                return (T)(object)*(long*)_p;
+            }
+            if (typeof(T) == typeof(double))
+            {
+                if (_type != BlittableBsonConstants.BsonType.Double) throw new InvalidCastException($"Cannot cast {_type} to Double");
+                return (T)(object)*(double*)_p;
+            }
+            if (typeof(T) == typeof(bool))
+            {
+                if (_type != BlittableBsonConstants.BsonType.Boolean) throw new InvalidCastException($"Cannot cast {_type} to Boolean");
+                return (T)(object)(*_p != 0);
+            }
+            if (typeof(T) == typeof(ObjectId))
+            {
+                if (_type != BlittableBsonConstants.BsonType.ObjectId) throw new InvalidCastException($"Cannot cast {_type} to ObjectId");
+                byte[] bytes = new byte[12];
+                for(int i=0; i<12; i++) bytes[i] = _p[i];
+                return (T)(object)new ObjectId(bytes);
+            }
+            if (typeof(T) == typeof(DateTime))
+            {
+                if (_type != BlittableBsonConstants.BsonType.DateTime) throw new InvalidCastException($"Cannot cast {_type} to DateTime");
+                return (T)(object)DateTime.UnixEpoch.AddMilliseconds(*(long*)_p);
+            }
+
+            return BlittableConverter<T>.Instance.Read(_p, _type, _length);
+        }
 
         public BlittableBsonDocument GetDocument()
         {

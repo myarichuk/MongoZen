@@ -18,6 +18,14 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
     private ArenaList<byte> _buffer = new(arena, initialCapacity);
     private ArenaList<int> _lengthOffsets = new(arena, 8);
 
+    private static readonly string[] IndexStrings = GenerateIndexStrings();
+    private static string[] GenerateIndexStrings()
+    {
+        var strings = new string[100];
+        for (int i = 0; i < 100; i++) strings[i] = i.ToString();
+        return strings;
+    }
+
     public int Position => _buffer.Length;
 
     /// <summary>
@@ -30,8 +38,6 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
             throw new InvalidOperationException("Not all documents/arrays were closed. Depth: " + _lengthOffsets.Length);
         }
         
-        // Ensure we are contiguous. ArenaList.AsPtr is the start of the contiguous block.
-        // BlittableBsonDocument expects a scan to build its index.
         return ArenaBsonReader.ReadInPlace(_buffer.AsPtr, _buffer.Length, arena);
     }
 
@@ -216,13 +222,16 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
 
     public void WriteObjectIdValue(ObjectId value)
     {
-        // Use ArrayPool for correct endianness via the driver if we must, 
-        // but for writing to buffer, we can just use stackalloc if it's 12 bytes.
-        Span<byte> bytes = stackalloc byte[12];
-        // Note: ObjectId doesn't have TryWriteBytes(Span) in some versions.
-        // We'll use the ToByteArray which unfortunately allocates, or fixed.
-        byte[] arr = value.ToByteArray(); // fallback for now to be safe with endianness
-        _buffer.AddRange(arr);
+        byte[] rented = ArrayPool<byte>.Shared.Rent(12);
+        try
+        {
+            value.ToByteArray(rented, 0);
+            _buffer.AddRange(new ReadOnlySpan<byte>(rented, 0, 12));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     public void WriteDateTimeValue(DateTime value)
@@ -253,15 +262,29 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
     // Value-only versions for arrays (using index as string key)
     public void WriteInt32(int index, int value)
     {
-        Span<char> name = stackalloc char[11];
-        index.TryFormat(name, out int charsWritten);
-        WriteInt32(name.Slice(0, charsWritten), value);
+        if ((uint)index < (uint)IndexStrings.Length)
+        {
+            WriteInt32(IndexStrings[index], value);
+        }
+        else
+        {
+            Span<char> name = stackalloc char[11];
+            index.TryFormat(name, out int charsWritten);
+            WriteInt32(name.Slice(0, charsWritten), value);
+        }
     }
 
     public void WriteString(int index, ReadOnlySpan<char> value)
     {
-        Span<char> name = stackalloc char[11];
-        index.TryFormat(name, out int charsWritten);
-        WriteString(name.Slice(0, charsWritten), value);
+        if ((uint)index < (uint)IndexStrings.Length)
+        {
+            WriteString(IndexStrings[index], value);
+        }
+        else
+        {
+            Span<char> name = stackalloc char[11];
+            index.TryFormat(name, out int charsWritten);
+            WriteString(name.Slice(0, charsWritten), value);
+        }
     }
 }

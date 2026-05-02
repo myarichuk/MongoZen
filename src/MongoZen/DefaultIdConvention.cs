@@ -5,6 +5,8 @@ namespace MongoZen;
 
 internal sealed class DefaultIdConvention : IIdConvention
 {
+    public static readonly DefaultIdConvention Instance = new();
+
     public PropertyInfo? ResolveIdProperty<TEntity>() =>
         Cache<TEntity>.Property;
 

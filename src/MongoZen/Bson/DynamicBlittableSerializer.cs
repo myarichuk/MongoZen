@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using SharpArena.Allocators;
 using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace MongoZen.Bson;
 
@@ -13,22 +15,26 @@ namespace MongoZen.Bson;
 public static class DynamicBlittableSerializer<T>
 {
     public delegate void SerializeAction(ref ArenaBsonWriter writer, T value);
+    public delegate UpdateDefinition<BsonDocument>? BuildUpdateAction(T entity, BlittableBsonDocument snapshot, UpdateDefinitionBuilder<BsonDocument> builder);
     
     public static readonly SerializeAction SerializeDelegate;
     public static readonly Func<BlittableBsonDocument, ArenaAllocator, T> DeserializeDelegate;
+    public static readonly BuildUpdateAction BuildUpdateDelegate;
 
     static DynamicBlittableSerializer()
     {
         SerializeDelegate = Emitter.CompileSerializer();
         DeserializeDelegate = Emitter.CompileDeserializer();
+        BuildUpdateDelegate = Emitter.CompileUpdateBuilder();
     }
 
     private static class Emitter
     {
-        private static readonly MethodInfo AsSpanMethod = typeof(MemoryExtensions).GetMethod("AsSpan", new[] { typeof(string) })!;
+        private static readonly MethodInfo AsSpanMethod = typeof(MemoryExtensions).GetMethod("AsSpan", [typeof(string)])!;
         private static readonly MethodInfo WriteStartDocMethod = typeof(ArenaBsonWriter).GetMethod(nameof(ArenaBsonWriter.WriteStartDocument), Type.EmptyTypes)!;
         private static readonly MethodInfo WriteEndDocMethod = typeof(ArenaBsonWriter).GetMethod(nameof(ArenaBsonWriter.WriteEndDocument), Type.EmptyTypes)!;
-        private static readonly MethodInfo WriteNameMethod = typeof(ArenaBsonWriter).GetMethod(nameof(ArenaBsonWriter.WriteName), new[] { typeof(ReadOnlySpan<char>), typeof(BlittableBsonConstants.BsonType) })!;
+        private static readonly MethodInfo WriteNameMethod = typeof(ArenaBsonWriter).GetMethod(nameof(ArenaBsonWriter.WriteName),
+            [typeof(ReadOnlySpan<char>), typeof(BlittableBsonConstants.BsonType)])!;
 
         public static SerializeAction CompileSerializer()
         {
@@ -52,7 +58,6 @@ public static class DynamicBlittableSerializer<T>
 
         private static Expression EmitPropertyWrite(ParameterExpression writer, Expression nameSpan, Expression value, Type type)
         {
-            // Pattern Matching for Primitives
             var writeMethod = type switch
             {
                 _ when type == typeof(int) => GetWriterMethod(nameof(ArenaBsonWriter.WriteInt32), typeof(ReadOnlySpan<char>), typeof(int)),
@@ -82,7 +87,6 @@ public static class DynamicBlittableSerializer<T>
                 return EmitDictionaryWrite(writer, nameSpan, value, type, valueType);
             }
 
-            // Fallback: Nested Document
             if (type.IsClass || (type.IsValueType && !type.IsPrimitive && !type.IsEnum))
             {
                 return EmitNestedWrite(writer, nameSpan, value, type);
@@ -143,12 +147,13 @@ public static class DynamicBlittableSerializer<T>
             }
 
             body.Add(objVar);
-            return Expression.Lambda<Func<BlittableBsonDocument, ArenaAllocator, T>>(Expression.Block(new[] { objVar }, body), docParam, arenaParam).Compile();
+            return Expression.Lambda<Func<BlittableBsonDocument, ArenaAllocator, T>>(Expression.Block([objVar], body), docParam, arenaParam).Compile();
         }
 
         private static Expression EmitPropertyRead(ParameterExpression doc, ParameterExpression arena, ParameterExpression obj, PropertyInfo prop)
         {
-            var nameSpan = Expression.Call(AsSpanMethod, Expression.Constant(prop.Name));
+            var elementName = GetElementName(prop);
+            var nameSpan = Expression.Call(AsSpanMethod, Expression.Constant(elementName));
             var offsetVar = Expression.Variable(typeof(int), "offset");
             var type = prop.PropertyType;
 
@@ -174,7 +179,7 @@ public static class DynamicBlittableSerializer<T>
                 Expression.Assign(Expression.Property(obj, prop), readExpr)
             );
 
-            return Expression.Block(new[] { offsetVar }, ifFound);
+            return Expression.Block([offsetVar], ifFound);
         }
 
         private static Expression EmitCollectionRead(ParameterExpression doc, ParameterExpression arena, ParameterExpression offset, Type type, Type elementType)
@@ -188,7 +193,7 @@ public static class DynamicBlittableSerializer<T>
             if (type.IsArray) return result;
             if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
             {
-                var listCtor = type.GetConstructor(new[] { typeof(IEnumerable<>).MakeGenericType(elementType) })!;
+                var listCtor = type.GetConstructor([typeof(IEnumerable<>).MakeGenericType(elementType)])!;
                 return Expression.New(listCtor, result);
             }
             
@@ -198,7 +203,7 @@ public static class DynamicBlittableSerializer<T>
         private static Expression EmitDictionaryRead(ParameterExpression doc, ParameterExpression arena, ParameterExpression offset, Type type, Type valueType)
         {
             var helperType = typeof(DictionaryHelper<>).MakeGenericType(valueType);
-            var method = helperType.GetMethod(nameof(DictionaryHelper<int>.ReadDictionary))!;
+            var method = helperType.GetMethod(nameof(DictionaryHelper<>.ReadDictionary))!;
 
             var nestedDocExpr = Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetDocument), typeof(int), typeof(ArenaAllocator)), offset, arena);
             var result = Expression.Call(method, nestedDocExpr, arena);
@@ -214,12 +219,84 @@ public static class DynamicBlittableSerializer<T>
             return Expression.Invoke(Expression.Field(null, delegateField), nestedDoc, arena);
         }
 
+        public static BuildUpdateAction CompileUpdateBuilder()
+        {
+            var type = typeof(T);
+            var entityParam = Expression.Parameter(type, "entity");
+            var snapshotParam = Expression.Parameter(typeof(BlittableBsonDocument), "snapshot");
+            var builderParam = Expression.Parameter(typeof(UpdateDefinitionBuilder<BsonDocument>), "builder");
+
+            var combinedVar = Expression.Variable(typeof(UpdateDefinition<BsonDocument>), "combined");
+            var body = new List<Expression> { Expression.Assign(combinedVar, Expression.Constant(null, typeof(UpdateDefinition<BsonDocument>))) };
+
+            foreach (var prop in GetValidProperties(type))
+            {
+                body.Add(EmitPropertyDiff(entityParam, snapshotParam, builderParam, combinedVar, prop, ""));
+            }
+
+            body.Add(combinedVar);
+            return Expression.Lambda<BuildUpdateAction>(Expression.Block([combinedVar], body), entityParam, snapshotParam, builderParam).Compile();
+        }
+
+        private static Expression EmitPropertyDiff(ParameterExpression entity, ParameterExpression snapshot, ParameterExpression builder, ParameterExpression combined, PropertyInfo prop, string pathPrefix)
+        {
+            var propValue = Expression.Property(entity, prop);
+            var elementName = GetElementName(prop);
+            var nameSpan = Expression.Call(AsSpanMethod, Expression.Constant(elementName));
+            var fullPath = string.IsNullOrEmpty(pathPrefix) ? elementName : pathPrefix + "." + elementName;
+            
+            var type = prop.PropertyType;
+            var offsetVar = Expression.Variable(typeof(int), "offset");
+            
+            Expression? compareExpr = type switch
+            {
+                _ when type == typeof(int) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)), offsetVar)),
+                _ when type == typeof(string) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetString), typeof(int)), offsetVar)),
+                _ => null
+            };
+
+            if (compareExpr == null) return Expression.Empty();
+
+            var setMethod = typeof(UpdateDefinitionBuilder<BsonDocument>)
+                .GetMethods()
+                .First(m => m.Name == "Set" && m.IsGenericMethod && m.GetParameters().Length == 2 && m.GetParameters()[0].ParameterType.Name.StartsWith("FieldDefinition"))
+                .MakeGenericMethod(type);
+
+            var updateExpr = Expression.Call(builder, setMethod, Expression.Convert(Expression.Constant(fullPath), typeof(FieldDefinition<,>).MakeGenericType(typeof(BsonDocument), type)), propValue);
+            
+            var combineExpr = Expression.Assign(combined, 
+                Expression.Condition(
+                    Expression.Equal(combined, Expression.Constant(null, typeof(UpdateDefinition<BsonDocument>))),
+                    updateExpr,
+                    Expression.Call(builder, typeof(UpdateDefinitionBuilder<BsonDocument>).GetMethod("Combine", [typeof(UpdateDefinition<BsonDocument>[] )])!, Expression.NewArrayInit(typeof(UpdateDefinition<BsonDocument>), combined, updateExpr))
+                )
+            );
+
+            var ifFound = Expression.IfThen(
+                Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, nameSpan, offsetVar),
+                Expression.IfThen(compareExpr, combineExpr)
+            );
+
+            return Expression.Block([offsetVar], ifFound);
+        }
+
+        private static string GetElementName(PropertyInfo prop)
+        {
+            var idAttr = prop.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonIdAttribute>();
+            if (idAttr != null || prop.Name == "Id") return "_id";
+
+            var elementAttr = prop.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonElementAttribute>();
+            return elementAttr?.ElementName ?? prop.Name;
+        }
+
         private static bool IsDictionary(Type type, out Type valueType)
         {
             if (type.IsGenericType)
             {
                 var def = type.GetGenericTypeDefinition();
-                if (def == typeof(Dictionary<,>) || def == typeof(IDictionary<,>) || def == typeof(IReadOnlyDictionary<,>))
+                if (def == typeof(Dictionary<,>) || 
+                    def == typeof(IDictionary<,>) || 
+                    def == typeof(IReadOnlyDictionary<,>))
                 {
                     var args = type.GetGenericArguments();
                     if (args[0] == typeof(string))

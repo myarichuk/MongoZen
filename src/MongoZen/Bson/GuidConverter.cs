@@ -1,3 +1,7 @@
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
 namespace MongoZen.Bson;
 
 public unsafe class GuidConverter : IBlittableConverter<Guid>
@@ -30,5 +34,10 @@ public unsafe class GuidConverter : IBlittableConverter<Guid>
         }
 
         throw new InvalidOperationException($"Unsupported Guid subtype: {subtype}");
+    }
+
+    public void Write(ref ArenaBsonWriter writer, Guid value)
+    {
+        writer.WriteGuidValue(value);
     }
 }

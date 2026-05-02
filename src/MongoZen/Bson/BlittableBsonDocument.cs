@@ -152,7 +152,7 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new InvalidCastException($"Cannot cast {type} to ObjectId");
         }
-        
+        //TODO: introduce pool
         byte[] bytes = new byte[12];
         for (int i = 0; i < 12; i++) bytes[i] = p[i];
         return new ObjectId(bytes);

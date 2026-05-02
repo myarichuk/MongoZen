@@ -135,4 +135,56 @@ public unsafe class DynamicSerializerTests
         var result = BlittableConverter<BridgePoco>.Instance.Read(nested.Pointer, BlittableBsonConstants.BsonType.Document, nested.Length);
         Assert.Equal(123, result.IntAsString);
     }
+
+    public class RichPoco
+    {
+        public ObjectId Id { get; set; }
+        public DateTime Timestamp { get; set; }
+        public string Data { get; set; } = "";
+    }
+
+    [Fact]
+    public void Can_Roundtrip_Rich_Poco_Dynamically()
+    {
+        using var arena = new ArenaAllocator();
+        var id = ObjectId.GenerateNewId();
+        var now = DateTime.UtcNow;
+        now = new DateTime(now.Ticks - (now.Ticks % TimeSpan.TicksPerMillisecond), now.Kind);
+
+        var poco = new RichPoco { Id = id, Timestamp = now, Data = "Some data" };
+
+        // Serialize
+        var writer = new ArenaBsonWriter(arena);
+        DynamicBlittableSerializer<RichPoco>.SerializeDelegate(ref writer, poco);
+        var doc = writer.Commit(arena);
+
+        // Deserialize
+        var result = DynamicBlittableSerializer<RichPoco>.DeserializeDelegate(doc, arena);
+
+        Assert.Equal(id, result.Id);
+        Assert.Equal(now, result.Timestamp);
+        Assert.Equal("Some data", result.Data);
+    }
+
+    [Fact]
+    public void Deserializer_Skips_Extra_Fields_Gracefully()
+    {
+        using var arena = new ArenaAllocator();
+        // BSON has "Extra" which is not in SimplePoco
+        var bsonDoc = new BsonDocument
+        {
+            { "Name", "ExtraField" },
+            { "Age", 30 },
+            { "Extra", "I should be ignored" },
+            { "IsActive", true }
+        }
+        .ToBson();
+
+        var doc = ArenaBsonReader.Read(bsonDoc, arena);
+        var poco = DynamicBlittableSerializer<SimplePoco>.DeserializeDelegate(doc, arena);
+
+        Assert.Equal("ExtraField", poco.Name);
+        Assert.Equal(30, poco.Age);
+        Assert.True(poco.IsActive);
+    }
 }
