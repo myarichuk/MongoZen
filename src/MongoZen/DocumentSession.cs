@@ -11,17 +11,21 @@ namespace MongoZen;
 /// </summary>
 public sealed class DocumentSession : IDisposable
 {
+    private readonly DocumentStore _store;
     private readonly IMongoDatabase _database;
-    private readonly ArenaAllocator _arena;
     private readonly ChangeTracker _changeTracker;
     private readonly ConcurrentDictionary<(Type, object), object> _identityMap = new();
     private bool _disposed;
     private AttachmentsSessionOperations? _attachments;
     private IClientSessionHandle? _clientSession;
+    private ArenaAllocator _arena;
+    private readonly int _initialArenaSize;
 
-    public DocumentSession(IMongoDatabase database, int initialArenaSize = 1024 * 1024)
+    public DocumentSession(DocumentStore store, int initialArenaSize = 1024 * 1024)
     {
-        _database = database;
+        _store = store;
+        _database = store.Database;
+        _initialArenaSize = initialArenaSize;
         _arena = new ArenaAllocator((nuint)initialArenaSize);
         _changeTracker = new ChangeTracker(_arena);
     }
@@ -36,11 +40,30 @@ public sealed class DocumentSession : IDisposable
     /// </summary>
     public async Task StartTransactionAsync(CancellationToken cancellationToken = default)
     {
+        if (_store.Features.SupportsTransactions == false)
+        {
+            throw new NotSupportedException("The connected MongoDB cluster does not support transactions (must be a replica set or sharded cluster).");
+        }
+
         _clientSession ??= await _database.Client.StartSessionAsync(cancellationToken: cancellationToken);
+
+        if (_store.Features.SupportsTransactions == null)
+        {
+            // First time check
+            var admin = _database.Client.GetDatabase("admin");
+            var hello = await admin.RunCommandAsync<BsonDocument>(new BsonDocument("hello", 1), cancellationToken: cancellationToken);
+            
+            bool isReplicaSet = hello.Contains("setName") || (hello.Contains("isWritablePrimary") && hello["isWritablePrimary"].AsBoolean);
+            _store.Features.SupportsTransactions = isReplicaSet;
+
+            if (!isReplicaSet)
+            {
+                throw new NotSupportedException("The connected MongoDB cluster does not support transactions.");
+            }
+        }
+
         _clientSession.StartTransaction();
-        // If attachments were already created, they won't use this session. 
-        // In a real implementation, we should probably pass a provider or ensure order.
-        // For now, we'll recreate the operations if they exist.
+        
         if (_attachments != null)
         {
              _attachments = new AttachmentsSessionOperations(_database, _clientSession);
@@ -137,20 +160,48 @@ public sealed class DocumentSession : IDisposable
     }
 
     /// <summary>
-    /// Saves all changes tracked in this session to the database.
+    /// Saves all changes tracked in this session to the database using BulkWrite for efficiency.
     /// </summary>
     public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        var updates = _changeTracker.GetUpdates();
-        foreach (var update in updates)
+        var groupedUpdates = _changeTracker.GetGroupedUpdates();
+        bool hasChanges = false;
+
+        foreach (var group in groupedUpdates)
         {
-            await update.ExecuteAsync(_database, _clientSession, cancellationToken);
+            var collectionName = group.Key;
+            var updates = group.Value;
+            var collection = _database.GetCollection<BsonDocument>(collectionName);
+
+            var models = updates.Select(u => u.ToWriteModel()).ToList();
+            if (models.Count == 0) continue;
+
+            hasChanges = true;
+
+            if (_clientSession != null)
+                await collection.BulkWriteAsync(_clientSession, models, cancellationToken: cancellationToken);
+            else
+                await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
             
             // Cascading delete for attachments
-            if (update is DeleteOperation del)
+            foreach (var update in updates)
             {
-                await Attachments.DeleteAllAsync(del.Id, cancellationToken);
+                if (update is DeleteOperation del)
+                {
+                    await Attachments.DeleteAllAsync(del.Id, cancellationToken);
+                }
             }
+        }
+
+        if (hasChanges)
+        {
+            // Double Buffering: Refresh snapshots into a new arena to reclaim memory
+            var nextArena = new ArenaAllocator((nuint)_initialArenaSize);
+            _changeTracker.RefreshSnapshots(nextArena);
+            
+            var oldArena = _arena;
+            _arena = nextArena;
+            oldArena.Dispose();
         }
     }
 

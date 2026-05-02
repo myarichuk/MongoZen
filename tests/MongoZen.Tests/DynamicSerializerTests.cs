@@ -7,7 +7,7 @@ using MongoDB.Bson.Serialization;
 
 namespace MongoZen.Tests;
 
-public unsafe class DynamicSerializerTests
+public class DynamicSerializerTests
 {
     public class SimplePoco
     {
@@ -111,7 +111,7 @@ public unsafe class DynamicSerializerTests
     }
 
     [Fact]
-    public void Can_Roundtrip_Via_Driver_Bridge()
+    public unsafe void Can_Roundtrip_Via_Driver_Bridge()
     {
         BsonClassMap.LookupClassMap(typeof(BridgePoco)); // Ensure attributes are scanned
         using var arena = new ArenaAllocator();

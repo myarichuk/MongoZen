@@ -44,13 +44,15 @@ public class SessionTests : IntegrationTestBase
     [Fact]
     public async Task Session_Should_Track_Changes_And_Save()
     {
+        var db = Database;
         var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(SimpleEntity));
-        var collection = Database.GetCollection<SimpleEntity>(collectionName);
+        var collection = db.GetCollection<SimpleEntity>(collectionName);
         
         var entity = new SimpleEntity { Id = 1, Name = "Original", Age = 20 };
         await collection.InsertOneAsync(entity);
 
-        using var session = new DocumentSession(Database);
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        using var session = new DocumentSession(store);
         
         // Load
         var loaded = await session.LoadAsync<SimpleEntity>(1);
@@ -77,17 +79,19 @@ public class SessionTests : IntegrationTestBase
         var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(SimpleEntity));
         await Database.GetCollection<SimpleEntity>(collectionName).InsertOneAsync(entity);
 
-        using var session = new DocumentSession(Database);
+        var store = new DocumentStore(Database.Client, Database.DatabaseNamespace.DatabaseName);
+        using var session = new DocumentSession(store);
         
         var load1 = await session.LoadAsync<SimpleEntity>(2);
         var load2 = await session.LoadAsync<SimpleEntity>(2);
 
         Assert.Same(load1, load2);
     }
+
     [Fact]
     public async Task DocumentStore_Should_Create_Functional_Session()
     {
-        var db = GetDatabase();
+        var db = Database;
         var client = db.Client;
         var store = new DocumentStore(client, db.DatabaseNamespace.DatabaseName);
 
@@ -104,8 +108,6 @@ public class SessionTests : IntegrationTestBase
         Assert.NotNull(saved);
         Assert.Equal("StoreTest", saved.Name);
     }
-
-    private IMongoDatabase GetDatabase() => Database;
 }
 
 [Document]
