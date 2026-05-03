@@ -1,6 +1,7 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using MongoDB.Driver;
+using MongoDB.Driver.GridFS;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using Testcontainers.MongoDb;
@@ -19,8 +20,10 @@ public class DriverComparisonBenchmarks
     private IMongoClient _client = null!;
     private IMongoDatabase _db = null!;
     private IMongoCollection<LargePoco> _collection = null!;
+    private IGridFSBucket _gridFs = null!;
     private DocumentStore _store = null!;
     private List<ObjectId> _ids = null!;
+    private byte[] _attachmentData = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -71,6 +74,7 @@ public class DriverComparisonBenchmarks
 
         _db = _client.GetDatabase(DatabaseName);
         _collection = _db.GetCollection<LargePoco>(CollectionName);
+        _gridFs = new GridFSBucket(_db);
         _store = new DocumentStore(_client, DatabaseName);
 
         var items = new List<LargePoco>();
@@ -93,6 +97,10 @@ public class DriverComparisonBenchmarks
 
         _collection.InsertMany(items);
         _ids = items.Select(x => x.Id).ToList();
+
+        // 1MB of random data for attachments
+        _attachmentData = new byte[1024 * 1024];
+        new Random(42).NextBytes(_attachmentData);
     }
 
     [GlobalCleanup]
@@ -214,6 +222,24 @@ public class DriverComparisonBenchmarks
             var doc = await session.LoadAsync<LargePoco>(id);
             doc!.Name = "Updated Name";
         }
+        await session.SaveChangesAsync();
+    }
+
+    [Benchmark(Baseline = true, Description = "Driver GridFS Upload")]
+    [BenchmarkCategory("Attachments")]
+    public async Task Driver_GridFS_Upload()
+    {
+        using var stream = new MemoryStream(_attachmentData);
+        await _gridFs.UploadFromStreamAsync("driver.bin", stream);
+    }
+
+    [Benchmark(Description = "MongoZen Attachment Upload (Auto Tx)")]
+    [BenchmarkCategory("Attachments")]
+    public async Task MongoZen_Attachment_Upload()
+    {
+        using var session = _store.OpenSession();
+        using var stream = new MemoryStream(_attachmentData);
+        await session.Attachments.StoreAsync("doc/1", "mongozen.bin", stream);
         await session.SaveChangesAsync();
     }
 
