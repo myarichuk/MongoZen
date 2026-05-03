@@ -120,7 +120,13 @@ public class ShadowGenerator : IIncrementalGenerator
             return TypeCategory.Nullable;
         }
 
-        if (type.IsUnmanagedType)
+        if (type.TypeKind == TypeKind.Enum)
+        {
+            return TypeCategory.Enum;
+        }
+
+        var fullName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        if (fullName == "global::System.Guid" || fullName == "global::System.Decimal" || type.SpecialType != SpecialType.None)
         {
             return TypeCategory.Primitive;
         }
@@ -235,15 +241,16 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine();
 
         // BuildUpdate
-        sb.AppendLine($"    public static UpdateDefinition<BsonDocument>? BuildUpdate({info.Name} entity, BlittableBsonDocument snapshot, UpdateDefinitionBuilder<BsonDocument> builder)");
+        sb.AppendLine($"    public static UpdateDefinition<BsonDocument>? BuildUpdate({info.Name} entity, BlittableBsonDocument snapshot, UpdateDefinitionBuilder<BsonDocument> builder, SharpArena.Allocators.ArenaAllocator arena)");
         sb.AppendLine("    {");
         sb.AppendLine("        UpdateDefinition<BsonDocument>? combined = null;");
         foreach (var prop in info.Properties)
         {
-            GenerateDiffCall(sb, prop, "entity", "snapshot", "builder", "combined", "");
+            EmitPropertyDiff(sb, prop, "entity", "snapshot", "builder", "combined", "");
         }
         sb.AppendLine("        return combined;");
         sb.AppendLine("    }");
+
 
         sb.AppendLine("}");
 
@@ -255,6 +262,11 @@ public class ShadowGenerator : IIncrementalGenerator
         var name = prop.ElementName;
         switch (prop.Category)
         {
+            case TypeCategory.Enum:
+                var underlyingType = ((INamedTypeSymbol)prop.Symbol.Type).EnumUnderlyingType!;
+                var enumMethod = GetWriteMethod(underlyingType);
+                sb.AppendLine($"        writer.{enumMethod}(\"{name}\", ({underlyingType.ToDisplayString()}){access});");
+                break;
             case TypeCategory.Primitive:
                 var method = GetWriteMethod(prop.Symbol.Type);
                 sb.AppendLine($"        writer.{method}(\"{name}\", {access});");
@@ -286,6 +298,11 @@ public class ShadowGenerator : IIncrementalGenerator
         
         switch (prop.Category)
         {
+            case TypeCategory.Enum:
+                var underlyingType = ((INamedTypeSymbol)prop.Symbol.Type).EnumUnderlyingType!;
+                var enumMethod = GetReadMethod(underlyingType);
+                sb.AppendLine($"            {target} = ({prop.Symbol.Type.ToDisplayString()}){docVar}.{enumMethod}(offset_{prop.Symbol.Name});");
+                break;
             case TypeCategory.Primitive:
                 var method = GetReadMethod(prop.Symbol.Type);
                 sb.AppendLine($"            {target} = {docVar}.{method}(offset_{prop.Symbol.Name});");
@@ -300,15 +317,14 @@ public class ShadowGenerator : IIncrementalGenerator
                 sb.AppendLine($"            {target} = {prop.NestedType!.Name}.Deserialize({docVar}.GetDocument(offset_{prop.Symbol.Name}, {arenaVar}), {arenaVar});");
                 break;
             case TypeCategory.Collection:
-                var collMethod = $"CollectionHelper<{prop.NestedType!.ToDisplayString()}>.ReadArray";
                 var arrayCall = $"{docVar}.GetArray(offset_{prop.Symbol.Name}, {arenaVar})";
                 if (prop.Symbol.Type is IArrayTypeSymbol)
                 {
-                    sb.AppendLine($"            {target} = {collMethod}({arrayCall}, {arenaVar});");
+                    sb.AppendLine($"            {target} = CollectionHelper<{prop.NestedType!.ToDisplayString()}>.ReadArray({arrayCall}, {arenaVar});");
                 }
                 else
                 {
-                    sb.AppendLine($"            {target} = {collMethod}({arrayCall}, {arenaVar}).ToList();");
+                    sb.AppendLine($"            {target} = CollectionHelper<{prop.NestedType!.ToDisplayString()}>.ReadList({arrayCall}, {arenaVar});");
                 }
                 break;
             case TypeCategory.Dictionary:
@@ -319,7 +335,7 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine("        }");
     }
 
-    private void GenerateDiffCall(StringBuilder sb, PropertyInfo prop, string entityVar, string snapVar, string builderVar, string combinedVar, string pathPrefix)
+    private void EmitPropertyDiff(StringBuilder sb, PropertyInfo prop, string entityVar, string snapVar, string builderVar, string combinedVar, string pathPrefix)
     {
         var name = prop.ElementName;
         var fullPath = string.IsNullOrEmpty(pathPrefix) ? name : pathPrefix + "." + name;
@@ -330,6 +346,12 @@ public class ShadowGenerator : IIncrementalGenerator
         
         switch (prop.Category)
         {
+            case TypeCategory.Enum:
+                var underlyingType = ((INamedTypeSymbol)prop.Symbol.Type).EnumUnderlyingType!;
+                var enumMethod = GetReadMethod(underlyingType);
+                sb.AppendLine($"            if (({underlyingType.ToDisplayString()}){propAccess} != {snapVar}.{enumMethod}(off_{prop.Symbol.Name}))");
+                sb.AppendLine($"                {combinedVar} = ({combinedVar} == null) ? {builderVar}.Set(\"{fullPath}\", {propAccess}) : {builderVar}.Combine({combinedVar}, {builderVar}.Set(\"{fullPath}\", {propAccess}));");
+                break;
             case TypeCategory.Primitive:
                 var method = GetReadMethod(prop.Symbol.Type);
                 sb.AppendLine($"            if ({propAccess} != {snapVar}.{method}(off_{prop.Symbol.Name}))");
@@ -349,8 +371,8 @@ public class ShadowGenerator : IIncrementalGenerator
                 // DEEP DIFFING: Recursively call BuildUpdate on the nested document
                 sb.AppendLine($"            if ({propAccess} != null)");
                 sb.AppendLine("            {");
-                sb.AppendLine($"                var nestedSnap_{prop.Symbol.Name} = {snapVar}.GetDocument(off_{prop.Symbol.Name}, null); // Snapshot reuse? No, fresh view.");
-                sb.AppendLine($"                var nestedUpdate = {prop.NestedType!.Name}.BuildUpdate({propAccess}, nestedSnap_{prop.Symbol.Name}, {builderVar});");
+                sb.AppendLine($"                var nestedSnap_{prop.Symbol.Name} = {snapVar}.GetDocument(off_{prop.Symbol.Name}, arena);");
+                sb.AppendLine($"                var nestedUpdate = {prop.NestedType!.Name}.BuildUpdate({propAccess}, nestedSnap_{prop.Symbol.Name}, {builderVar}, arena);");
                 sb.AppendLine($"                if (nestedUpdate != null) {combinedVar} = ({combinedVar} == null) ? nestedUpdate : {builderVar}.Combine({combinedVar}, nestedUpdate);");
                 sb.AppendLine("            }");
                 break;
@@ -365,6 +387,10 @@ public class ShadowGenerator : IIncrementalGenerator
 
     private string GetWriteMethod(ITypeSymbol type)
     {
+        var fullName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        if (fullName == "global::System.Guid") return "WriteGuid";
+        if (fullName == "global::System.Decimal") return "WriteDecimal128";
+
         var name = type.Name;
         if (type.ContainingNamespace?.ToDisplayString() == "MongoDB.Bson" && name == "ObjectId")
             return "WriteObjectId";
@@ -376,12 +402,17 @@ public class ShadowGenerator : IIncrementalGenerator
             SpecialType.System_Double => "WriteDouble",
             SpecialType.System_Boolean => "WriteBoolean",
             SpecialType.System_DateTime => "WriteDateTime",
+            SpecialType.System_Decimal => "WriteDecimal128",
             _ => "WriteBinary"
         };
     }
 
     private string GetReadMethod(ITypeSymbol type)
     {
+        var fullName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        if (fullName == "global::System.Guid") return "GetGuid";
+        if (fullName == "global::System.Decimal") return "GetDecimal128";
+
         var name = type.Name;
         if (type.ContainingNamespace?.ToDisplayString() == "MongoDB.Bson" && name == "ObjectId")
             return "GetObjectId";
@@ -393,7 +424,8 @@ public class ShadowGenerator : IIncrementalGenerator
             SpecialType.System_Double => "GetDouble",
             SpecialType.System_Boolean => "GetBoolean",
             SpecialType.System_DateTime => "GetDateTime",
-            _ => "Get"
+            SpecialType.System_Decimal => "GetDecimal128",
+            _ => $"Get<{type.ToDisplayString()}>"
         };
     }
 
@@ -421,7 +453,7 @@ public class ShadowGenerator : IIncrementalGenerator
         Collection,
         Dictionary,
         Document,
-        Polymorphic,
+        Enum,
         Unsupported
     }
 }

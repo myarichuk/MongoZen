@@ -17,6 +17,7 @@ public static class BlittableBsonConstants
         DateTime = 0x09,
         Null = 0x0A,
         Int32 = 0x10,
-        Int64 = 0x12
+        Int64 = 0x12,
+        Decimal128 = 0x13
     }
 }

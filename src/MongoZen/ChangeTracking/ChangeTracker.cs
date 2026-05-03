@@ -1,11 +1,10 @@
 using System.Collections.Concurrent;
-using SharpArena.Allocators;
-using MongoDB.Driver;
 using MongoDB.Bson;
+using MongoDB.Driver;
 using MongoZen.Bson;
-using System.Reflection;
+using SharpArena.Allocators;
 
-namespace MongoZen;
+namespace MongoZen.ChangeTracking;
 
 public sealed class ChangeTracker(ArenaAllocator arena)
 {
@@ -91,12 +90,11 @@ public sealed class ChangeTracker(ArenaAllocator arena)
                 continue;
             }
 
-            var update = entry.BuildUpdate(builder);
+            var update = entry.BuildUpdate(builder, _arena);
             if (update != null)
             {
                 var id = EntityIdAccessor.GetId(entry.Entity);
-                var updateCollectionName = DocumentTypeTracker.GetDefaultCollectionName(entry.Type);
-                updates.Add(new UpdateOperation<BsonDocument>(id!, update, updateCollectionName));
+                updates.Add(new UpdateOperation<BsonDocument>(id!, update, collectionName));
             }
         }
         return groups;
@@ -110,40 +108,51 @@ public sealed class ChangeTracker(ArenaAllocator arena)
         public bool IsNew { get; set; }
         public bool IsDeleted { get; set; }
         
-        private MethodInfo? _cachedBuildUpdateMethod;
-        private MethodInfo? _cachedUpdateSnapshotMethod;
+        private IEntityDispatcher? _dispatcher;
 
         public void UpdateSnapshot(ref ArenaBsonWriter writer, ArenaAllocator arena)
         {
-            _cachedUpdateSnapshotMethod ??= typeof(EntityEntry)
-                .GetMethod(nameof(UpdateSnapshotInternal), BindingFlags.NonPublic | BindingFlags.Instance)!
-                .MakeGenericMethod(Type);
-
-            _cachedUpdateSnapshotMethod.Invoke(this, [writer, arena]);
+            GetDispatcher().UpdateSnapshot(this, ref writer, arena);
         }
 
-        private void UpdateSnapshotInternal<T>(ArenaBsonWriter writer, ArenaAllocator arena)
-        {
-            var entity = (T)Entity;
-            DynamicBlittableSerializer<T>.SerializeDelegate(ref writer, entity);
-            Snapshot = writer.Commit(arena);
-        }
-
-        public UpdateDefinition<BsonDocument>? BuildUpdate(UpdateDefinitionBuilder<BsonDocument> builder)
+        public UpdateDefinition<BsonDocument>? BuildUpdate(UpdateDefinitionBuilder<BsonDocument> builder, ArenaAllocator arena)
         {
             if (Snapshot == null) return null;
-
-            _cachedBuildUpdateMethod ??= typeof(EntityEntry)
-                .GetMethod(nameof(BuildUpdateInternal), BindingFlags.NonPublic | BindingFlags.Instance)!
-                .MakeGenericMethod(Type);
-
-            return (UpdateDefinition<BsonDocument>?)_cachedBuildUpdateMethod.Invoke(this, [builder]);
+            return GetDispatcher().BuildUpdate(this, builder, arena);
         }
 
-        private UpdateDefinition<BsonDocument>? BuildUpdateInternal<T>(UpdateDefinitionBuilder<BsonDocument> builder)
+        private IEntityDispatcher GetDispatcher()
         {
-            var entity = (T)Entity;
-            return DynamicBlittableSerializer<T>.BuildUpdateDelegate(entity, Snapshot!.Value, builder);
+            return _dispatcher ??= EntityDispatcherCache.Get(Type);
+        }
+
+        private interface IEntityDispatcher
+        {
+            void UpdateSnapshot(EntityEntry entry, ref ArenaBsonWriter writer, ArenaAllocator arena);
+            UpdateDefinition<BsonDocument>? BuildUpdate(EntityEntry entry, UpdateDefinitionBuilder<BsonDocument> builder, ArenaAllocator arena);
+        }
+
+        private class EntityDispatcher<T> : IEntityDispatcher
+        {
+            public void UpdateSnapshot(EntityEntry entry, ref ArenaBsonWriter writer, ArenaAllocator arena)
+            {
+                var entity = (T)entry.Entity;
+                DynamicBlittableSerializer<T>.SerializeDelegate(ref writer, entity);
+                entry.Snapshot = writer.Commit(arena);
+            }
+
+            public UpdateDefinition<BsonDocument>? BuildUpdate(EntityEntry entry, UpdateDefinitionBuilder<BsonDocument> builder, ArenaAllocator arena)
+            {
+                var entity = (T)entry.Entity;
+                return DynamicBlittableSerializer<T>.BuildUpdateDelegate(entity, entry.Snapshot!.Value, builder, arena);
+            }
+        }
+
+        private static class EntityDispatcherCache
+        {
+            private static readonly ConcurrentDictionary<Type, IEntityDispatcher> _cache = new();
+            public static IEntityDispatcher Get(Type type) => _cache.GetOrAdd(type, t => 
+                (IEntityDispatcher)Activator.CreateInstance(typeof(EntityDispatcher<>).MakeGenericType(t))!);
         }
     }
 }

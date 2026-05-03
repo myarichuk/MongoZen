@@ -320,6 +320,33 @@ public readonly unsafe struct BlittableBsonDocument
         return DateTime.UnixEpoch.AddMilliseconds(ms);
     }
 
+    public Guid GetGuid(int offset)
+    {
+        var p = GetDataPointerAtOffset(offset, out var type, out var length);
+        if (type != BlittableBsonConstants.BsonType.Binary) throw new InvalidCastException($"Cannot cast {type} to Guid");
+        
+        int len = *(int*)p;
+        byte subtype = p[4];
+        if (len != 16) throw new InvalidOperationException($"Invalid Guid length: {len}");
+
+        var span = new ReadOnlySpan<byte>(p + 5, 16);
+        if (subtype == 4) return new Guid(span, bigEndian: true);
+        if (subtype == 3) return new Guid(span);
+        
+        throw new InvalidOperationException($"Unsupported Guid subtype: {subtype}");
+    }
+
+    public decimal GetDecimal128(int offset)
+    {
+        var p = GetDataPointerAtOffset(offset, out var type, out _);
+        if (type != BlittableBsonConstants.BsonType.Decimal128) throw new InvalidCastException($"Cannot cast {type} to Decimal128");
+        
+        long low = *(long*)p;
+        long high = *(long*)(p + 8);
+        var d128 = Decimal128.FromIEEEBits((ulong)high, (ulong)low);
+        return Decimal128.ToDecimal(d128);
+    }
+
     public BlittableBsonDocument GetDocument(int offset, ArenaAllocator arena)
     {
         var p = GetDataPointerAtOffset(offset, out var type, out var length);
@@ -350,7 +377,25 @@ public readonly unsafe struct BlittableBsonDocument
         if (typeof(T) == typeof(string)) return (T)(object)GetString(offset);
         if (typeof(T) == typeof(ObjectId)) return (T)(object)GetObjectId(offset);
         if (typeof(T) == typeof(DateTime)) return (T)(object)GetDateTime(offset);
+        if (typeof(T) == typeof(Guid)) return (T)(object)GetGuid(offset);
+        if (typeof(T) == typeof(decimal)) return (T)(object)GetDecimal128(offset);
 
+        return BlittableConverter<T>.Instance.Read(p, type, length);
+    }
+
+    public T Get<T>(int offset)
+    {
+        if (typeof(T) == typeof(int)) return (T)(object)GetInt32(offset);
+        if (typeof(T) == typeof(long)) return (T)(object)GetInt64(offset);
+        if (typeof(T) == typeof(double)) return (T)(object)GetDouble(offset);
+        if (typeof(T) == typeof(bool)) return (T)(object)GetBoolean(offset);
+        if (typeof(T) == typeof(string)) return (T)(object)GetString(offset);
+        if (typeof(T) == typeof(ObjectId)) return (T)(object)GetObjectId(offset);
+        if (typeof(T) == typeof(DateTime)) return (T)(object)GetDateTime(offset);
+        if (typeof(T) == typeof(Guid)) return (T)(object)GetGuid(offset);
+        if (typeof(T) == typeof(decimal)) return (T)(object)GetDecimal128(offset);
+
+        var p = GetDataPointerAtOffset(offset, out var type, out var length);
         return BlittableConverter<T>.Instance.Read(p, type, length);
     }
 

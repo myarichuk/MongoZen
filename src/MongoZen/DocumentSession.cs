@@ -3,11 +3,12 @@ using SharpArena.Allocators;
 using MongoDB.Driver;
 using MongoDB.Bson;
 using MongoZen.Bson;
+using MongoZen.ChangeTracking;
 
 namespace MongoZen;
 
 /// <summary>
-/// A high-performance, unit-of-work session for MongoDB.
+/// A high-performance unit-of-work session for MongoDB.
 /// </summary>
 public sealed class DocumentSession : IDisposable
 {
@@ -32,20 +33,15 @@ public sealed class DocumentSession : IDisposable
 
     public IMongoDatabase Database => _database;
     public ArenaAllocator Arena => _arena;
+    internal IClientSessionHandle? ClientSession => _clientSession;
 
-    public IAttachmentsSessionOperations Attachments => _attachments ??= new AttachmentsSessionOperations(_database, _clientSession);
+    public IAttachmentsSessionOperations Attachments => _attachments ??= new AttachmentsSessionOperations(this);
 
-    /// <summary>
-    /// Starts a new MongoDB transaction within this session.
-    /// </summary>
-    public async Task StartTransactionAsync(CancellationToken cancellationToken = default)
+    internal async Task EnsureTransactionStartedAsync(CancellationToken cancellationToken = default)
     {
-        if (_store.Features.SupportsTransactions == false)
-        {
-            throw new NotSupportedException("The connected MongoDB cluster does not support transactions (must be a replica set or sharded cluster).");
-        }
+        if (_clientSession != null) return;
 
-        _clientSession ??= await _database.Client.StartSessionAsync(cancellationToken: cancellationToken);
+        if (_store.Features.SupportsTransactions == false) return;
 
         if (_store.Features.SupportsTransactions == null)
         {
@@ -56,66 +52,70 @@ public sealed class DocumentSession : IDisposable
             bool isReplicaSet = hello.Contains("setName") || (hello.Contains("isWritablePrimary") && hello["isWritablePrimary"].AsBoolean);
             _store.Features.SupportsTransactions = isReplicaSet;
 
-            if (!isReplicaSet)
-            {
-                throw new NotSupportedException("The connected MongoDB cluster does not support transactions.");
-            }
+            if (!isReplicaSet) return;
         }
 
+        _clientSession = await _database.Client.StartSessionAsync(cancellationToken: cancellationToken);
         _clientSession.StartTransaction();
-        
-        if (_attachments != null)
-        {
-             _attachments = new AttachmentsSessionOperations(_database, _clientSession);
-        }
-    }
-
-    /// <summary>
-    /// Commits the current MongoDB transaction.
-    /// </summary>
-    public async Task CommitTransactionAsync(CancellationToken cancellationToken = default)
-    {
-        if (_clientSession == null) throw new InvalidOperationException("No transaction in progress.");
-        await _clientSession.CommitTransactionAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// Aborts the current MongoDB transaction.
-    /// </summary>
-    public async Task AbortTransactionAsync(CancellationToken cancellationToken = default)
-    {
-        if (_clientSession == null) throw new InvalidOperationException("No transaction in progress.");
-        await _clientSession.AbortTransactionAsync(cancellationToken);
     }
 
     /// <summary>
     /// Loads a document from the database and tracks it in the session.
     /// </summary>
-    public async Task<T?> LoadAsync<T>(object id, CancellationToken cancellationToken = default)
+    public Task<T?> LoadAsync<T>(ObjectId id, CancellationToken cancellationToken = default)
     {
-        var docId = DocId.From(id);
+        return LoadInternalAsync<T, ObjectId>(DocId.FromObjectId(id), id, cancellationToken);
+    }
+
+    /// <summary>
+    /// Loads a document from the database and tracks it in the session.
+    /// </summary>
+    public Task<T?> LoadAsync<T>(Guid id, CancellationToken cancellationToken = default)
+    {
+        return LoadInternalAsync<T, Guid>(DocId.FromGuid(id), id, cancellationToken);
+    }
+
+    /// <summary>
+    /// Loads a document from the database and tracks it in the session.
+    /// </summary>
+    public Task<T?> LoadAsync<T>(string id, CancellationToken cancellationToken = default)
+    {
+        return LoadInternalAsync<T, string>(DocId.FromString(id), id, cancellationToken);
+    }
+
+    /// <summary>
+    /// Loads a document from the database and tracks it in the session.
+    /// </summary>
+    public Task<T?> LoadAsync<T>(object id, CancellationToken cancellationToken = default)
+    {
+        return LoadInternalAsync<T, object>(DocId.From(id), id, cancellationToken);
+    }
+
+    private async Task<T?> LoadInternalAsync<T, TId>(DocId docId, TId rawId, CancellationToken cancellationToken)
+    {
+        await EnsureTransactionStartedAsync(cancellationToken);
+        
         if (_identityMap.TryGetValue((typeof(T), docId), out var existing))
         {
             return (T)existing;
         }
 
         var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(T));
-        var collection = _database.GetCollection<BsonDocument>(collectionName);
+        var collection = _store.GetRawCollection(collectionName);
         
-        var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
-        
-        IAsyncCursor<BsonDocument> cursor;
-        if (_clientSession != null)
-            cursor = await collection.FindAsync(_clientSession, filter, cancellationToken: cancellationToken);
-        else
-            cursor = await collection.FindAsync(filter, cancellationToken: cancellationToken);
+        var filter = Builders<RawBsonDocument>.Filter.Eq("_id", rawId);
 
-        var bson = await cursor.FirstOrDefaultAsync(cancellationToken);
+        var cursor = _clientSession != null
+            ? await collection.FindAsync(_clientSession, filter, cancellationToken: cancellationToken)
+            : await collection.FindAsync(filter, cancellationToken: cancellationToken);
+
+        var rawBson = await cursor.FirstOrDefaultAsync(cancellationToken);
         
-        if (bson != null)
+        if (rawBson != null)
         {
-            var rawBytes = bson.ToBson(); 
-            var doc = ArenaBsonReader.Read(rawBytes, _arena);
+            // access raw bytes directly without re-serialization
+            var slice = rawBson.Slice;
+            var doc = ArenaBsonReader.Read(slice.AccessBackingBytes(0), _arena);
             
             var entity = DynamicBlittableSerializer<T>.DeserializeDelegate(doc, _arena);
             
@@ -167,45 +167,68 @@ public sealed class DocumentSession : IDisposable
     /// </summary>
     public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
+        await EnsureTransactionStartedAsync(cancellationToken);
+
         var groupedUpdates = _changeTracker.GetGroupedUpdates();
-        bool hasChanges = false;
+        bool hasChanges = groupedUpdates.Values.Any(v => v.Count > 0);
 
-        foreach (var group in groupedUpdates)
+        if (!hasChanges) return;
+
+        try
         {
-            var collectionName = group.Key;
-            var updates = group.Value;
-            var collection = _database.GetCollection<BsonDocument>(collectionName);
-
-            var models = updates.Select(u => u.ToWriteModel()).ToList();
-            if (models.Count == 0) continue;
-
-            hasChanges = true;
-
-            if (_clientSession != null)
-                await collection.BulkWriteAsync(_clientSession, models, cancellationToken: cancellationToken);
-            else
-                await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
-            
-            // Cascading delete for attachments
-            foreach (var update in updates)
+            foreach (var group in groupedUpdates)
             {
-                if (update is DeleteOperation del)
+                var collectionName = group.Key;
+                var updates = group.Value;
+                var collection = _database.GetCollection<BsonDocument>(collectionName);
+
+                var models = updates.Select(u => u.ToWriteModel()).ToList();
+                if (models.Count == 0) continue;
+
+                if (_clientSession != null)
+                    await collection.BulkWriteAsync(_clientSession, models, cancellationToken: cancellationToken);
+                else
+                    await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
+                
+                // Cascading delete for attachments
+                foreach (var update in updates)
                 {
-                    await Attachments.DeleteAllAsync(del.Id, cancellationToken);
+                    if (update is DeleteOperation del)
+                    {
+                        await Attachments.DeleteAllAsync(del.Id, cancellationToken);
+                    }
                 }
+            }
+
+            if (_clientSession != null && _clientSession.IsInTransaction)
+            {
+                await _clientSession.CommitTransactionAsync(cancellationToken);
+            }
+        }
+        catch
+        {
+            if (_clientSession != null && _clientSession.IsInTransaction)
+            {
+                await _clientSession.AbortTransactionAsync(cancellationToken);
+            }
+            throw;
+        }
+        finally
+        {
+            if (_clientSession != null)
+            {
+                _clientSession.Dispose();
+                _clientSession = null;
             }
         }
 
-        if (hasChanges)
-        {
-            // Double Buffering: Refresh snapshots into a new arena to reclaim memory
-            var nextArena = new ArenaAllocator((nuint)_initialArenaSize);
-            _changeTracker.RefreshSnapshots(nextArena);
-            
-            var oldArena = _arena;
-            _arena = nextArena;
-            oldArena.Dispose();
-        }
+        // Double Buffering: Refresh snapshots into a new arena to reclaim memory
+        var nextArena = new ArenaAllocator((nuint)_initialArenaSize);
+        _changeTracker.RefreshSnapshots(nextArena);
+        
+        var oldArena = _arena;
+        _arena = nextArena;
+        oldArena.Dispose();
     }
 
     public void Dispose()

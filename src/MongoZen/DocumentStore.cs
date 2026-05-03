@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace MongoZen;
@@ -56,6 +57,13 @@ public sealed class DocumentStore : IDisposable
     /// </summary>
     public IMongoDatabase Database => _database;
 
+    private readonly ConcurrentDictionary<string, IMongoCollection<RawBsonDocument>> _rawCollectionCache = new();
+
+    public IMongoCollection<RawBsonDocument> GetRawCollection(string name)
+    {
+        return _rawCollectionCache.GetOrAdd(name, n => Database.GetCollection<RawBsonDocument>(n));
+    }
+
     /// <summary>
     /// Gets the discovered features of the cluster.
     /// </summary>
@@ -65,10 +73,8 @@ public sealed class DocumentStore : IDisposable
     /// Opens a new high-performance, unit-of-work session.
     /// </summary>
     /// <param name="initialArenaSize">The initial size of the arena allocator in bytes. Defaults to 1MB.</param>
-    public DocumentSession OpenSession(int initialArenaSize = 1024 * 1024)
-    {
-        return new DocumentSession(this, initialArenaSize);
-    }
+    public DocumentSession OpenSession(int initialArenaSize = 1024 * 1024) => 
+        new(this, initialArenaSize);
 
     public void Dispose()
     {

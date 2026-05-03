@@ -91,7 +91,7 @@ public class TrackingTests : IDisposable
         var snapshot = Snapshot(entity);
 
         entity.Name = "New";
-        var update = SimpleEntity.BuildUpdate(entity, snapshot, _builder);
+        var update = SimpleEntity.BuildUpdate(entity, snapshot, _builder, _allocator);
 
         Assert.NotNull(update);
         var bson = RenderUpdate(update);
@@ -105,13 +105,13 @@ public class TrackingTests : IDisposable
         var snapshot = Snapshot(entity);
 
         entity.Computed = "New";
-        var update = IgnoreEntity.BuildUpdate(entity, snapshot, _builder);
+        var update = IgnoreEntity.BuildUpdate(entity, snapshot, _builder, _allocator);
 
         // Computed is ignored, so no update should be generated
         Assert.Null(update);
 
         entity.Name = "Changed";
-        update = IgnoreEntity.BuildUpdate(entity, snapshot, _builder);
+        update = IgnoreEntity.BuildUpdate(entity, snapshot, _builder, _allocator);
         Assert.NotNull(update);
     }
 
@@ -122,7 +122,7 @@ public class TrackingTests : IDisposable
         var snapshot = Snapshot(entity);
 
         entity.Age = null;
-        var update = NullableEntity.BuildUpdate(entity, snapshot, _builder);
+        var update = NullableEntity.BuildUpdate(entity, snapshot, _builder, _allocator);
         Assert.NotNull(update);
         // Note: The generator currently doesn't handle Nullable types in BuildUpdate yet.
         // It's a TODO in the generator.
@@ -135,7 +135,7 @@ public class TrackingTests : IDisposable
         var snapshot = Snapshot(entity);
 
         entity.Name = "New";
-        var update = ElementEntity.BuildUpdate(entity, snapshot, _builder);
+        var update = ElementEntity.BuildUpdate(entity, snapshot, _builder, _allocator);
         Assert.NotNull(update);
 
         var bson = RenderUpdate(update);

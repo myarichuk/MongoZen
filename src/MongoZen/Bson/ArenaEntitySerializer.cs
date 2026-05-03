@@ -1,8 +1,7 @@
 using MongoDB.Bson.Serialization;
 using SharpArena.Allocators;
-using MongoZen.Bson;
 
-namespace MongoZen;
+namespace MongoZen.Bson;
 
 /// <summary>
 /// A generic BSON serializer that captures the raw bytes into an arena during deserialization.
@@ -56,7 +55,7 @@ public unsafe class ArenaEntitySerializer<T>(ArenaAllocator arena) : IBsonSerial
     }
 
     object IBsonSerializer.Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args) => 
-        Deserialize(context, args);
+        Deserialize(context, args) ?? throw new ArgumentNullException(nameof(T));
 
     public void Serialize(BsonSerializationContext context, BsonSerializationArgs args, object value) => 
         Serialize(context, args, (T)value);

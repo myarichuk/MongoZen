@@ -1,6 +1,5 @@
-using System;
-using System.Collections.Generic;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
 using SharpArena.Allocators;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -9,6 +8,8 @@ using MongoZen.Bson;
 namespace MongoZen.Benchmarks;
 
 [MemoryDiagnoser]
+[CategoriesColumn]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 public class BsonBenchmarks
 {
     private byte[] _rawBson = null!;
@@ -18,14 +19,14 @@ public class BsonBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        _arena = new ArenaAllocator();
+        _arena = new ArenaAllocator(10 * 1024 * 1024);
         _poco = new LargePoco
         {
             Id = ObjectId.GenerateNewId(),
             Name = "Root Object",
             Timestamp = DateTime.UtcNow,
-            Tags = new List<string> { "high-perf", "no-nonsense", "arena", "mongodb" },
-            Items = new List<ItemPoco>()
+            Tags = ["high-perf", "no-nonsense", "arena", "mongodb"],
+            Items = []
         };
 
         for (int i = 0; i < 50; i++)
@@ -44,41 +45,43 @@ public class BsonBenchmarks
     [GlobalCleanup]
     public void Cleanup() => _arena.Dispose();
 
-    [Benchmark(Baseline = true)]
-    public BsonDocument Driver_Read()
-    {
-        return BsonSerializer.Deserialize<BsonDocument>(_rawBson);
-    }
+    [Benchmark(Baseline = true, Description = "Driver (Raw BsonDocument)")]
+    [BenchmarkCategory("Deserialization")]
+    public BsonDocument Driver_Read() => 
+        BsonSerializer.Deserialize<BsonDocument>(_rawBson);
 
-    [Benchmark]
+    [Benchmark(Description = "MongoZen (BlittableBsonDocument)")]
+    [BenchmarkCategory("Deserialization")]
     public BlittableBsonDocument MongoZen_Read()
     {
         _arena.Reset();
         return ArenaBsonReader.Read(_rawBson, _arena);
     }
 
-    [Benchmark]
-    public LargePoco Driver_Deserialize()
-    {
-        return BsonSerializer.Deserialize<LargePoco>(_rawBson);
-    }
+    [Benchmark(Description = "Driver (POCO)")]
+    [BenchmarkCategory("Deserialization")]
+    public LargePoco Driver_Deserialize_Typed() => 
+        BsonSerializer.Deserialize<LargePoco>(_rawBson);
 
-    [Benchmark]
-    public LargePoco MongoZen_Deserialize_Dynamic()
+    [Benchmark(Description = "MongoZen (Dynamic Blittable POCO)")]
+    [BenchmarkCategory("Deserialization")]
+    public LargePoco MongoZen_Deserialize_Dynamic_Typed()
     {
         _arena.Reset();
         var doc = ArenaBsonReader.Read(_rawBson, _arena);
         return DynamicBlittableSerializer<LargePoco>.DeserializeDelegate(doc, _arena);
     }
 
-    [Benchmark]
-    public byte[] Driver_Serialize()
+    [Benchmark(Baseline = true, Description = "Driver (POCO)")]
+    [BenchmarkCategory("Serialization")]
+    public byte[] Driver_Serialize_Typed()
     {
         return _poco.ToBson();
     }
 
-    [Benchmark]
-    public BlittableBsonDocument MongoZen_Serialize_Dynamic()
+    [Benchmark(Description = "MongoZen (Dynamic Blittable POCO)")]
+    [BenchmarkCategory("Serialization")]
+    public BlittableBsonDocument MongoZen_Serialize_Dynamic_Typed()
     {
         _arena.Reset();
         var writer = new ArenaBsonWriter(_arena);

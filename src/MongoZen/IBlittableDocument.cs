@@ -13,7 +13,7 @@ public interface IBlittableDocument<T>
     /// <summary>
     /// Performs high-performance diffing between the current entity state and a BSON snapshot.
     /// </summary>
-    static abstract UpdateDefinition<BsonDocument>? BuildUpdate(T entity, BlittableBsonDocument snapshot, UpdateDefinitionBuilder<BsonDocument> builder);
+    static abstract UpdateDefinition<BsonDocument>? BuildUpdate(T entity, BlittableBsonDocument snapshot, UpdateDefinitionBuilder<BsonDocument> builder, SharpArena.Allocators.ArenaAllocator arena);
 
     /// <summary>
     /// Deserializes the document from a BlittableBsonDocument.

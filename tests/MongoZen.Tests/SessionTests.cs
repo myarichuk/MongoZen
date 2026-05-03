@@ -1,4 +1,5 @@
 using SharpArena.Allocators;
+using MongoZen;
 using MongoDB.Driver;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -33,7 +34,7 @@ public class SessionTests : IntegrationTestBase
 
         // Diff
         var builder = Builders<BsonDocument>.Update;
-        var update = DynamicBlittableSerializer<SimpleEntity>.BuildUpdateDelegate(modified, snapshot, builder);
+        var update = DynamicBlittableSerializer<SimpleEntity>.BuildUpdateDelegate(modified, snapshot, builder, arena);
 
         Assert.NotNull(update);
         var bson = (BsonDocument)update.Render(new RenderArgs<BsonDocument>(BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(), BsonSerializer.SerializerRegistry));
@@ -108,6 +109,67 @@ public class SessionTests : IntegrationTestBase
         Assert.NotNull(saved);
         Assert.Equal("StoreTest", saved.Name);
     }
+
+    [Fact]
+    public void BuildUpdate_Should_Detect_Changes_On_All_Types()
+    {
+        using var arena = new ArenaAllocator();
+        var oid = ObjectId.GenerateNewId();
+        var now = DateTime.UtcNow;
+        now = new DateTime(now.Ticks - (now.Ticks % TimeSpan.TicksPerMillisecond), now.Kind);
+
+        var original = new ComprehensiveEntity
+        {
+            Id = 1,
+            BigInt = 100L,
+            Precision = 1.23,
+            Flag = true,
+            Oid = oid,
+            Timestamp = now,
+            Text = "Original",
+            Child = new SimpleEntity { Name = "ChildOriginal", Age = 10 },
+            Numbers = new List<int> { 1, 2, 3 }
+        };
+
+        // Create snapshot
+        var writer = new ArenaBsonWriter(arena);
+        DynamicBlittableSerializer<ComprehensiveEntity>.SerializeDelegate(ref writer, original);
+        var snapshot = writer.Commit(arena);
+
+        // Mutate everything
+        var newOid = ObjectId.GenerateNewId();
+        var later = now.AddHours(1);
+        var modified = new ComprehensiveEntity
+        {
+            Id = 1,
+            BigInt = 200L,
+            Precision = 4.56,
+            Flag = false,
+            Oid = newOid,
+            Timestamp = later,
+            Text = "Changed",
+            Child = new SimpleEntity { Name = "ChildChanged", Age = 10 }, // Only Name changed
+            Numbers = new List<int> { 4, 5, 6 }
+        };
+
+        // Diff
+        var builder = Builders<BsonDocument>.Update;
+        var update = DynamicBlittableSerializer<ComprehensiveEntity>.BuildUpdateDelegate(modified, snapshot, builder, arena);
+
+        Assert.NotNull(update);
+        var bson = (BsonDocument)update.Render(new RenderArgs<BsonDocument>(BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(), BsonSerializer.SerializerRegistry));
+        var set = bson["$set"].AsBsonDocument;
+
+        Assert.Equal(200L, set["BigInt"].AsInt64);
+        Assert.Equal(4.56, set["Precision"].AsDouble);
+        Assert.False(set["Flag"].AsBoolean);
+        Assert.Equal(newOid, set["Oid"].AsObjectId);
+        Assert.Equal(later, set["Timestamp"].ToUniversalTime());
+        Assert.Equal("Changed", set["Text"].AsString);
+        Assert.Equal("ChildChanged", set["Child.Name"].AsString);
+        Assert.False(set.Contains("Child.Age")); // Unchanged nested property
+        Assert.Equal(new BsonArray { 4, 5, 6 }, set["Numbers"]);
+    }
 }
 
 [Document]
@@ -117,3 +179,17 @@ public partial class SimpleEntity
     public string Name { get; set; } = "";
     public int Age { get; set; }
 }
+
+public class ComprehensiveEntity
+{
+    public int Id { get; set; }
+    public long BigInt { get; set; }
+    public double Precision { get; set; }
+    public bool Flag { get; set; }
+    public ObjectId Oid { get; set; }
+    public DateTime Timestamp { get; set; }
+    public string Text { get; set; } = "";
+    public SimpleEntity Child { get; set; } = new();
+    public List<int> Numbers { get; set; } = new();
+}
+

@@ -73,12 +73,11 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         _buffer.Add((byte)type);
         
         int byteCount = Encoding.UTF8.GetByteCount(name);
-        // Field names are usually small; 128 bytes covers almost all practical BSON keys
         if (byteCount <= 128)
         {
             Span<byte> nameBytes = stackalloc byte[128];
             int written = Encoding.UTF8.GetBytes(name, nameBytes);
-            _buffer.AddRange(nameBytes.Slice(0, written));
+            for (int i = 0; i < written; i++) _buffer.Add(nameBytes[i]);
         }
         else
         {
@@ -86,7 +85,7 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
             try
             {
                 int written = Encoding.UTF8.GetBytes(name, rented);
-                _buffer.AddRange(new ReadOnlySpan<byte>(rented, 0, written));
+                for (int i = 0; i < written; i++) _buffer.Add(rented[i]);
             }
             finally
             {
@@ -171,24 +170,28 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
     // Value-only versions for converters
     public void WriteInt32Value(int value)
     {
-        Span<byte> bytes = stackalloc byte[4];
-        Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(bytes), value);
-        _buffer.AddRange(bytes);
+        _buffer.Add((byte)value);
+        _buffer.Add((byte)(value >> 8));
+        _buffer.Add((byte)(value >> 16));
+        _buffer.Add((byte)(value >> 24));
     }
 
     public void WriteInt64Value(long value)
     {
-        Span<byte> bytes = stackalloc byte[8];
-        Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(bytes), value);
-        _buffer.AddRange(bytes);
+        _buffer.Add((byte)value);
+        _buffer.Add((byte)(value >> 8));
+        _buffer.Add((byte)(value >> 16));
+        _buffer.Add((byte)(value >> 24));
+        _buffer.Add((byte)(value >> 32));
+        _buffer.Add((byte)(value >> 40));
+        _buffer.Add((byte)(value >> 48));
+        _buffer.Add((byte)(value >> 56));
     }
 
-    public void WriteDoubleValue(int value) => WriteDoubleValue((double)value);
     public void WriteDoubleValue(double value)
     {
-        Span<byte> bytes = stackalloc byte[8];
-        Unsafe.WriteUnaligned(ref MemoryMarshal.GetReference(bytes), value);
-        _buffer.AddRange(bytes);
+        long val = *(long*)&value;
+        WriteInt64Value(val);
     }
 
     public void WriteBooleanValue(bool value) => _buffer.Add(value ? (byte)1 : (byte)0);
@@ -202,7 +205,7 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         {
             Span<byte> valBytes = stackalloc byte[512];
             int written = Encoding.UTF8.GetBytes(value, valBytes);
-            _buffer.AddRange(valBytes.Slice(0, written));
+            for (int i = 0; i < written; i++) _buffer.Add(valBytes[i]);
         }
         else
         {
@@ -210,7 +213,7 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
             try
             {
                 int written = Encoding.UTF8.GetBytes(value, rented);
-                _buffer.AddRange(new ReadOnlySpan<byte>(rented, 0, written));
+                for (int i = 0; i < written; i++) _buffer.Add(rented[i]);
             }
             finally
             {
@@ -223,10 +226,8 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
 
     public void WriteObjectIdValue(ObjectId value)
     {
-        // ObjectId stores fields in a way that needs careful byte ordering.
-        // The driver's ToByteArray is the safest baseline for correctness.
         var bytes = value.ToByteArray();
-        _buffer.AddRange(bytes);
+        for (int i = 0; i < 12; i++) _buffer.Add(bytes[i]);
     }
 
     public void WriteDateTimeValue(DateTime value)
@@ -239,19 +240,35 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
     {
         WriteInt32Value(bytes.Length);
         _buffer.Add(subtype);
-        _buffer.AddRange(bytes);
+        for (int i = 0; i < bytes.Length; i++) _buffer.Add(bytes[i]);
     }
 
     public void WriteGuidValue(Guid value)
     {
+        WriteInt32Value(16);
+        _buffer.Add(0x04); // UUID Standard subtype
+        
         Span<byte> bytes = stackalloc byte[16];
         value.TryWriteBytes(bytes, bigEndian: true, out _);
-        WriteBinaryValue(bytes, 4);
+        for (int i = 0; i < 16; i++) _buffer.Add(bytes[i]);
+    }
+
+    public void WriteDecimal128(ReadOnlySpan<char> name, decimal value)
+    {
+        WriteName(name, BlittableBsonConstants.BsonType.Decimal128);
+        WriteDecimal128Value(value);
+    }
+
+    public void WriteDecimal128Value(decimal value)
+    {
+        var d128 = new Decimal128(value);
+        WriteInt64Value((long)d128.GetIEEELowBits());
+        WriteInt64Value((long)d128.GetIEEEHighBits());
     }
 
     public void WriteRaw(ReadOnlySpan<byte> bytes)
     {
-        _buffer.AddRange(bytes);
+        for (int i = 0; i < bytes.Length; i++) _buffer.Add(bytes[i]);
     }
 
     // Value-only versions for arrays (using index as string key)

@@ -4,12 +4,15 @@ using MongoDB.Bson;
 
 namespace MongoZen;
 
-internal sealed class AttachmentsSessionOperations(IMongoDatabase database, IClientSessionHandle? session) : IAttachmentsSessionOperations
+internal sealed class AttachmentsSessionOperations(DocumentSession session) : IAttachmentsSessionOperations
 {
-    private readonly IGridFSBucket _bucket = new GridFSBucket(database);
+    private readonly DocumentSession _session = session;
+    private readonly IGridFSBucket _bucket = new GridFSBucket(session.Database);
 
     public async Task StoreAsync(object documentId, string name, Stream stream, string? contentType = null, CancellationToken cancellationToken = default)
     {
+        await _session.EnsureTransactionStartedAsync(cancellationToken);
+
         var options = new GridFSUploadOptions
         {
             Metadata = new BsonDocument
@@ -25,6 +28,8 @@ internal sealed class AttachmentsSessionOperations(IMongoDatabase database, ICli
 
     public async Task<AttachmentResult> GetAsync(object documentId, string name, CancellationToken cancellationToken = default)
     {
+        await _session.EnsureTransactionStartedAsync(cancellationToken);
+
         var filter = Builders<GridFSFileInfo>.Filter.And(
             Builders<GridFSFileInfo>.Filter.Eq(x => x.Filename, name),
             Builders<GridFSFileInfo>.Filter.Eq("metadata.documentId", BsonValue.Create(documentId))
@@ -43,6 +48,8 @@ internal sealed class AttachmentsSessionOperations(IMongoDatabase database, ICli
 
     public async Task DeleteAsync(object documentId, string name, CancellationToken cancellationToken = default)
     {
+        await _session.EnsureTransactionStartedAsync(cancellationToken);
+
         var filter = Builders<GridFSFileInfo>.Filter.And(
             Builders<GridFSFileInfo>.Filter.Eq(x => x.Filename, name),
             Builders<GridFSFileInfo>.Filter.Eq("metadata.documentId", BsonValue.Create(documentId))
@@ -58,6 +65,8 @@ internal sealed class AttachmentsSessionOperations(IMongoDatabase database, ICli
 
     public async Task DeleteAllAsync(object documentId, CancellationToken cancellationToken = default)
     {
+        await _session.EnsureTransactionStartedAsync(cancellationToken);
+
         var filter = Builders<GridFSFileInfo>.Filter.Eq("metadata.documentId", BsonValue.Create(documentId));
         var cursor = await _bucket.FindAsync(filter, null, cancellationToken);
         var files = await cursor.ToListAsync(cancellationToken);
@@ -70,6 +79,8 @@ internal sealed class AttachmentsSessionOperations(IMongoDatabase database, ICli
 
     public async Task<IEnumerable<string>> GetNamesAsync(object documentId, CancellationToken cancellationToken = default)
     {
+        await _session.EnsureTransactionStartedAsync(cancellationToken);
+
         var filter = Builders<GridFSFileInfo>.Filter.Eq("metadata.documentId", BsonValue.Create(documentId));
         var cursor = await _bucket.FindAsync(filter, null, cancellationToken);
         var files = await cursor.ToListAsync(cancellationToken);

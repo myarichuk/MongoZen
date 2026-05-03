@@ -23,17 +23,22 @@ public static class DocumentTypeTracker
         );
     }
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, string> _collectionNameCache = new();
+
     /// <summary>
     /// Returns the default collection name for a document type.
     /// </summary>
     public static string GetDefaultCollectionName(Type type)
     {
-        var docAttr = type.GetCustomAttribute<DocumentAttribute>();
-        if (docAttr?.CollectionName != null)
+        return _collectionNameCache.GetOrAdd(type, t => 
         {
-            return docAttr.CollectionName;
-        }
+            var docAttr = t.GetCustomAttribute<DocumentAttribute>();
+            if (docAttr?.CollectionName != null)
+            {
+                return docAttr.CollectionName;
+            }
 
-        return Conventions.FindCollectionName(type);
+            return Conventions.FindCollectionName(t);
+        });
     }
 }

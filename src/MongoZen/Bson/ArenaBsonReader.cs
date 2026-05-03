@@ -67,6 +67,7 @@ public static unsafe class ArenaBsonReader
             BlittableBsonConstants.BsonType.Null => dataPos,
             BlittableBsonConstants.BsonType.Int32 => dataPos + 4,
             BlittableBsonConstants.BsonType.Int64 => dataPos + 8,
+            BlittableBsonConstants.BsonType.Decimal128 => dataPos + 16,
             _ => throw new NotSupportedException($"BSON type {type} not yet supported in scanner")
         };
     }

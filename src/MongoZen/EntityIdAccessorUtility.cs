@@ -8,8 +8,7 @@ namespace MongoZen;
 /// </summary>
 public static class EntityIdAccessor
 {
-    private static readonly ConcurrentDictionary<Type, Delegate> _getterCache = new();
-    private static readonly ConcurrentDictionary<Type, Delegate> _docIdGetterCache = new();
+    private static readonly ConcurrentDictionary<Type, IIdGetter> _getterCache = new();
 
     public static object? GetId(object entity)
     {
@@ -18,12 +17,11 @@ public static class EntityIdAccessor
         var type = entity.GetType();
         var getter = _getterCache.GetOrAdd(type, t =>
         {
-            var accessorType = typeof(EntityIdAccessor<>).MakeGenericType(t);
-            return (Delegate)accessorType.GetMethod("GetAccessor", BindingFlags.NonPublic | BindingFlags.Static)!
-                .Invoke(null, [DefaultIdConvention.Instance])!;
+            var dispatcherType = typeof(IdGetter<>).MakeGenericType(t);
+            return (IIdGetter)Activator.CreateInstance(dispatcherType)!;
         });
 
-        return getter.DynamicInvoke(entity);
+        return getter.GetId(entity);
     }
 
     public static DocId GetDocId(object entity)
@@ -31,13 +29,34 @@ public static class EntityIdAccessor
         if (entity == null) throw new ArgumentNullException(nameof(entity));
         
         var type = entity.GetType();
-        var getter = _docIdGetterCache.GetOrAdd(type, t =>
+        var getter = _getterCache.GetOrAdd(type, t =>
         {
-            var accessorType = typeof(EntityIdAccessor<>).MakeGenericType(t);
-            return (Delegate)accessorType.GetMethod("GetDocIdAccessor", BindingFlags.NonPublic | BindingFlags.Static)!
-                .Invoke(null, [DefaultIdConvention.Instance])!;
+            var dispatcherType = typeof(IdGetter<>).MakeGenericType(t);
+            return (IIdGetter)Activator.CreateInstance(dispatcherType)!;
         });
 
-        return (DocId)getter.DynamicInvoke(entity)!;
+        return getter.GetDocId(entity);
+    }
+
+    private interface IIdGetter
+    {
+        object? GetId(object entity);
+        DocId GetDocId(object entity);
+    }
+
+    private class IdGetter<T> : IIdGetter
+    {
+        private static readonly Func<T, object?> _getter;
+        private static readonly Func<T, DocId> _docIdGetter;
+
+        static IdGetter()
+        {
+            var convention = DefaultIdConvention.Instance;
+            _getter = EntityIdAccessor<T>.GetAccessor(convention);
+            _docIdGetter = EntityIdAccessor<T>.GetDocIdAccessor(convention);
+        }
+
+        public object? GetId(object entity) => _getter((T)entity);
+        public DocId GetDocId(object entity) => _docIdGetter((T)entity);
     }
 }

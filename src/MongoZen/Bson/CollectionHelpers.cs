@@ -66,6 +66,33 @@ public static class CollectionHelper<T>
         }
         return result;
     }
+
+    public static List<T> ReadList(BlittableBsonArray array, ArenaAllocator arena)
+    {
+        var result = new List<T>(array.Count);
+        var type = typeof(T);
+        bool isComplexPoco = (type.IsClass || (type.IsValueType && !type.IsPrimitive && !type.IsEnum)) && 
+                             type != typeof(string) && type != typeof(decimal) && 
+                             type != typeof(ObjectId) && type != typeof(Guid) &&
+                             !(type.Namespace?.StartsWith("MongoDB.Bson") ?? false);
+
+        if (isComplexPoco)
+        {
+            var deserializer = DynamicBlittableSerializer<T>.DeserializeDelegate;
+            for (int i = 0; i < array.Count; i++)
+            {
+                result.Add(deserializer(array[i].GetDocument(), arena));
+            }
+        }
+        else
+        {
+            for (int i = 0; i < array.Count; i++)
+            {
+                result.Add(array[i].Get<T>());
+            }
+        }
+        return result;
+    }
 }
 
 public static class DictionaryHelper<TValue>

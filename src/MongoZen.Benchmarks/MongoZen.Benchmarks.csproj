@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
+    <PackageReference Include="Testcontainers.MongoDb" Version="4.11.0" />
     <ProjectReference Include="..\MongoZen\MongoZen.csproj" />
     <ProjectReference Include="..\MongoZen.SourceGenerator\MongoZen.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
