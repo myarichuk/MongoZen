@@ -85,22 +85,33 @@ public class AttachmentTests : IntegrationTestBase
         Assert.Empty(names);
     }
 
-    [Fact(Skip = "Waiting for driver session overloads for GridFS to be verified in this environment.")]
+    [Fact]
     public async Task Session_Should_Rollback_Attachments()
     {
         var db = Database;
         var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
         
-        using var session = store.OpenSession();
-
         var documentId = "tx/1";
         var attachmentName = "secret.txt";
-        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("shhh"));
+        
+        try
+        {
+            using var session = store.OpenSession();
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes("shhh"));
 
-        await session.Attachments.StoreAsync(documentId, attachmentName, stream);
+            await session.Attachments.StoreAsync(documentId, attachmentName, stream);
+            
+            // Abort the transaction explicitly or throw
+            throw new Exception("Simulated failure");
+        }
+        catch
+        {
+            // Expected
+        }
 
-        // In the future, we would test that throwing an exception here 
-        // and calling session.Dispose() or similar doesn't persist the attachment.
-        // Currently, implicit transaction covers SaveChangesAsync.
+        // Verify attachment was not saved
+        using var newSession = store.OpenSession();
+        var names = await newSession.Attachments.GetNamesAsync(documentId);
+        Assert.Empty(names);
     }
 }
