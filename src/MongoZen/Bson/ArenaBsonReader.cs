@@ -22,6 +22,7 @@ public static unsafe class ArenaBsonReader
     public static BlittableBsonDocument ReadInPlace(byte* pBuffer, int len, ArenaAllocator arena)
     {
         var index = new ArenaDictionary<ArenaUtf8String, int>(arena);
+        var keyCache = new ArenaDictionary<ArenaUtf8String, ArenaUtf8String>(arena);
 
         int pos = 4; // length header
         while (pos < len - 1)
@@ -32,7 +33,16 @@ public static unsafe class ArenaBsonReader
             while (pBuffer[nameEnd] != 0) nameEnd++;
 
             var nameSpan = new ReadOnlySpan<byte>(pBuffer + nameStart, nameEnd - nameStart);
-            var name = ArenaUtf8String.Clone(nameSpan, arena);
+            
+            // Revert to working path: Clone for now. 
+            // Deduplication still works because keyCache stores the unique cloned instances.
+            var tempName = ArenaUtf8String.Clone(nameSpan, arena);
+
+            if (!keyCache.TryGetValue(tempName, out var name))
+            {
+                name = tempName;
+                keyCache.Add(name, name);
+            }
 
             index.Add(name, pos); // offset of the element (including type)
 

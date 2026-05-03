@@ -183,6 +183,7 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         _buffer.AddRange(bytes);
     }
 
+    public void WriteDoubleValue(int value) => WriteDoubleValue((double)value);
     public void WriteDoubleValue(double value)
     {
         Span<byte> bytes = stackalloc byte[8];
@@ -222,16 +223,10 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
 
     public void WriteObjectIdValue(ObjectId value)
     {
-        byte[] rented = ArrayPool<byte>.Shared.Rent(12);
-        try
-        {
-            value.ToByteArray(rented, 0);
-            _buffer.AddRange(new ReadOnlySpan<byte>(rented, 0, 12));
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        // ObjectId stores fields in a way that needs careful byte ordering.
+        // The driver's ToByteArray is the safest baseline for correctness.
+        var bytes = value.ToByteArray();
+        _buffer.AddRange(bytes);
     }
 
     public void WriteDateTimeValue(DateTime value)

@@ -111,7 +111,7 @@ public class SessionTests : IntegrationTestBase
 }
 
 [Document]
-public class SimpleEntity
+public partial class SimpleEntity
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";

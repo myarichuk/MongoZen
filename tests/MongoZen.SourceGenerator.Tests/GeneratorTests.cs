@@ -11,21 +11,33 @@ namespace MongoZen;
 
 [System.AttributeUsage(System.AttributeTargets.Class | System.AttributeTargets.Struct)]
 public class DocumentAttribute : System.Attribute { }
+
+public interface IBlittableDocument<T> 
+{
+    static abstract void Serialize(ref MongoZen.Bson.ArenaBsonWriter writer, T entity);
+    static abstract T Deserialize(MongoZen.Bson.BlittableBsonDocument doc, SharpArena.Allocators.ArenaAllocator arena);
+    static abstract MongoDB.Driver.UpdateDefinition<MongoDB.Bson.BsonDocument>? BuildUpdate(T entity, MongoZen.Bson.BlittableBsonDocument snapshot, MongoDB.Driver.UpdateDefinitionBuilder<MongoDB.Bson.BsonDocument> builder);
+}
 ";
 
-    private const string ArenaBsonBytesSource = @"
-namespace MongoZen;
-public readonly unsafe struct ArenaBsonBytes
-{
-    public readonly byte* RawPtr;
-    public readonly int Length;
-    public ArenaBsonBytes(byte* ptr, int length) { RawPtr = ptr; Length = length; }
-    public System.ReadOnlySpan<byte> AsReadOnlySpan() => RawPtr == null ? default : new System.ReadOnlySpan<byte>(RawPtr, Length);
+    private const string BsonEngineSource = @"
+namespace MongoZen.Bson;
+public struct ArenaBsonWriter { 
+    public void WriteStartDocument() {}
+    public void WriteEndDocument() {}
+    public void WriteInt32(System.ReadOnlySpan<char> name, int value) {}
+    public void WriteString(System.ReadOnlySpan<char> name, System.ReadOnlySpan<char> value) {}
+}
+public struct BlittableBsonDocument {
+    public bool TryGetElementOffset(System.ReadOnlySpan<char> name, out int offset) { offset = 0; return false; }
+    public int GetInt32(int offset) => 0;
+    public string GetString(int offset) => """";
+    public BlittableBsonDocument GetDocument(int offset, SharpArena.Allocators.ArenaAllocator arena) => default;
 }
 ";
 
     [Fact]
-    public async Task Should_Generate_Simple_Shadow()
+    public async Task Should_Generate_Simple_Blittable()
     {
         var inputSource = @"
 using MongoZen;
@@ -33,7 +45,7 @@ using MongoZen;
 namespace TestNamespace;
 
 [Document]
-public class SimpleEntity
+public partial class SimpleEntity
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
@@ -44,350 +56,59 @@ public class SimpleEntity
         {
             TestState =
             {
-                Sources = { AttributeSource, ArenaBsonBytesSource, inputSource },
+                Sources = { AttributeSource, BsonEngineSource, inputSource },
                 GeneratedSources =
                 {
-                    (typeof(ShadowGenerator), "SimpleEntity.Shadow.g.cs", @"#nullable enable
+                    (typeof(ShadowGenerator), "SimpleEntity.Blittable.g.cs", @"#nullable enable
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using MongoZen;
+using MongoZen.Bson;
 using SharpArena.Allocators;
-using SharpArena.Collections;
 using MongoDB.Driver;
 using MongoDB.Bson;
 
 namespace TestNamespace;
 
-public readonly unsafe struct SimpleEntityShadow
+partial class SimpleEntity : IBlittableDocument<SimpleEntity>
 {
-    public readonly bool _HasValue;
-    public readonly int Id;
-    public readonly ArenaUtf8String Name;
-
-    public static SimpleEntityShadow Create(TestNamespace.SimpleEntity? entity, ArenaAllocator arena)
+    public static void Serialize(ref ArenaBsonWriter writer, SimpleEntity entity)
     {
-        if (entity == null) return default;
-
-        return new SimpleEntityShadow(
-            true,
-            entity.Id,
-            entity.Name == null ? default : ArenaUtf8String.Clone(entity.Name, arena)
-        );
+        writer.WriteStartDocument();
+        writer.WriteInt32(""_id"", entity.Id);
+        if (entity.Name != null) writer.WriteString(""Name"", entity.Name.AsSpan());
+        writer.WriteEndDocument();
     }
 
-    private SimpleEntityShadow(bool hasValue,
-        int id,
-        ArenaUtf8String name
-    )
+    public static SimpleEntity Deserialize(BlittableBsonDocument doc, ArenaAllocator arena)
     {
-        this._HasValue = hasValue;
-        this.Id = id;
-        this.Name = name;
+        var entity = new SimpleEntity();
+        if (doc.TryGetElementOffset(""_id"", out var offset_Id))
+        {
+            entity.Id = doc.GetInt32(offset_Id);
+        }
+        if (doc.TryGetElementOffset(""Name"", out var offset_Name))
+        {
+            entity.Name = doc.GetString(offset_Name);
+        }
+        return entity;
     }
 
-    private static global::MongoZen.ArenaBsonBytes ClonePolymorphic<T>(T? obj, ArenaAllocator arena)
-    {
-        if (obj == null) return default;
-        var bytes = obj.ToBson<T>();
-        var ptr = (byte*)arena.Alloc((UIntPtr)bytes.Length, (UIntPtr)1);
-        new ReadOnlySpan<byte>(bytes).CopyTo(new Span<byte>(ptr, bytes.Length));
-        return new global::MongoZen.ArenaBsonBytes(ptr, bytes.Length);
-    }
-
-    public bool Equals(TestNamespace.SimpleEntity? entity)
-    {
-        if (entity == null) return !this._HasValue;
-        if (!this._HasValue) return false;
-
-        if (entity.Id != this.Id) return false;
-        if (entity.Name == null) { if (this.Name.RawPtr != null) return false; }
-        else if (this.Name.RawPtr == null || !this.Name.Equals(entity.Name)) return false;
-        return true;
-    }
-
-    public UpdateDefinition<BsonDocument>? BuildUpdate(TestNamespace.SimpleEntity entity, UpdateDefinitionBuilder<BsonDocument> builder)
+    public static UpdateDefinition<BsonDocument>? BuildUpdate(SimpleEntity entity, BlittableBsonDocument snapshot, UpdateDefinitionBuilder<BsonDocument> builder)
     {
         UpdateDefinition<BsonDocument>? combined = null;
-        this.BuildUpdate(entity, """", builder, ref combined);
+        if (snapshot.TryGetElementOffset(""_id"", out var off_Id))
+        {
+            if (entity.Id != snapshot.GetInt32(off_Id))
+                combined = (combined == null) ? builder.Set(""_id"", entity.Id) : builder.Combine(combined, builder.Set(""_id"", entity.Id));
+        }
+        if (snapshot.TryGetElementOffset(""Name"", out var off_Name))
+        {
+            if (!object.Equals(snapshot.GetString(off_Name), entity.Name))
+                combined = (combined == null) ? builder.Set(""Name"", entity.Name) : builder.Combine(combined, builder.Set(""Name"", entity.Name));
+        }
         return combined;
-    }
-
-    public void BuildUpdate(TestNamespace.SimpleEntity? entity, string pathPrefix, UpdateDefinitionBuilder<BsonDocument> builder, ref UpdateDefinition<BsonDocument>? combined)
-    {
-        if (this.Equals(entity)) return;
-        if (entity == null) return;
-
-        // Id
-        if (entity.Id != this.Id)
-            combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Id"" : pathPrefix + ""Id""), entity.Id) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Id"" : pathPrefix + ""Id""), entity.Id));
-
-        // Name
-        {
-            var cur = entity.Name;
-            if (cur == null)
-            {
-                if (this.Name.RawPtr != null) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name"")));
-            }
-            else if (this.Name.RawPtr == null || !this.Name.Equals(cur))
-            {
-                combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name""), cur) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Name"" : pathPrefix + ""Name""), cur));
-            }
-        }
-    }
-}
-")
-                },
-                ReferenceAssemblies = new ReferenceAssemblies(
-                    "net10.0",
-                    new PackageIdentity("Microsoft.NETCore.App.Ref", "10.0.0-preview.1.25080.5"),
-                    Path.Combine("ref", "net10.0"))
-            }
-        };
-
-        test.TestState.AdditionalReferences.Add(typeof(MongoDB.Bson.BsonDocument).Assembly);
-        test.TestState.AdditionalReferences.Add(typeof(MongoDB.Driver.UpdateDefinition<>).Assembly);
-        test.TestState.AdditionalReferences.Add(typeof(SharpArena.Allocators.ArenaAllocator).Assembly);
-
-        await test.RunAsync();
-    }
-
-    [Fact]
-    public async Task Should_Generate_Complex_Shadow()
-    {
-        var inputSource = @"
-using System.Collections.Generic;
-using MongoZen;
-
-namespace TestNamespace;
-
-public class Address
-{
-    public string City { get; set; } = string.Empty;
-}
-
-[Document]
-public class ComplexEntity
-{
-    public int Id { get; set; }
-    public Address Home { get; set; } = new();
-    public List<string> Tags { get; set; } = new();
-}
-";
-
-        var test = new CSharpSourceGeneratorTest<ShadowGenerator, DefaultVerifier>
-        {
-            TestState =
-            {
-                Sources = { AttributeSource, ArenaBsonBytesSource, inputSource },
-                GeneratedSources =
-                {
-                    (typeof(ShadowGenerator), "ComplexEntity.Shadow.g.cs", @"#nullable enable
-using System;
-using System.Collections.Generic;
-using MongoZen;
-using SharpArena.Allocators;
-using SharpArena.Collections;
-using MongoDB.Driver;
-using MongoDB.Bson;
-
-namespace TestNamespace;
-
-public readonly unsafe struct ComplexEntityShadow
-{
-    public readonly bool _HasValue;
-    public readonly int Id;
-    public readonly AddressShadow Home;
-    public readonly ArenaList<ArenaUtf8String> Tags;
-
-    public static ComplexEntityShadow Create(TestNamespace.ComplexEntity? entity, ArenaAllocator arena)
-    {
-        if (entity == null) return default;
-
-        var Tags_cloned = default(ArenaList<ArenaUtf8String>);
-        if (entity.Tags != null)
-        {
-            Tags_cloned = new ArenaList<ArenaUtf8String>(arena, entity.Tags.Count);
-            foreach (var item in entity.Tags)
-            {
-                Tags_cloned.Add(item == null ? default : ArenaUtf8String.Clone(item, arena));
-            }
-        }
-        return new ComplexEntityShadow(
-            true,
-            entity.Id,
-            AddressShadow.Create(entity.Home, arena),
-            Tags_cloned
-        );
-    }
-
-    private ComplexEntityShadow(bool hasValue,
-        int id,
-        AddressShadow home,
-        ArenaList<ArenaUtf8String> tags
-    )
-    {
-        this._HasValue = hasValue;
-        this.Id = id;
-        this.Home = home;
-        this.Tags = tags;
-    }
-
-    private static global::MongoZen.ArenaBsonBytes ClonePolymorphic<T>(T? obj, ArenaAllocator arena)
-    {
-        if (obj == null) return default;
-        var bytes = obj.ToBson<T>();
-        var ptr = (byte*)arena.Alloc((UIntPtr)bytes.Length, (UIntPtr)1);
-        new ReadOnlySpan<byte>(bytes).CopyTo(new Span<byte>(ptr, bytes.Length));
-        return new global::MongoZen.ArenaBsonBytes(ptr, bytes.Length);
-    }
-
-    public bool Equals(TestNamespace.ComplexEntity? entity)
-    {
-        if (entity == null) return !this._HasValue;
-        if (!this._HasValue) return false;
-
-        if (entity.Id != this.Id) return false;
-        if (!this.Home.Equals(entity.Home)) return false;
-        if (!IsTagsEqual(entity.Tags)) return false;
-        return true;
-    }
-
-    public UpdateDefinition<BsonDocument>? BuildUpdate(TestNamespace.ComplexEntity entity, UpdateDefinitionBuilder<BsonDocument> builder)
-    {
-        UpdateDefinition<BsonDocument>? combined = null;
-        this.BuildUpdate(entity, """", builder, ref combined);
-        return combined;
-    }
-
-    public void BuildUpdate(TestNamespace.ComplexEntity? entity, string pathPrefix, UpdateDefinitionBuilder<BsonDocument> builder, ref UpdateDefinition<BsonDocument>? combined)
-    {
-        if (this.Equals(entity)) return;
-        if (entity == null) return;
-
-        // Id
-        if (entity.Id != this.Id)
-            combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Id"" : pathPrefix + ""Id""), entity.Id) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Id"" : pathPrefix + ""Id""), entity.Id));
-
-        // Home
-        var child_Home = entity.Home;
-        if (child_Home == null)
-        {
-            if (this.Home._HasValue) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Home"" : pathPrefix + ""Home"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Home"" : pathPrefix + ""Home"")));
-        }
-        else if (!this.Home._HasValue)
-        {
-            combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Home"" : pathPrefix + ""Home""), child_Home) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Home"" : pathPrefix + ""Home""), child_Home));
-        }
-        else
-        {
-            this.Home.BuildUpdate(child_Home, (string.IsNullOrEmpty(pathPrefix) ? ""Home"" : pathPrefix + ""Home"") + ""."", builder, ref combined);
-        }
-
-        // Tags
-        var coll_Tags = entity.Tags;
-        if (coll_Tags == null)
-        {
-            if (this.Tags.Length != 0) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags"")));
-        }
-        else if (!IsTagsEqual(coll_Tags))
-        {
-            combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags""), coll_Tags) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""Tags"" : pathPrefix + ""Tags""), coll_Tags));
-        }
-    }
-
-    private bool IsTagsEqual(System.Collections.Generic.List<string>? current)
-    {
-        if (current == null) return this.Tags.Length == 0;
-        if (current.Count != this.Tags.Length) return false;
-        var idx = 0;
-        var span = this.Tags.AsReadOnlySpan();
-        foreach (var item in current)
-        {
-            var s = span[idx++];
-                if (item == null) { if (s.RawPtr != null) return false; }
-                else if (s.RawPtr == null || !s.Equals(item)) return false;
-        }
-        return true;
-    }
-}
-"),
-                    (typeof(ShadowGenerator), "Address.Shadow.g.cs", @"#nullable enable
-using System;
-using System.Collections.Generic;
-using MongoZen;
-using SharpArena.Allocators;
-using SharpArena.Collections;
-using MongoDB.Driver;
-using MongoDB.Bson;
-
-namespace TestNamespace;
-
-public readonly unsafe struct AddressShadow
-{
-    public readonly bool _HasValue;
-    public readonly ArenaUtf8String City;
-
-    public static AddressShadow Create(TestNamespace.Address? entity, ArenaAllocator arena)
-    {
-        if (entity == null) return default;
-
-        return new AddressShadow(
-            true,
-            entity.City == null ? default : ArenaUtf8String.Clone(entity.City, arena)
-        );
-    }
-
-    private AddressShadow(bool hasValue,
-        ArenaUtf8String city
-    )
-    {
-        this._HasValue = hasValue;
-        this.City = city;
-    }
-
-    private static global::MongoZen.ArenaBsonBytes ClonePolymorphic<T>(T? obj, ArenaAllocator arena)
-    {
-        if (obj == null) return default;
-        var bytes = obj.ToBson<T>();
-        var ptr = (byte*)arena.Alloc((UIntPtr)bytes.Length, (UIntPtr)1);
-        new ReadOnlySpan<byte>(bytes).CopyTo(new Span<byte>(ptr, bytes.Length));
-        return new global::MongoZen.ArenaBsonBytes(ptr, bytes.Length);
-    }
-
-    public bool Equals(TestNamespace.Address? entity)
-    {
-        if (entity == null) return !this._HasValue;
-        if (!this._HasValue) return false;
-
-        if (entity.City == null) { if (this.City.RawPtr != null) return false; }
-        else if (this.City.RawPtr == null || !this.City.Equals(entity.City)) return false;
-        return true;
-    }
-
-    public UpdateDefinition<BsonDocument>? BuildUpdate(TestNamespace.Address entity, UpdateDefinitionBuilder<BsonDocument> builder)
-    {
-        UpdateDefinition<BsonDocument>? combined = null;
-        this.BuildUpdate(entity, """", builder, ref combined);
-        return combined;
-    }
-
-    public void BuildUpdate(TestNamespace.Address? entity, string pathPrefix, UpdateDefinitionBuilder<BsonDocument> builder, ref UpdateDefinition<BsonDocument>? combined)
-    {
-        if (this.Equals(entity)) return;
-        if (entity == null) return;
-
-        // City
-        {
-            var cur = entity.City;
-            if (cur == null)
-            {
-                if (this.City.RawPtr != null) combined = (combined == null) ? builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City"")) : builder.Combine(combined, builder.Unset((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City"")));
-            }
-            else if (this.City.RawPtr == null || !this.City.Equals(cur))
-            {
-                combined = (combined == null) ? builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City""), cur) : builder.Combine(combined, builder.Set((string.IsNullOrEmpty(pathPrefix) ? ""City"" : pathPrefix + ""City""), cur));
-            }
-        }
     }
 }
 ")

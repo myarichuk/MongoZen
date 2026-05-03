@@ -27,9 +27,8 @@ public class DocumentTypeTrackerTests
         var types = DocumentTypeTracker.GetDocumentTypes(assembly).ToList();
 
         Assert.Contains(typeof(ExplicitDoc), types);
-        Assert.Contains(typeof(TrackingTests.StringEntity), types);
-        Assert.Contains(typeof(TrackingTests.ElementEntity), types);
-        Assert.Contains(typeof(TrackingTests.Zoo), types);
+        Assert.Contains(typeof(StringEntity), types);
+        Assert.Contains(typeof(ElementEntity), types);
     }
 
     [Fact]

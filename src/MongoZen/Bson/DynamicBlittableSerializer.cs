@@ -23,9 +23,43 @@ public static class DynamicBlittableSerializer<T>
 
     static DynamicBlittableSerializer()
     {
-        SerializeDelegate = Emitter.CompileSerializer();
-        DeserializeDelegate = Emitter.CompileDeserializer();
-        BuildUpdateDelegate = Emitter.CompileUpdateBuilder();
+        if (typeof(IBlittableDocument<T>).IsAssignableFrom(typeof(T)))
+        {
+            SerializeDelegate = CompileTier1Serialize();
+            DeserializeDelegate = CompileTier1Deserialize();
+            BuildUpdateDelegate = CompileTier1BuildUpdate();
+        }
+        else
+        {
+            SerializeDelegate = Emitter.CompileSerializer();
+            DeserializeDelegate = Emitter.CompileDeserializer();
+            BuildUpdateDelegate = Emitter.CompileUpdateBuilder();
+        }
+    }
+
+    private static SerializeAction CompileTier1Serialize()
+    {
+        var writerParam = Expression.Parameter(typeof(ArenaBsonWriter).MakeByRefType(), "writer");
+        var entityParam = Expression.Parameter(typeof(T), "entity");
+        var method = typeof(T).GetMethod("Serialize", [typeof(ArenaBsonWriter).MakeByRefType(), typeof(T)])!;
+        return Expression.Lambda<SerializeAction>(Expression.Call(null, method, writerParam, entityParam), writerParam, entityParam).Compile();
+    }
+
+    private static Func<BlittableBsonDocument, ArenaAllocator, T> CompileTier1Deserialize()
+    {
+        var docParam = Expression.Parameter(typeof(BlittableBsonDocument), "doc");
+        var arenaParam = Expression.Parameter(typeof(ArenaAllocator), "arena");
+        var method = typeof(T).GetMethod("Deserialize", [typeof(BlittableBsonDocument), typeof(ArenaAllocator)])!;
+        return Expression.Lambda<Func<BlittableBsonDocument, ArenaAllocator, T>>(Expression.Call(null, method, docParam, arenaParam), docParam, arenaParam).Compile();
+    }
+
+    private static BuildUpdateAction CompileTier1BuildUpdate()
+    {
+        var entityParam = Expression.Parameter(typeof(T), "entity");
+        var snapshotParam = Expression.Parameter(typeof(BlittableBsonDocument), "snapshot");
+        var builderParam = Expression.Parameter(typeof(UpdateDefinitionBuilder<BsonDocument>), "builder");
+        var method = typeof(T).GetMethod("BuildUpdate", [typeof(T), typeof(BlittableBsonDocument), typeof(UpdateDefinitionBuilder<BsonDocument>)])!;
+        return Expression.Lambda<BuildUpdateAction>(Expression.Call(null, method, entityParam, snapshotParam, builderParam), entityParam, snapshotParam, builderParam).Compile();
     }
 
     private static class Emitter
@@ -143,7 +177,7 @@ public static class DynamicBlittableSerializer<T>
 
             foreach (var prop in GetValidProperties(type))
             {
-                if (!prop.CanWrite) continue;
+                if (prop.SetMethod == null) continue;
                 body.Add(EmitPropertyRead(docParam, arenaParam, objVar, prop));
             }
 
@@ -353,119 +387,5 @@ public static class DynamicBlittableSerializer<T>
 
         private static MethodInfo GetWriterMethod(string name, params Type[] types) => typeof(ArenaBsonWriter).GetMethod(name, types)!;
         private static MethodInfo GetDocMethod(string name, params Type[] types) => typeof(BlittableBsonDocument).GetMethod(name, types)!;
-    }
-}
-
-internal static class CollectionHelper<T>
-{
-    public static void WriteArray(ref ArenaBsonWriter writer, ReadOnlySpan<char> name, IEnumerable<T> collection)
-    {
-        writer.WriteStartArray(name);
-        int i = 0;
-        foreach (var item in collection)
-        {
-            EmitValue(ref writer, i++, item);
-        }
-        writer.WriteEndArray();
-    }
-
-    private static void EmitValue(ref ArenaBsonWriter writer, int index, T value)
-    {
-        Span<char> name = stackalloc char[11];
-        index.TryFormat(name, out int charsWritten);
-        var nameSpan = name.Slice(0, charsWritten);
-
-        if (typeof(T) == typeof(int)) writer.WriteInt32(nameSpan, (int)(object)value!);
-        else if (typeof(T) == typeof(string)) writer.WriteString(nameSpan, (string)(object)value!);
-        else if (typeof(T) == typeof(long)) writer.WriteInt64(nameSpan, (long)(object)value!);
-        else if (typeof(T) == typeof(double)) writer.WriteDouble(nameSpan, (double)(object)value!);
-        else if (typeof(T) == typeof(bool)) writer.WriteBoolean(nameSpan, (bool)(object)value!);
-        else if (typeof(T) == typeof(ObjectId)) writer.WriteObjectId(nameSpan, (ObjectId)(object)value!);
-        else if (typeof(T) == typeof(DateTime)) writer.WriteDateTime(nameSpan, (DateTime)(object)value!);
-        else
-        {
-            writer.WriteName(nameSpan, BlittableBsonConstants.BsonType.Document);
-            BlittableConverter<T>.Instance.Write(ref writer, value);
-        }
-    }
-
-    public static T[] ReadArray(BlittableBsonArray array, ArenaAllocator arena)
-    {
-        var result = new T[array.Count];
-        var type = typeof(T);
-        bool isComplexPoco = (type.IsClass || (type.IsValueType && !type.IsPrimitive && !type.IsEnum)) && 
-                             type != typeof(string) && type != typeof(decimal) && 
-                             type != typeof(ObjectId) && type != typeof(Guid) &&
-                             !(type.Namespace?.StartsWith("MongoDB.Bson") ?? false);
-
-        if (isComplexPoco)
-        {
-            var deserializer = DynamicBlittableSerializer<T>.DeserializeDelegate;
-            for (int i = 0; i < array.Count; i++)
-            {
-                result[i] = deserializer(array[i].GetDocument(), arena);
-            }
-        }
-        else
-        {
-            for (int i = 0; i < array.Count; i++)
-            {
-                result[i] = array[i].Get<T>();
-            }
-        }
-        return result;
-    }
-}
-
-internal static class DictionaryHelper<TValue>
-{
-    public static void WriteDictionary(ref ArenaBsonWriter writer, ReadOnlySpan<char> name, IDictionary<string, TValue> dictionary)
-    {
-        writer.WriteStartDocument(name);
-        foreach (var kvp in dictionary)
-        {
-            EmitValue(ref writer, kvp.Key, kvp.Value);
-        }
-        writer.WriteEndDocument();
-    }
-
-    private static void EmitValue(ref ArenaBsonWriter writer, string key, TValue value)
-    {
-        var type = typeof(TValue);
-        if (type == typeof(int)) writer.WriteInt32(key, (int)(object)value!);
-        else if (type == typeof(string)) writer.WriteString(key, (string)(object)value!);
-        else if (type == typeof(long)) writer.WriteInt64(key, (long)(object)value!);
-        else if (type == typeof(double)) writer.WriteDouble(key, (double)(object)value!);
-        else if (type == typeof(bool)) writer.WriteBoolean(key, (bool)(object)value!);
-        else if (type == typeof(ObjectId)) writer.WriteObjectId(key, (ObjectId)(object)value!);
-        else if (type == typeof(DateTime)) writer.WriteDateTime(key, (DateTime)(object)value!);
-        else
-        {
-            writer.WriteName(key, BlittableBsonConstants.BsonType.Document);
-            BlittableConverter<TValue>.Instance.Write(ref writer, value);
-        }
-    }
-
-    public static Dictionary<string, TValue> ReadDictionary(BlittableBsonDocument doc, ArenaAllocator arena)
-    {
-        var result = new Dictionary<string, TValue>();
-        var type = typeof(TValue);
-        bool isComplexPoco = (type.IsClass || (type.IsValueType && !type.IsPrimitive && !type.IsEnum)) && 
-                             type != typeof(string) && type != typeof(decimal) && 
-                             type != typeof(ObjectId) && type != typeof(Guid) &&
-                             !(type.Namespace?.StartsWith("MongoDB.Bson") ?? false);
-
-        foreach (var key in doc.Keys)
-        {
-            if (isComplexPoco)
-            {
-                result[key.ToString()] = DynamicBlittableSerializer<TValue>.DeserializeDelegate(doc.GetDocument(key, arena), arena);
-            }
-            else
-            {
-                result[key.ToString()] = doc.Get<TValue>(key);
-            }
-        }
-        return result;
     }
 }

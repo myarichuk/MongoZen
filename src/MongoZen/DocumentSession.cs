@@ -14,7 +14,7 @@ public sealed class DocumentSession : IDisposable
     private readonly DocumentStore _store;
     private readonly IMongoDatabase _database;
     private readonly ChangeTracker _changeTracker;
-    private readonly ConcurrentDictionary<(Type, object), object> _identityMap = new();
+    private readonly ConcurrentDictionary<(Type, DocId), object> _identityMap = new();
     private bool _disposed;
     private AttachmentsSessionOperations? _attachments;
     private IClientSessionHandle? _clientSession;
@@ -93,7 +93,8 @@ public sealed class DocumentSession : IDisposable
     /// </summary>
     public async Task<T?> LoadAsync<T>(object id, CancellationToken cancellationToken = default)
     {
-        if (_identityMap.TryGetValue((typeof(T), id), out var existing))
+        var docId = DocId.From(id);
+        if (_identityMap.TryGetValue((typeof(T), docId), out var existing))
         {
             return (T)existing;
         }
@@ -118,7 +119,7 @@ public sealed class DocumentSession : IDisposable
             
             var entity = DynamicBlittableSerializer<T>.DeserializeDelegate(doc, _arena);
             
-            _identityMap.TryAdd((typeof(T), id), entity!);
+            _identityMap.TryAdd((typeof(T), docId), entity!);
             _changeTracker.Track(entity!, doc);
             
             return entity;
@@ -137,7 +138,8 @@ public sealed class DocumentSession : IDisposable
         var id = EntityIdAccessor.GetId(entity);
         if (id != null)
         {
-            _identityMap.TryAdd((typeof(T), id), entity);
+            var docId = DocId.From(id);
+            _identityMap.TryAdd((typeof(T), docId), entity);
         }
 
         _changeTracker.Track(entity);
@@ -153,7 +155,8 @@ public sealed class DocumentSession : IDisposable
         var id = EntityIdAccessor.GetId(entity);
         if (id != null)
         {
-            _identityMap.TryRemove((typeof(T), id), out _);
+            var docId = DocId.From(id);
+            _identityMap.TryRemove((typeof(T), docId), out _);
         }
 
         _changeTracker.TrackDelete<T>(entity);

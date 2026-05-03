@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using SharpArena.Collections;
 using SharpArena.Allocators;
 using MongoDB.Bson;
+using System.Runtime.CompilerServices;
 
 namespace MongoZen.Bson;
 
@@ -13,7 +14,6 @@ public readonly unsafe struct BlittableBsonDocument
     private readonly ArenaDictionary<ArenaUtf8String, int> _index;
 
     public int Length => _length;
-    internal byte* Pointer => _bsonBytes;
 
     internal BlittableBsonDocument(byte* bsonBytes, int length, ArenaDictionary<ArenaUtf8String, int> index)
     {
@@ -21,6 +21,8 @@ public readonly unsafe struct BlittableBsonDocument
         _length = length;
         _index = index;
     }
+
+    public byte* Pointer => _bsonBytes;
 
     public ReadOnlySpan<byte> AsReadOnlySpan() => new(_bsonBytes, _length);
 
@@ -136,7 +138,6 @@ public readonly unsafe struct BlittableBsonDocument
         }
 
         int len = *(int*)p;
-        // BSON string length includes the null terminator
         return new ReadOnlySpan<byte>(p + 4, len - 1);
     }
 
@@ -152,7 +153,7 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new InvalidCastException($"Cannot cast {type} to ObjectId");
         }
-        //TODO: introduce pool
+        
         byte[] bytes = new byte[12];
         for (int i = 0; i < 12; i++) bytes[i] = p[i];
         return new ObjectId(bytes);
@@ -198,7 +199,7 @@ public readonly unsafe struct BlittableBsonDocument
         }
 
         var p = GetDataPointer(offset, out var type, out var length);
-        
+
         if (typeof(T) == typeof(int)) return (T)(object)GetInt32(offset);
         if (typeof(T) == typeof(long)) return (T)(object)GetInt64(offset);
         if (typeof(T) == typeof(double)) return (T)(object)GetDouble(offset);
@@ -287,14 +288,14 @@ public readonly unsafe struct BlittableBsonDocument
     public bool GetBoolean(int offset)
     {
         var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.Boolean) throw new InvalidCastException($"Cannot cast {type} to Boolean");
+        if (type != BlittableBsonConstants.BsonType.Boolean) throw new InvalidCastException($"Cannot cast {type} to Boolean");  
         return *p != 0;
     }
 
     public ReadOnlySpan<byte> GetStringBytes(int offset)
     {
         var p = GetDataPointerAtOffset(offset, out var type, out var length);
-        if (type != BlittableBsonConstants.BsonType.String) throw new InvalidCastException($"Cannot cast {type} to String");
+        if (type != BlittableBsonConstants.BsonType.String) throw new InvalidCastException($"Cannot cast {type} to String");    
         int strLen = *(int*)p;
         return new ReadOnlySpan<byte>(p + 4, strLen - 1);
     }
@@ -305,7 +306,7 @@ public readonly unsafe struct BlittableBsonDocument
     {
         var p = GetDataPointerAtOffset(offset, out var type, out _);
         if (type != BlittableBsonConstants.BsonType.ObjectId) throw new InvalidCastException($"Cannot cast {type} to ObjectId");
-        
+
         byte[] bytes = new byte[12];
         for (int i = 0; i < 12; i++) bytes[i] = p[i];
         return new ObjectId(bytes);
@@ -329,7 +330,7 @@ public readonly unsafe struct BlittableBsonDocument
     public BlittableBsonArray GetArray(int offset, ArenaAllocator arena)
     {
         var p = GetDataPointerAtOffset(offset, out var type, out var length);
-        if (type != BlittableBsonConstants.BsonType.Array) throw new InvalidCastException($"Cannot cast {type} to Array");
+        if (type != BlittableBsonConstants.BsonType.Array) throw new InvalidCastException($"Cannot cast {type} to Array");      
         return new BlittableBsonArray(p, length, arena);
     }
 
@@ -382,5 +383,3 @@ public readonly unsafe struct BlittableBsonDocument
         return dataPtr;
     }
 }
-
-

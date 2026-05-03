@@ -3,6 +3,7 @@ using SharpArena.Allocators;
 using MongoDB.Driver;
 using MongoDB.Bson;
 using MongoZen.Bson;
+using System.Reflection;
 
 namespace MongoZen;
 
@@ -94,7 +95,8 @@ public sealed class ChangeTracker(ArenaAllocator arena)
             if (update != null)
             {
                 var id = EntityIdAccessor.GetId(entry.Entity);
-                updates.Add(new UpdateOperation<BsonDocument>(id!, update, collectionName));
+                var updateCollectionName = DocumentTypeTracker.GetDefaultCollectionName(entry.Type);
+                updates.Add(new UpdateOperation<BsonDocument>(id!, update, updateCollectionName));
             }
         }
         return groups;
@@ -108,19 +110,16 @@ public sealed class ChangeTracker(ArenaAllocator arena)
         public bool IsNew { get; set; }
         public bool IsDeleted { get; set; }
         
-        private Delegate? _cachedBuildUpdate;
-        private Delegate? _cachedSerialize;
+        private MethodInfo? _cachedBuildUpdateMethod;
+        private MethodInfo? _cachedUpdateSnapshotMethod;
 
         public void UpdateSnapshot(ref ArenaBsonWriter writer, ArenaAllocator arena)
         {
-            _cachedSerialize ??= (Delegate)typeof(DynamicBlittableSerializer<>)
-                .MakeGenericType(Type)
-                .GetField(nameof(DynamicBlittableSerializer<object>.SerializeDelegate))!
-                .GetValue(null)!;
+            _cachedUpdateSnapshotMethod ??= typeof(EntityEntry)
+                .GetMethod(nameof(UpdateSnapshotInternal), BindingFlags.NonPublic | BindingFlags.Instance)!
+                .MakeGenericMethod(Type);
 
-            typeof(EntityEntry).GetMethod(nameof(UpdateSnapshotInternal), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                .MakeGenericMethod(Type)
-                .Invoke(this, [writer, arena]);
+            _cachedUpdateSnapshotMethod.Invoke(this, [writer, arena]);
         }
 
         private void UpdateSnapshotInternal<T>(ArenaBsonWriter writer, ArenaAllocator arena)
@@ -134,12 +133,17 @@ public sealed class ChangeTracker(ArenaAllocator arena)
         {
             if (Snapshot == null) return null;
 
-            _cachedBuildUpdate ??= (Delegate)typeof(DynamicBlittableSerializer<>)
-                .MakeGenericType(Type)
-                .GetField(nameof(DynamicBlittableSerializer<object>.BuildUpdateDelegate))!
-                .GetValue(null)!;
+            _cachedBuildUpdateMethod ??= typeof(EntityEntry)
+                .GetMethod(nameof(BuildUpdateInternal), BindingFlags.NonPublic | BindingFlags.Instance)!
+                .MakeGenericMethod(Type);
 
-            return (UpdateDefinition<BsonDocument>?)_cachedBuildUpdate.DynamicInvoke(Entity, Snapshot.Value, builder);
+            return (UpdateDefinition<BsonDocument>?)_cachedBuildUpdateMethod.Invoke(this, [builder]);
+        }
+
+        private UpdateDefinition<BsonDocument>? BuildUpdateInternal<T>(UpdateDefinitionBuilder<BsonDocument> builder)
+        {
+            var entity = (T)Entity;
+            return DynamicBlittableSerializer<T>.BuildUpdateDelegate(entity, Snapshot!.Value, builder);
         }
     }
 }
