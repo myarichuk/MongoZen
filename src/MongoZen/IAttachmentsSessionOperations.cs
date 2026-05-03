@@ -12,7 +12,7 @@ public interface IAttachmentsSessionOperations
     Task<IEnumerable<string>> GetNamesAsync(object documentId, CancellationToken cancellationToken = default);
 }
 
-public sealed class AttachmentResult(string name, GridFSDownloadStream<ObjectId> stream, string? contentType) : IDisposable
+public sealed class AttachmentResult(string name, Stream stream, string? contentType) : IDisposable
 {
     public string Name { get; } = name;
     public Stream Stream { get; } = stream;
