@@ -6,6 +6,7 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoZen.Bson;
 using SharpArena.Allocators;
+using SharpArena.Collections;
 
 namespace MongoZen.ChangeTracking;
 
@@ -13,6 +14,8 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
 {
     private ArenaAllocator _arena = arena;
     private readonly ConcurrentDictionary<object, EntityEntry> _trackedEntities = new();
+
+    public int TrackedCount => _trackedEntities.Count;
 
     public void Track<T>(T entity, BlittableBsonDocument? snapshot = null)
     // ... rest of Track method ...
@@ -54,7 +57,7 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
         };
     }
 
-    public void Evict(object entity)
+    public void Evict(object? entity)
     {
         if (entity == null)
         {
@@ -64,7 +67,7 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
         _trackedEntities.TryRemove(entity, out _);
     }
 
-    public Guid? GetExpectedETag(object entity)
+    public Guid? GetExpectedETag(object? entity)
     {
         if (entity == null)
         {
@@ -124,9 +127,9 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
         return _trackedEntities.TryGetValue(entity, out var entry) ? entry.Snapshot : null;
     }
 
-    public Dictionary<string, List<IPendingUpdate>> GetGroupedUpdates()
+    public int GetPendingUpdates(PendingOperation[] buffer, ArenaAllocator tempArena)
     {
-        var groups = new Dictionary<string, List<IPendingUpdate>>();
+        var count = 0;
         var pathBuffer = ArrayPool<char>.Shared.Rent(256);
 
         try
@@ -135,17 +138,22 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
             {
                 if (entry is { IsDeleted: true, IsNew: true })
                 {
-                    // Entity was added and deleted in the same session without being persisted.
                     continue;
                 }
 
                 var collectionName = conventions.GetCollectionName(entry.Type);
-                IPendingUpdate? update = null;
 
                 if (entry.IsDeleted)
                 {
                     var id = EntityIdAccessor.GetId(entry.Entity);
-                    update = new DeleteOperation(id!, entry.ExpectedETag ?? Guid.Empty, collectionName, entry.Entity, conventions);
+                    buffer[count++] = new PendingOperation
+                    {
+                        Type = OperationType.Delete,
+                        CollectionName = collectionName,
+                        Id = id!,
+                        ExpectedEtag = entry.ExpectedETag ?? Guid.Empty,
+                        Entity = entry.Entity
+                    };
                 }
                 else if (entry.IsNew)
                 {
@@ -158,40 +166,39 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
                     var writer = new ArenaBsonWriter(_arena);
                     entry.UpdateSnapshot(ref writer, _arena);
 
-                    update = new InsertOperation(entry.Snapshot!.Value, collectionName, entry.Entity, conventions);
+                    buffer[count++] = new PendingOperation
+                    {
+                        Type = OperationType.Insert,
+                        CollectionName = collectionName,
+                        Document = entry.Snapshot!.Value,
+                        Entity = entry.Entity
+                    };
                 }
                 else
                 {
                     var builder = new ArenaUpdateDefinitionBuilder(_arena, pathBuffer);
                     entry.BuildUpdate(ref builder, _arena, default);
-                    
+
                     if (builder.HasChanges)
                     {
                         var nextEtag = Guid.NewGuid();
-                        // If we have concurrency check, generate a new ETag and set it on the POCO
-                        // so it's included in the update.
                         if (entry.HasConcurrencyCheck)
                         {
                             entry.SetNewETag(nextEtag);
                         }
-                        
-                        // Always add the ETag update to the builder if we have changes
+
                         builder.Set("_etag", nextEtag);
 
-                        var updateDoc = builder.Build();
-                        var id = EntityIdAccessor.GetId(entry.Entity);
-                        update = new UpdateOperation(id!, entry.ExpectedETag ?? Guid.Empty, updateDoc, collectionName, entry.Entity, conventions);
+                        buffer[count++] = new PendingOperation
+                        {
+                            Type = OperationType.Update,
+                            CollectionName = collectionName,
+                            Id = EntityIdAccessor.GetId(entry.Entity)!,
+                            ExpectedEtag = entry.ExpectedETag ?? Guid.Empty,
+                            Document = builder.Build(),
+                            Entity = entry.Entity
+                        };
                     }
-                }
-
-                if (update != null)
-                {
-                    if (!groups.TryGetValue(collectionName, out var updates))
-                    {
-                        updates = new List<IPendingUpdate>();
-                        groups[collectionName] = updates;
-                    }
-                    updates.Add(update);
                 }
             }
         }
@@ -199,7 +206,7 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
         {
             ArrayPool<char>.Shared.Return(pathBuffer);
         }
-        return groups;
+        return count;
     }
 
     private class EntityEntry
@@ -291,105 +298,49 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
     }
 }
 
-public interface IPendingUpdate
+public enum OperationType : byte
 {
-    string CollectionName { get; }
-    WriteModel<BsonDocument> ToWriteModel();
-    Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct);
+    Insert,
+    Update,
+    Delete
 }
 
-public sealed class InsertOperation(BlittableBsonDocument document, string collectionName, object entity, DocumentConventions conventions) : IPendingUpdate
+public readonly struct PendingOperation
 {
-    public string CollectionName => collectionName;
+    public OperationType Type { get; init; }
+    public string CollectionName { get; init; }
+    public object Id { get; init; }
+    public Guid ExpectedEtag { get; init; }
+    public BlittableBsonDocument? Document { get; init; }
+    public object Entity { get; init; }
 
-    public WriteModel<BsonDocument> ToWriteModel()
+    public WriteModel<BsonDocument> ToWriteModel(DocumentConventions conventions)
     {
-        var raw = new RawBsonDocument(document.AsReadOnlySpan().ToArray());
-        return new InsertOneModel<BsonDocument>(new BsonDocument(raw));
-    }
-
-    public async Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct)
-    {
-        var collection = database.GetCollection<BsonDocument>(collectionName);
-        var model = ToWriteModel();
-        var insertModel = (InsertOneModel<BsonDocument>)model;
-
-        if (session != null)
+        switch (Type)
         {
-            await collection.InsertOneAsync(session, insertModel.Document, cancellationToken: ct);
-        }
-        else
-        {
-            await collection.InsertOneAsync(insertModel.Document, cancellationToken: ct);
-        }
-    }
-}
+            case OperationType.Insert:
+                var rawInsert = new RawBsonDocument(Document!.Value.AsReadOnlySpan().ToArray());
+                return new InsertOneModel<BsonDocument>(new BsonDocument(rawInsert));
 
-public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonDocument update, string collectionName, object entity, DocumentConventions conventions) : IPendingUpdate
-{
-    public string CollectionName => collectionName;
-    public object Id => id;
-    public Guid ExpectedEtag => expectedEtag;
-    public object Entity => entity;
+            case OperationType.Update:
+                var filterUpdate = Builders<BsonDocument>.Filter.Eq("_id", conventions.CreateBsonValue(Id));
+                if (ExpectedEtag != Guid.Empty)
+                {
+                    filterUpdate = Builders<BsonDocument>.Filter.And(filterUpdate, Builders<BsonDocument>.Filter.Eq("_etag", conventions.CreateBsonValue(ExpectedEtag)));
+                }
+                var rawUpdate = new RawBsonDocument(Document!.Value.AsReadOnlySpan().ToArray());
+                return new UpdateOneModel<BsonDocument>(filterUpdate, rawUpdate);
 
-    public WriteModel<BsonDocument> ToWriteModel()
-    {
-        var filter = Builders<BsonDocument>.Filter.Eq("_id", conventions.CreateBsonValue(id));
-        if (expectedEtag != Guid.Empty)
-        {
-            filter = Builders<BsonDocument>.Filter.And(filter, Builders<BsonDocument>.Filter.Eq("_etag", conventions.CreateBsonValue(expectedEtag)));
-        }
-        var updateDoc = new RawBsonDocument(update.AsReadOnlySpan().ToArray());
-        return new UpdateOneModel<BsonDocument>(filter, updateDoc);
-    }
+            case OperationType.Delete:
+                var filterDelete = Builders<BsonDocument>.Filter.Eq("_id", conventions.CreateBsonValue(Id));
+                if (ExpectedEtag != Guid.Empty)
+                {
+                    filterDelete = Builders<BsonDocument>.Filter.And(filterDelete, Builders<BsonDocument>.Filter.Eq("_etag", conventions.CreateBsonValue(ExpectedEtag)));
+                }
+                return new DeleteOneModel<BsonDocument>(filterDelete);
 
-    public async Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct)
-    {
-        var collection = database.GetCollection<BsonDocument>(collectionName);
-        var model = ToWriteModel();
-        var updateModel = (UpdateOneModel<BsonDocument>)model;
-        
-        if (session != null)
-        {
-            await collection.UpdateOneAsync(session, updateModel.Filter, updateModel.Update, cancellationToken: ct);
-        }
-        else
-        {
-            await collection.UpdateOneAsync(updateModel.Filter, updateModel.Update, cancellationToken: ct);
-        }
-    }
-}
-
-public sealed class DeleteOperation(object id, Guid expectedEtag, string collectionName, object entity, DocumentConventions conventions) : IPendingUpdate
-{
-    public string CollectionName => collectionName;
-    public object Id => id;
-    public Guid ExpectedEtag => expectedEtag;
-    public object Entity => entity;
-
-    public WriteModel<BsonDocument> ToWriteModel()
-    {
-        var filter = Builders<BsonDocument>.Filter.Eq("_id", conventions.CreateBsonValue(id));
-        if (expectedEtag != Guid.Empty)
-        {
-            filter = Builders<BsonDocument>.Filter.And(filter, Builders<BsonDocument>.Filter.Eq("_etag", conventions.CreateBsonValue(expectedEtag)));
-        }
-        return new DeleteOneModel<BsonDocument>(filter);
-    }
-
-    public async Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct)
-    {
-        var collection = database.GetCollection<BsonDocument>(collectionName);
-        var model = ToWriteModel();
-        var deleteModel = (DeleteOneModel<BsonDocument>)model;
-        
-        if (session != null)
-        {
-            await collection.DeleteOneAsync(session, deleteModel.Filter, cancellationToken: ct);
-        }
-        else
-        {
-            await collection.DeleteOneAsync(deleteModel.Filter, cancellationToken: ct);
+            default:
+                throw new InvalidOperationException("Unknown operation type.");
         }
     }
 }

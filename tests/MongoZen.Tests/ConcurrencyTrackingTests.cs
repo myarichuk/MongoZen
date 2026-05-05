@@ -34,16 +34,18 @@ public class ConcurrencyTrackingTests
         var entity = new ConcurrencyEntity { Id = 1, Name = "New" };
         
         tracker.Track(entity);
-        var groupedUpdates = tracker.GetGroupedUpdates();
         
-        var updates = groupedUpdates.Values.First();
-        var insertOp = updates.First();
-        Assert.IsType<InsertOperation>(insertOp);
+        using var tempArena = new ArenaAllocator(1024);
+        var buffer = new PendingOperation[tracker.TrackedCount];
+        var count = tracker.GetPendingUpdates(buffer, tempArena);
+        
+        var insertOp = buffer[0];
+        Assert.Equal(OperationType.Insert, insertOp.Type);
         
         // ETag should have been set on the entity
         Assert.NotEqual(Guid.Empty, entity.Version);
         
-        var writeModel = insertOp.ToWriteModel();
+        var writeModel = insertOp.ToWriteModel(new DocumentConventions());
         var insertModel = Assert.IsType<InsertOneModel<BsonDocument>>(writeModel);
         Assert.True(insertModel.Document.Contains("_etag"));
         Assert.Equal(entity.Version, insertModel.Document["_etag"].AsGuid);
@@ -69,15 +71,17 @@ public class ConcurrencyTrackingTests
         tracker.Track(entity, snapshot);
         
         entity.Name = "Updated";
-        var groupedUpdates = tracker.GetGroupedUpdates();
+        using var tempArena2 = new ArenaAllocator(1024);
+        var buffer = new PendingOperation[tracker.TrackedCount];
+        var count = tracker.GetPendingUpdates(buffer, tempArena2);
         
-        var updates = groupedUpdates.Values.First();
-        var updateOp = Assert.IsType<UpdateOperation>(updates.First());
+        var updateOp = buffer[0];
+        Assert.Equal(OperationType.Update, updateOp.Type);
         
         // ETag should have been updated on the entity
         Assert.NotEqual(initialETag, entity.Version);
         
-        var writeModel = updateOp.ToWriteModel();
+        var writeModel = updateOp.ToWriteModel(new DocumentConventions());
         var updateModel = Assert.IsType<UpdateOneModel<BsonDocument>>(writeModel);
         
         // Verify filter includes _id AND _etag
@@ -111,12 +115,14 @@ public class ConcurrencyTrackingTests
         tracker.Track(entity, snapshot);
         
         entity.Name = "Updated";
-        var groupedUpdates = tracker.GetGroupedUpdates();
+        using var tempArena2 = new ArenaAllocator(1024);
+        var buffer = new PendingOperation[tracker.TrackedCount];
+        var count = tracker.GetPendingUpdates(buffer, tempArena2);
         
-        var updates = groupedUpdates.Values.First();
-        var updateOp = Assert.IsType<UpdateOperation>(updates.First());
+        var updateOp = buffer[0];
+        Assert.Equal(OperationType.Update, updateOp.Type);
         
-        var writeModel = updateOp.ToWriteModel();
+        var writeModel = updateOp.ToWriteModel(new DocumentConventions());
         var updateModel = Assert.IsType<UpdateOneModel<BsonDocument>>(writeModel);
         
         // Verify filter includes _id AND expected _etag
@@ -168,10 +174,12 @@ public class ConcurrencyTrackingTests
         tracker.Track(entity, snapshot);
         
         // No changes to entity
-        var groupedUpdates = tracker.GetGroupedUpdates();
+        using var tempArena2 = new ArenaAllocator(1024);
+        var buffer = new PendingOperation[tracker.TrackedCount];
+        var count = tracker.GetPendingUpdates(buffer, tempArena2);
         
         // No updates should be generated
-        Assert.Empty(groupedUpdates);
+        Assert.Equal(0, count);
         
         // ETag should NOT have been updated on the entity
         Assert.Equal(initialETag, entity.Version);

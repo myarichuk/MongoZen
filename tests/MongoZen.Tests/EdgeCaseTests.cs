@@ -1,6 +1,7 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoZen.Bson;
+using MongoZen.ChangeTracking;
 using Xunit;
 
 namespace MongoZen.Tests;
@@ -39,7 +40,7 @@ public class EdgeCaseTests : IntegrationTestBase
         await session.SaveChangesAsync();
 
         // Verify in DB
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(UserWithNullables));
+        var collectionName = store.Conventions.GetCollectionName(typeof(UserWithNullables));
         var collection = Database.GetCollection<BsonDocument>(collectionName);
         var doc = await collection.Find(new BsonDocument("_id", user.Id)).FirstOrDefaultAsync();
 
@@ -73,7 +74,7 @@ public class EdgeCaseTests : IntegrationTestBase
         await session.SaveChangesAsync();
 
         // Verify in DB
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(UserWithNullables));
+        var collectionName = store.Conventions.GetCollectionName(typeof(UserWithNullables));
         var collection = Database.GetCollection<BsonDocument>(collectionName);
         var doc = await collection.Find(new BsonDocument("_id", user.Id)).FirstOrDefaultAsync();
 
@@ -108,7 +109,7 @@ public class EdgeCaseTests : IntegrationTestBase
         await session.SaveChangesAsync();
 
         // Verify in DB
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(UserWithNullables));
+        var collectionName = store.Conventions.GetCollectionName(typeof(UserWithNullables));
         var collection = Database.GetCollection<BsonDocument>(collectionName);
         var doc = await collection.Find(new BsonDocument("_id", user.Id)).FirstOrDefaultAsync();
 
@@ -138,7 +139,7 @@ public class EdgeCaseTests : IntegrationTestBase
         await session.SaveChangesAsync();
 
         // Verify in DB
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(UserWithNullables));
+        var collectionName = store.Conventions.GetCollectionName(typeof(UserWithNullables));
         var collection = Database.GetCollection<BsonDocument>(collectionName);
         var doc = await collection.Find(new BsonDocument("_id", user.Id)).FirstOrDefaultAsync();
 
@@ -166,7 +167,7 @@ public class EdgeCaseTests : IntegrationTestBase
         await session.SaveChangesAsync();
 
         // Verify in DB
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(UserWithNullables));
+        var collectionName = store.Conventions.GetCollectionName(typeof(UserWithNullables));
         var collection = Database.GetCollection<BsonDocument>(collectionName);
         var doc = await collection.Find(new BsonDocument("_id", user.Id)).FirstOrDefaultAsync();
 
@@ -191,7 +192,7 @@ public class EdgeCaseTests : IntegrationTestBase
         await session.SaveChangesAsync();
 
         // Verify in DB
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(UserWithNullables));
+        var collectionName = store.Conventions.GetCollectionName(typeof(UserWithNullables));
         var collection = Database.GetCollection<BsonDocument>(collectionName);
         var doc = await collection.Find(new BsonDocument("_id", user.Id)).FirstOrDefaultAsync();
 
@@ -216,14 +217,16 @@ public class EdgeCaseTests : IntegrationTestBase
     public void ChangeTracker_Skips_Delete_For_Unsaved_New_Entities()
     {
         var arena = new SharpArena.Allocators.ArenaAllocator(1024);
-        var tracker = new MongoZen.ChangeTracking.ChangeTracker(arena);
+        var tracker = new MongoZen.ChangeTracking.ChangeTracker(new DocumentConventions(), arena);
 
         var user = new UserWithNullables { Id = ObjectId.GenerateNewId() };
         
         tracker.Track(user); // Track as new
         tracker.TrackDelete(user); // Then delete
 
-        var updates = tracker.GetGroupedUpdates();
-        Assert.Empty(updates); // Should be empty because it was never persisted
+        using var tempArena = new SharpArena.Allocators.ArenaAllocator(1024);
+        var buffer = new PendingOperation[tracker.TrackedCount];
+        var count = tracker.GetPendingUpdates(buffer, tempArena);
+        Assert.Equal(0, count); // Should be empty because it was never persisted
     }
 }
