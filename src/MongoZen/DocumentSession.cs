@@ -37,69 +37,70 @@ public sealed class DocumentSession : IDisposable
 
     public IAttachmentsSessionOperations Attachments => _attachments ??= new AttachmentsSessionOperations(this);
 
-    internal async Task EnsureTransactionStartedAsync(CancellationToken cancellationToken = default)
+    internal async Task EnsureTransactionStartedAsync(CancellationToken token = default)
     {
-        if (_clientSession != null) return;
+        if (_clientSession != null)
+        {
+            return;
+        }
 
-        if (_store.Features.SupportsTransactions == false) return;
+        if (_store.Features.SupportsTransactions == false)
+        {
+            return;
+        }
 
         if (_store.Features.SupportsTransactions == null)
         {
-            // First time check
             var admin = _database.Client.GetDatabase("admin");
-            var hello = await admin.RunCommandAsync<BsonDocument>(new BsonDocument("hello", 1), cancellationToken: cancellationToken);
+            var hello = await admin.RunCommandAsync<BsonDocument>(new BsonDocument("hello", 1), cancellationToken: token);
             
             bool isReplicaSet = hello.Contains("setName") || (hello.Contains("isWritablePrimary") && hello["isWritablePrimary"].AsBoolean);
-            _store.Features.SupportsTransactions = isReplicaSet;
+            bool isSharded = hello.Contains("msg") && hello["msg"].AsString == "isdbgrid";
+            _store.Features.SupportsTransactions = isReplicaSet || isSharded;
 
-            if (!isReplicaSet) return;
+            if (!_store.Features.SupportsTransactions.Value)
+            {
+                return;
+            }
         }
 
-        _clientSession = await _database.Client.StartSessionAsync(cancellationToken: cancellationToken);
+        _clientSession = await _database.Client.StartSessionAsync(cancellationToken: token);
         _clientSession.StartTransaction();
     }
 
     /// <summary>
     /// Loads a document from the database and tracks it in the session.
     /// </summary>
-    public Task<T?> LoadAsync<T>(ObjectId id, CancellationToken cancellationToken = default)
-    {
-        return LoadInternalAsync<T, ObjectId>(DocId.FromObjectId(id), id, cancellationToken);
-    }
+    public Task<T?> LoadAsync<T>(ObjectId id, CancellationToken cancellationToken = default) => 
+        LoadInternalAsync<T, ObjectId>(DocId.FromObjectId(id), id, cancellationToken);
 
     /// <summary>
     /// Loads a document from the database and tracks it in the session.
     /// </summary>
-    public Task<T?> LoadAsync<T>(Guid id, CancellationToken cancellationToken = default)
-    {
-        return LoadInternalAsync<T, Guid>(DocId.FromGuid(id), id, cancellationToken);
-    }
+    public Task<T?> LoadAsync<T>(Guid id, CancellationToken cancellationToken = default) => 
+        LoadInternalAsync<T, Guid>(DocId.FromGuid(id), id, cancellationToken);
 
     /// <summary>
     /// Loads a document from the database and tracks it in the session.
     /// </summary>
-    public Task<T?> LoadAsync<T>(string id, CancellationToken cancellationToken = default)
-    {
-        return LoadInternalAsync<T, string>(DocId.FromString(id), id, cancellationToken);
-    }
+    public Task<T?> LoadAsync<T>(string id, CancellationToken cancellationToken = default) => 
+        LoadInternalAsync<T, string>(DocId.FromString(id), id, cancellationToken);
 
     /// <summary>
     /// Loads a document from the database and tracks it in the session.
     /// </summary>
-    public Task<T?> LoadAsync<T>(object id, CancellationToken cancellationToken = default)
-    {
-        return LoadInternalAsync<T, object>(DocId.From(id), id, cancellationToken);
-    }
+    public Task<T?> LoadAsync<T>(object id, CancellationToken cancellationToken = default) => 
+        LoadInternalAsync<T, object>(DocId.From(id), id, cancellationToken);
 
     private async Task<T?> LoadInternalAsync<T, TId>(DocId docId, TId rawId, CancellationToken cancellationToken)
     {
-        await EnsureTransactionStartedAsync(cancellationToken);
-        
         if (_identityMap.TryGetValue((typeof(T), docId), out var existing))
         {
             return (T)existing;
         }
 
+        await EnsureTransactionStartedAsync(cancellationToken);
+        
         var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(T));
         var collection = _store.GetRawCollection(collectionName);
         
@@ -119,10 +120,13 @@ public sealed class DocumentSession : IDisposable
             
             var entity = DynamicBlittableSerializer<T>.DeserializeDelegate(doc, _arena);
             
-            _identityMap.TryAdd((typeof(T), docId), entity!);
-            _changeTracker.Track(entity!, doc);
+            if (_identityMap.TryAdd((typeof(T), docId), entity!))
+            {
+                _changeTracker.Track(entity!, doc);
+                return entity;
+            }
             
-            return entity;
+            return (T)_identityMap[(typeof(T), docId)];
         }
         
         return default;
@@ -133,8 +137,11 @@ public sealed class DocumentSession : IDisposable
     /// </summary>
     public void Store<T>(T entity)
     {
-        if (entity == null) throw new ArgumentNullException(nameof(entity));
-        
+        if (entity == null)
+        {
+            throw new ArgumentNullException(nameof(entity));
+        }
+
         var id = EntityIdAccessor.GetId(entity);
         if (id != null)
         {
@@ -150,8 +157,11 @@ public sealed class DocumentSession : IDisposable
     /// </summary>
     public void Delete<T>(T entity)
     {
-        if (entity == null) throw new ArgumentNullException(nameof(entity));
-        
+        if (entity == null)
+        {
+            throw new ArgumentNullException(nameof(entity));
+        }
+
         var id = EntityIdAccessor.GetId(entity);
         if (id != null)
         {
@@ -163,16 +173,24 @@ public sealed class DocumentSession : IDisposable
     }
 
     /// <summary>
+    /// Gets the BSON snapshot of a tracked entity.
+    /// </summary>
+    public BlittableBsonDocument? GetSnapshot(object entity) => _changeTracker.GetSnapshot(entity);
+
+    /// <summary>
     /// Saves all changes tracked in this session to the database using BulkWrite for efficiency.
     /// </summary>
     public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        await EnsureTransactionStartedAsync(cancellationToken);
-
         var groupedUpdates = _changeTracker.GetGroupedUpdates();
         bool hasChanges = groupedUpdates.Values.Any(v => v.Count > 0);
 
-        if (!hasChanges) return;
+        if (!hasChanges)
+        {
+            return;
+        }
+
+        await EnsureTransactionStartedAsync(cancellationToken);
 
         try
         {
@@ -183,13 +201,20 @@ public sealed class DocumentSession : IDisposable
                 var collection = _database.GetCollection<BsonDocument>(collectionName);
 
                 var models = updates.Select(u => u.ToWriteModel()).ToList();
-                if (models.Count == 0) continue;
+                if (models.Count == 0)
+                {
+                    continue;
+                }
 
                 if (_clientSession != null)
+                {
                     await collection.BulkWriteAsync(_clientSession, models, cancellationToken: cancellationToken);
+                }
                 else
+                {
                     await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
-                
+                }
+
                 // Cascading delete for attachments
                 foreach (var update in updates)
                 {
@@ -233,7 +258,11 @@ public sealed class DocumentSession : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
+
         _clientSession?.Dispose();
         _arena.Dispose();
         _disposed = true;

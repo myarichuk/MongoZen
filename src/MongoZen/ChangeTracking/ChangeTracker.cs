@@ -62,13 +62,23 @@ public sealed class ChangeTracker(ArenaAllocator arena)
         _arena = newArena;
     }
 
+    public BlittableBsonDocument? GetSnapshot(object entity)
+    {
+        return _trackedEntities.TryGetValue(entity, out var entry) ? entry.Snapshot : null;
+    }
+
     public Dictionary<string, List<IPendingUpdate>> GetGroupedUpdates()
     {
         var groups = new Dictionary<string, List<IPendingUpdate>>();
-        var builder = Builders<BsonDocument>.Update;
 
         foreach (var entry in _trackedEntities.Values)
         {
+            if (entry.IsDeleted && entry.IsNew)
+            {
+                // Entity was added and deleted in the same session without being persisted.
+                continue;
+            }
+
             var collectionName = DocumentTypeTracker.GetDefaultCollectionName(entry.Type);
             if (!groups.TryGetValue(collectionName, out var updates))
             {
@@ -90,11 +100,14 @@ public sealed class ChangeTracker(ArenaAllocator arena)
                 continue;
             }
 
-            var update = entry.BuildUpdate(builder, _arena);
-            if (update != null)
+            var builder = new ArenaUpdateDefinitionBuilder(_arena);
+            entry.BuildUpdate(ref builder, _arena, default);
+            
+            if (builder.HasChanges)
             {
+                var updateDoc = builder.Build();
                 var id = EntityIdAccessor.GetId(entry.Entity);
-                updates.Add(new UpdateOperation<BsonDocument>(id!, update, collectionName));
+                updates.Add(new UpdateOperation(id!, updateDoc, collectionName));
             }
         }
         return groups;
@@ -115,10 +128,10 @@ public sealed class ChangeTracker(ArenaAllocator arena)
             GetDispatcher().UpdateSnapshot(this, ref writer, arena);
         }
 
-        public UpdateDefinition<BsonDocument>? BuildUpdate(UpdateDefinitionBuilder<BsonDocument> builder, ArenaAllocator arena)
+        public void BuildUpdate(ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
         {
-            if (Snapshot == null) return null;
-            return GetDispatcher().BuildUpdate(this, builder, arena);
+            if (Snapshot == null) return;
+            GetDispatcher().BuildUpdate(this, ref builder, arena, pathPrefix);
         }
 
         private IEntityDispatcher GetDispatcher()
@@ -129,7 +142,7 @@ public sealed class ChangeTracker(ArenaAllocator arena)
         private interface IEntityDispatcher
         {
             void UpdateSnapshot(EntityEntry entry, ref ArenaBsonWriter writer, ArenaAllocator arena);
-            UpdateDefinition<BsonDocument>? BuildUpdate(EntityEntry entry, UpdateDefinitionBuilder<BsonDocument> builder, ArenaAllocator arena);
+            void BuildUpdate(EntityEntry entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix);
         }
 
         private class EntityDispatcher<T> : IEntityDispatcher
@@ -141,10 +154,10 @@ public sealed class ChangeTracker(ArenaAllocator arena)
                 entry.Snapshot = writer.Commit(arena);
             }
 
-            public UpdateDefinition<BsonDocument>? BuildUpdate(EntityEntry entry, UpdateDefinitionBuilder<BsonDocument> builder, ArenaAllocator arena)
+            public void BuildUpdate(EntityEntry entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
             {
                 var entity = (T)entry.Entity;
-                return DynamicBlittableSerializer<T>.BuildUpdateDelegate(entity, entry.Snapshot!.Value, builder, arena);
+                DynamicBlittableSerializer<T>.BuildUpdateDelegate(entity, entry.Snapshot!.Value, ref builder, arena, pathPrefix);
             }
         }
 
@@ -170,7 +183,17 @@ public sealed class InsertOperation<T>(T entity, string collectionName) : IPendi
 
     public WriteModel<BsonDocument> ToWriteModel()
     {
-        return new InsertOneModel<BsonDocument>(entity.ToBsonDocument());
+        // Use a temporary arena for the initial BSON capture
+        // In a real high-perf scenario, we might want to pass an arena here
+        using var arena = new ArenaAllocator(1024);
+        var writer = new ArenaBsonWriter(arena);
+        DynamicBlittableSerializer<T>.SerializeDelegate(ref writer, entity);
+        var doc = writer.Commit(arena);
+        
+        // We must copy the bytes because RawBsonDocument needs them
+        // but since this is for the driver's BulkWrite, it's unavoidable unless we use a custom WriteModel
+        var bytes = doc.AsReadOnlySpan().ToArray();
+        return new InsertOneModel<BsonDocument>(new RawBsonDocument(bytes));
     }
 
     public async Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct)
@@ -183,24 +206,27 @@ public sealed class InsertOperation<T>(T entity, string collectionName) : IPendi
     }
 }
 
-public sealed class UpdateOperation<T>(object id, UpdateDefinition<BsonDocument> update, string collectionName) : IPendingUpdate
+public sealed class UpdateOperation(object id, BlittableBsonDocument update, string collectionName) : IPendingUpdate
 {
     public string CollectionName => collectionName;
 
     public WriteModel<BsonDocument> ToWriteModel()
     {
-        return new UpdateOneModel<BsonDocument>(Builders<BsonDocument>.Filter.Eq("_id", id), update);
+        // We use RawBsonDocument to wrap our arena bytes for the driver
+        var updateDoc = new RawBsonDocument(update.AsReadOnlySpan().ToArray());
+        return new UpdateOneModel<BsonDocument>(Builders<BsonDocument>.Filter.Eq("_id", id), updateDoc);
     }
 
     public async Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct)
     {
         var collection = database.GetCollection<BsonDocument>(collectionName);
         var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+        var updateDoc = new RawBsonDocument(update.AsReadOnlySpan().ToArray());
         
         if (session != null)
-            await collection.UpdateOneAsync(session, filter, update, cancellationToken: ct);
+            await collection.UpdateOneAsync(session, filter, updateDoc, cancellationToken: ct);
         else
-            await collection.UpdateOneAsync(filter, update, cancellationToken: ct);
+            await collection.UpdateOneAsync(filter, updateDoc, cancellationToken: ct);
     }
 }
 

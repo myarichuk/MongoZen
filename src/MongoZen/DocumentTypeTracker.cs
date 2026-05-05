@@ -25,6 +25,8 @@ public static class DocumentTypeTracker
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, string> _collectionNameCache = new();
 
+    public static void ClearCache() => _collectionNameCache.Clear();
+
     /// <summary>
     /// Returns the default collection name for a document type.
     /// </summary>

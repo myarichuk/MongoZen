@@ -1,3 +1,4 @@
+using System.Buffers;
 using MongoDB.Driver;
 using MongoDB.Bson;
 using MongoZen.Bson;
@@ -16,48 +17,63 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
         await _session.EnsureTransactionStartedAsync(cancellationToken);
         var filesId = ObjectId.GenerateNewId();
 
-        // 1. Write chunks
-        byte[] buffer = new byte[ChunkSize];
-        int bytesRead;
-        int chunkIndex = 0;
-        long totalLength = 0;
-
-        while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
+        // 1. Write chunks using pooled buffer
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(ChunkSize);
+        try
         {
-            var chunkData = new byte[bytesRead];
-            Buffer.BlockCopy(buffer, 0, chunkData, 0, bytesRead);
+            int bytesRead;
+            int chunkIndex = 0;
+            long totalLength = 0;
+            var chunks = new List<BsonDocument>();
 
-            var chunkDoc = new BsonDocument
+            while ((bytesRead = await stream.ReadAsync(buffer, 0, ChunkSize, cancellationToken)) > 0)
             {
-                { "_id", ObjectId.GenerateNewId() },
-                { "files_id", filesId },
-                { "n", chunkIndex },
-                { "data", new BsonBinaryData(chunkData) }
+                // We still need a copy for the BsonBinaryData if we want to be safe, 
+                // but we can at least reuse the read buffer.
+                var chunkData = new byte[bytesRead];
+                Buffer.BlockCopy(buffer, 0, chunkData, 0, bytesRead);
+
+                var chunkDoc = new BsonDocument
+                {
+                    { "_id", ObjectId.GenerateNewId() },
+                    { "files_id", filesId },
+                    { "n", chunkIndex },
+                    { "data", new BsonBinaryData(chunkData) }
+                };
+
+                chunks.Add(chunkDoc);
+
+                chunkIndex++;
+                totalLength += bytesRead;
+            }
+
+            if (chunks.Count > 0)
+            {
+                await ChunksCollection.InsertManyAsync(_session.ClientSession, chunks, null, cancellationToken);
+            }
+
+            // 2. Write files metadata
+            var fileDoc = new BsonDocument
+            {
+                { "_id", filesId },
+                { "length", totalLength },
+                { "chunkSize", ChunkSize },
+                { "uploadDate", DateTime.UtcNow },
+                { "filename", name },
+                { "metadata", new BsonDocument
+                    {
+                        { "documentId", BsonValue.Create(documentId) },
+                        { "contentType", contentType ?? "application/octet-stream" }
+                    }
+                }
             };
 
-            await ChunksCollection.InsertOneAsync(_session.ClientSession, chunkDoc, null, cancellationToken);
-
-            chunkIndex++;
-            totalLength += bytesRead;
+            await FilesCollection.InsertOneAsync(_session.ClientSession, fileDoc, null, cancellationToken);
         }
-
-        // 2. Write files metadata
-        var fileDoc = new BsonDocument
+        finally
         {
-            { "_id", filesId },
-            { "length", totalLength },
-            { "chunkSize", ChunkSize },
-            { "uploadDate", DateTime.UtcNow },
-            { "filename", name },
-            { "metadata", new BsonDocument
-                {
-                    { "documentId", BsonValue.Create(documentId) },
-                    { "contentType", contentType ?? "application/octet-stream" }
-                }
-            }
-        };
-
-        await FilesCollection.InsertOneAsync(_session.ClientSession, fileDoc, null, cancellationToken);
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     public async Task<AttachmentResult> GetAsync(object documentId, string name, CancellationToken cancellationToken = default)
@@ -107,14 +123,15 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
         await _session.EnsureTransactionStartedAsync(cancellationToken);
 
         var filter = Builders<BsonDocument>.Filter.Eq("metadata.documentId", BsonValue.Create(documentId));
-        var cursor = await FilesCollection.Find(_session.ClientSession, filter).ToListAsync(cancellationToken);
+        var files = await FilesCollection.Find(_session.ClientSession, filter).ToListAsync(cancellationToken);
         
-        foreach (var fileDoc in cursor)
-        {
-            var filesId = fileDoc["_id"];
-            await FilesCollection.DeleteOneAsync(_session.ClientSession, Builders<BsonDocument>.Filter.Eq("_id", filesId), null, cancellationToken);
-            await ChunksCollection.DeleteManyAsync(_session.ClientSession, Builders<BsonDocument>.Filter.Eq("files_id", filesId), null, cancellationToken);
-        }
+        if (files.Count == 0) return;
+
+        var fileIds = files.Select(f => f["_id"]).ToList();
+        
+        // Batch delete both files and chunks
+        await FilesCollection.DeleteManyAsync(_session.ClientSession, Builders<BsonDocument>.Filter.In("_id", fileIds), null, cancellationToken);
+        await ChunksCollection.DeleteManyAsync(_session.ClientSession, Builders<BsonDocument>.Filter.In("files_id", fileIds), null, cancellationToken);
     }
 
     public async Task<IEnumerable<string>> GetNamesAsync(object documentId, CancellationToken cancellationToken = default)

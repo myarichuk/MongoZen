@@ -12,8 +12,11 @@ public static class EntityIdAccessor
 
     public static object? GetId(object entity)
     {
-        if (entity == null) throw new ArgumentNullException(nameof(entity));
-        
+        if (entity == null)
+        {
+            throw new ArgumentNullException(nameof(entity));
+        }
+
         var type = entity.GetType();
         var getter = _getterCache.GetOrAdd(type, t =>
         {
@@ -26,8 +29,11 @@ public static class EntityIdAccessor
 
     public static DocId GetDocId(object entity)
     {
-        if (entity == null) throw new ArgumentNullException(nameof(entity));
-        
+        if (entity == null)
+        {
+            throw new ArgumentNullException(nameof(entity));
+        }
+
         var type = entity.GetType();
         var getter = _getterCache.GetOrAdd(type, t =>
         {

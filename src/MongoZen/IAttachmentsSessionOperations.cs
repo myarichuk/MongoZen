@@ -12,12 +12,21 @@ public interface IAttachmentsSessionOperations
     Task<IEnumerable<string>> GetNamesAsync(object documentId, CancellationToken cancellationToken = default);
 }
 
-public sealed class AttachmentResult(string name, Stream stream, string? contentType) : IDisposable
+public sealed class AttachmentResult : IDisposable, IAsyncDisposable
 {
-    public string Name { get; } = name;
-    public Stream Stream { get; } = stream;
-    public string? ContentType { get; } = contentType;
-    public long Length => stream.Length;
+    public string Name { get; }
+    public Stream Stream { get; }
+    public string? ContentType { get; }
+    public long Length => Stream.Length;
+
+    public AttachmentResult(string name, Stream stream, string? contentType)
+    {
+        Name = name;
+        Stream = stream;
+        ContentType = contentType;
+    }
 
     public void Dispose() => Stream.Dispose();
+
+    public ValueTask DisposeAsync() => Stream.DisposeAsync();
 }
