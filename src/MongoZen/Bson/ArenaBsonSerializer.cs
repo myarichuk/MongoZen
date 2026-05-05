@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using MongoDB.Bson.Serialization;
 using SharpArena.Allocators;
 
@@ -15,24 +16,36 @@ public unsafe class ArenaBsonSerializer(ArenaAllocator arena) : IBsonSerializer<
         var len = rawBytes.Length;
         var pBuffer = (byte*)arena.Alloc((nuint)len);
         
-        // Copy directly from the driver's buffer to our arena
-        // If the driver's buffer is contiguous, we can get a segment
         var segment = rawBytes.AccessBackingBytes(0);
-        if (segment.Array != null)
+        if (segment.Array != null && segment.Count == len)
         {
             fixed (byte* pSource = segment.Array)
             {
-                System.Runtime.CompilerServices.Unsafe.CopyBlock(pBuffer, pSource + segment.Offset, (uint)len);
+                Unsafe.CopyBlock(pBuffer, pSource + segment.Offset, (uint)len);
             }
         }
         else
         {
-            // Fallback for non-contiguous or custom buffers
-            // Since we want zero-allocation, we rent a small buffer for the copy if needed,
-            // but for raw documents they are usually contiguous.
-            for (int i = 0; i < len; i++)
+            // iterate chunks
+            int copied = 0;
+            while (copied < len)
             {
-                pBuffer[i] = rawBytes.GetByte(i);
+                var chunk = rawBytes.AccessBackingBytes(copied);
+                if (chunk.Array != null)
+                {
+                    fixed (byte* pSource = chunk.Array)
+                    {
+                        Unsafe.CopyBlock(pBuffer + copied, pSource + chunk.Offset, (uint)chunk.Count);
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < chunk.Count; i++)
+                    {
+                        pBuffer[copied + i] = rawBytes.GetByte(copied + i);
+                    }
+                }
+                copied += chunk.Count;
             }
         }
 
@@ -42,7 +55,7 @@ public unsafe class ArenaBsonSerializer(ArenaAllocator arena) : IBsonSerializer<
     public void Serialize(BsonSerializationContext context, BsonSerializationArgs args, BlittableBsonDocument value)
     {
         var writer = context.Writer;
-        using var buffer = ArenaByteBuffer.Rent(value.Pointer, value.Length);
+        using var buffer = PooledByteBuffer.Rent(value.Pointer, value.Length);
         writer.WriteRawBsonDocument(buffer);
     }
 

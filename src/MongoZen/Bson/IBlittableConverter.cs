@@ -30,7 +30,8 @@ public static class BlittableConverter<T>
         {
             // For complex types, use the dynamic serializer if it's not a known MongoDB type
             // AND it doesn't have MongoDB attributes (which require the official driver's logic)
-            if (type.Namespace != null && !type.Namespace.StartsWith("MongoDB.Bson") && !HasBsonAttributes(type))
+            bool isMongoType = type.Namespace?.StartsWith("MongoDB.Bson") ?? false;
+            if (!isMongoType && !HasBsonAttributes(type))
             {
                 return new DynamicBlittableConverter<T>();
             }
@@ -42,12 +43,16 @@ public static class BlittableConverter<T>
     private static bool HasBsonAttributes(Type type)
     {
         if (System.Reflection.CustomAttributeExtensions.GetCustomAttributes(type, true).Any(a => a.GetType().Namespace?.StartsWith("MongoDB.Bson.Serialization.Attributes") ?? false))
+        {
             return true;
+        }
 
         foreach (var prop in type.GetProperties())
         {
             if (System.Reflection.CustomAttributeExtensions.GetCustomAttributes(prop, true).Any(a => a.GetType().Namespace?.StartsWith("MongoDB.Bson.Serialization.Attributes") ?? false))
+            {
                 return true;
+            }
         }
 
         return false;
@@ -76,7 +81,7 @@ internal sealed unsafe class BsonSerializerBridge<T> : IBlittableConverter<T>
     public T Read(byte* p, BlittableBsonConstants.BsonType type, int length)
     {
         // Wrap arena pointer in a rented buffer
-        using var buffer = ArenaByteBuffer.Rent(p, length);
+        using var buffer = PooledByteBuffer.Rent(p, length);
         
         // Bridge point: raw arena bytes -> IByteBuffer -> ByteBufferStream -> BsonBinaryReader -> Serializer
         using var stream = new ByteBufferStream(buffer);

@@ -11,19 +11,19 @@ namespace MongoZen.Bson;
 /// <remarks>
 /// this may cause managed "memory leak" if we allocate (rent) them faster than GC can reclaim
 /// </remarks>
-internal sealed unsafe class ArenaByteBuffer : IByteBuffer
+internal sealed unsafe class PooledByteBuffer : IByteBuffer
 {
-    private static readonly ConcurrentStack<ArenaByteBuffer> Pool = new();
+    private static readonly ConcurrentStack<PooledByteBuffer> Pool = new();
 
     private byte[]? _rentedArray;
     private int _length;
     private bool _isReadOnly;
 
-    public static ArenaByteBuffer Rent(byte* ptr, int length)
+    public static PooledByteBuffer Rent(byte* ptr, int length)
     {
         if (!Pool.TryPop(out var buffer))
         {
-            buffer = new ArenaByteBuffer();
+            buffer = new PooledByteBuffer();
         }
         
         buffer._rentedArray = ArrayPool<byte>.Shared.Rent(length);
@@ -39,10 +39,7 @@ internal sealed unsafe class ArenaByteBuffer : IByteBuffer
         return buffer;
     }
 
-    ~ArenaByteBuffer()
-    {
-        DisposeInternal();
-    }
+    ~PooledByteBuffer() => DisposeInternal();
 
     public int Capacity => _rentedArray?.Length ?? 0;
     public bool IsReadOnly => _isReadOnly;

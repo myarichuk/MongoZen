@@ -5,7 +5,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using SharpArena.Allocators;
 using MongoDB.Bson;
-using MongoDB.Driver;
+using MongoZen.ChangeTracking;
 
 namespace MongoZen.Bson;
 
@@ -15,7 +15,7 @@ namespace MongoZen.Bson;
 public static class DynamicBlittableSerializer<T>
 {
     public delegate void SerializeAction(ref ArenaBsonWriter writer, T value);
-    public delegate UpdateDefinition<BsonDocument>? BuildUpdateAction(T entity, BlittableBsonDocument snapshot, UpdateDefinitionBuilder<BsonDocument> builder, ArenaAllocator arena);
+    public delegate void BuildUpdateAction(T entity, BlittableBsonDocument snapshot, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix);
     
     public static readonly SerializeAction SerializeDelegate;
     public static readonly Func<BlittableBsonDocument, ArenaAllocator, T> DeserializeDelegate;
@@ -57,10 +57,11 @@ public static class DynamicBlittableSerializer<T>
     {
         var entityParam = Expression.Parameter(typeof(T), "entity");
         var snapshotParam = Expression.Parameter(typeof(BlittableBsonDocument), "snapshot");
-        var builderParam = Expression.Parameter(typeof(UpdateDefinitionBuilder<BsonDocument>), "builder");
+        var builderParam = Expression.Parameter(typeof(ArenaUpdateDefinitionBuilder).MakeByRefType(), "builder");
         var arenaParam = Expression.Parameter(typeof(ArenaAllocator), "arena");
-        var method = typeof(T).GetMethod("BuildUpdate", [typeof(T), typeof(BlittableBsonDocument), typeof(UpdateDefinitionBuilder<BsonDocument>), typeof(ArenaAllocator)])!;
-        return Expression.Lambda<BuildUpdateAction>(Expression.Call(null, method, entityParam, snapshotParam, builderParam, arenaParam), entityParam, snapshotParam, builderParam, arenaParam).Compile();
+        var prefixParam = Expression.Parameter(typeof(ReadOnlySpan<char>), "pathPrefix");
+        var method = typeof(T).GetMethod("BuildUpdate", [typeof(T), typeof(BlittableBsonDocument), typeof(ArenaUpdateDefinitionBuilder).MakeByRefType(), typeof(ArenaAllocator), typeof(ReadOnlySpan<char>)])!;
+        return Expression.Lambda<BuildUpdateAction>(Expression.Call(null, method, entityParam, snapshotParam, builderParam, arenaParam, prefixParam), entityParam, snapshotParam, builderParam, arenaParam, prefixParam).Compile();
     }
 
     private static class Emitter
@@ -99,6 +100,17 @@ public static class DynamicBlittableSerializer<T>
                 var underlyingType = Enum.GetUnderlyingType(type);
                 var convertedValue = Expression.Convert(value, underlyingType);
                 return EmitPropertyWrite(writer, nameSpan, convertedValue, underlyingType);
+            }
+
+            if (IsNullable(type, out var underlyingTypeNullable))
+            {
+                var hasValueProp = type.GetProperty("HasValue")!;
+                var valueProp = type.GetProperty("Value")!;
+                return Expression.IfThenElse(
+                    Expression.Property(value, hasValueProp),
+                    EmitPropertyWrite(writer, nameSpan, Expression.Property(value, valueProp), underlyingTypeNullable),
+                    Expression.Call(writer, GetWriterMethod(nameof(ArenaBsonWriter.WriteNull), typeof(ReadOnlySpan<char>)), nameSpan)
+                );
             }
 
             var writeMethod = type switch
@@ -206,13 +218,28 @@ public static class DynamicBlittableSerializer<T>
             if (type.IsEnum)
             {
                 var underlyingType = Enum.GetUnderlyingType(type);
-                var underlyingRead = type switch
+                var underlyingRead = underlyingType switch
                 {
                     _ when underlyingType == typeof(int) => Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)), offsetVar),
                     _ when underlyingType == typeof(long) => Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)), offsetVar),
                     _ => throw new NotSupportedException($"Enum with underlying type {underlyingType} is not supported")
                 };
                 readExpr = Expression.Convert(underlyingRead, type);
+            }
+            else if (IsNullable(type, out var underlyingTypeNullable))
+            {
+                readExpr = underlyingTypeNullable switch
+                {
+                    _ when underlyingTypeNullable == typeof(int) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)), offsetVar), type),
+                    _ when underlyingTypeNullable == typeof(long) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)), offsetVar), type),
+                    _ when underlyingTypeNullable == typeof(double) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetDouble), typeof(int)), offsetVar), type),
+                    _ when underlyingTypeNullable == typeof(bool) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetBoolean), typeof(int)), offsetVar), type),
+                    _ when underlyingTypeNullable == typeof(ObjectId) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetObjectId), typeof(int)), offsetVar), type),
+                    _ when underlyingTypeNullable == typeof(DateTime) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetDateTime), typeof(int)), offsetVar), type),
+                    _ when underlyingTypeNullable == typeof(Guid) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetGuid), typeof(int)), offsetVar), type),
+                    _ when underlyingTypeNullable == typeof(decimal) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetDecimal128), typeof(int)), offsetVar), type),
+                    _ => null
+                };
             }
             else
             {
@@ -236,9 +263,20 @@ public static class DynamicBlittableSerializer<T>
 
             if (readExpr == null) return Expression.Empty();
 
+            var isNullExpr = Expression.Equal(
+                Expression.Call(null, typeof(ArenaBsonReader).GetMethod(nameof(ArenaBsonReader.GetElementType))!, doc, offsetVar),
+                Expression.Constant(BlittableBsonConstants.BsonType.Null)
+            );
+
+            Expression finalReadExpr = readExpr;
+            if (IsNullable(type, out _) || !type.IsValueType)
+            {
+                finalReadExpr = Expression.Condition(isNullExpr, Expression.Constant(null, type), readExpr);
+            }
+
             var ifFound = Expression.IfThen(
                 Expression.Call(doc, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, nameSpan, offsetVar),
-                Expression.Assign(Expression.Property(obj, prop), readExpr)
+                Expression.Assign(Expression.Property(obj, prop), finalReadExpr)
             );
 
             return Expression.Block([offsetVar], ifFound);
@@ -286,29 +324,37 @@ public static class DynamicBlittableSerializer<T>
             var type = typeof(T);
             var entityParam = Expression.Parameter(type, "entity");
             var snapshotParam = Expression.Parameter(typeof(BlittableBsonDocument), "snapshot");
-            var builderParam = Expression.Parameter(typeof(UpdateDefinitionBuilder<BsonDocument>), "builder");
+            var builderParam = Expression.Parameter(typeof(ArenaUpdateDefinitionBuilder).MakeByRefType(), "builder");
             var arenaParam = Expression.Parameter(typeof(ArenaAllocator), "arena");
+            var prefixParam = Expression.Parameter(typeof(ReadOnlySpan<char>), "pathPrefix");
 
-            var combinedVar = Expression.Variable(typeof(UpdateDefinition<BsonDocument>), "combined");
-            var body = new List<Expression> { Expression.Assign(combinedVar, Expression.Constant(null, typeof(UpdateDefinition<BsonDocument>))) };
+            var body = new List<Expression>();
 
             foreach (var prop in GetValidProperties(type))
             {
-                body.Add(EmitPropertyDiff(entityParam, snapshotParam, builderParam, arenaParam, combinedVar, prop, ""));
+                body.Add(EmitPropertyDiff(entityParam, snapshotParam, builderParam, arenaParam, prop, prefixParam));
             }
 
-            body.Add(combinedVar);
-            return Expression.Lambda<BuildUpdateAction>(Expression.Block([combinedVar], body), entityParam, snapshotParam, builderParam, arenaParam).Compile();
+            return Expression.Lambda<BuildUpdateAction>(Expression.Block(body), entityParam, snapshotParam, builderParam, arenaParam, prefixParam).Compile();
         }
 
-        private static Expression EmitPropertyDiff(Expression entity, Expression snapshot, ParameterExpression builder, ParameterExpression arena, ParameterExpression combined, PropertyInfo prop, string pathPrefix)
+        private static Expression EmitPropertyDiff(Expression entity, Expression snapshot, ParameterExpression builder, ParameterExpression arena, PropertyInfo prop, Expression prefix)
         {
             var type = prop.PropertyType;
             var propValue = Expression.Property(entity, prop);
             var elementName = GetElementName(prop);
-            var nameSpan = Expression.Call(AsSpanMethod, Expression.Constant(elementName));
-            var fullPath = string.IsNullOrEmpty(pathPrefix) ? elementName : pathPrefix + "." + elementName;
+            var elementNameExpr = Expression.Call(AsSpanMethod, Expression.Constant(elementName));
             
+            var pathVar = Expression.Variable(typeof(ReadOnlySpan<char>), "path");
+            var pathBody = new List<Expression>();
+            
+            var fullPathExpr = Expression.Call(typeof(string).GetMethod("Concat", [typeof(string), typeof(string), typeof(string)])!,
+                Expression.Condition(Expression.Equal(Expression.Property(prefix, "Length"), Expression.Constant(0)), Expression.Constant(""), Expression.Call(prefix, typeof(object).GetMethod("ToString")!)),
+                Expression.Condition(Expression.Equal(Expression.Property(prefix, "Length"), Expression.Constant(0)), Expression.Constant(""), Expression.Constant(".")),
+                Expression.Constant(elementName));
+            
+            pathBody.Add(Expression.Assign(pathVar, Expression.Call(AsSpanMethod, fullPathExpr)));
+
             var offsetVar = Expression.Variable(typeof(int), "offset");
 
             if (IsDocument(type))
@@ -317,45 +363,87 @@ public static class DynamicBlittableSerializer<T>
                 var nestedBody = new List<Expression>();
                 foreach (var nestedProp in GetValidProperties(type))
                 {
-                    nestedBody.Add(EmitPropertyDiff(propValue, nestedSnap, builder, arena, combined, nestedProp, fullPath));
+                    nestedBody.Add(EmitPropertyDiff(propValue, nestedSnap, builder, arena, nestedProp, pathVar));
                 }
 
-                return Expression.Block([offsetVar],
-                    Expression.IfThen(
-                        Expression.AndAlso(
-                            Expression.NotEqual(entity, Expression.Constant(null)),
-                            Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, nameSpan, offsetVar)
-                        ),
-                        Expression.Block(nestedBody)
+                var setMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("SetObject")!.MakeGenericMethod(type);
+                var unsetMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Unset", [typeof(ReadOnlySpan<char>)])!;
+
+                pathBody.Add(
+                    Expression.Block([offsetVar],
+                        Expression.IfThenElse(
+                            Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, elementNameExpr, offsetVar),
+                            Expression.IfThenElse(
+                                Expression.Equal(propValue, Expression.Constant(null, type)),
+                                Expression.Call(builder, unsetMethod, pathVar),
+                                Expression.Block(nestedBody)
+                            ),
+                            Expression.IfThen(
+                                Expression.NotEqual(propValue, Expression.Constant(null, type)),
+                                Expression.Call(builder, setMethod, pathVar, propValue)
+                            )
+                        )
                     )
                 );
             }
-
-            if (IsCollection(type, out _) || IsDictionary(type, out _))
+            else if (IsNullable(type, out var underlyingTypeNullable))
             {
-                var setMethodColl = typeof(UpdateDefinitionBuilder<BsonDocument>)
-                    .GetMethods()
-                    .First(m => m is { Name: "Set", IsGenericMethod: true } && m.GetParameters().Length == 2 && m.GetParameters()[0].ParameterType.Name.StartsWith("FieldDefinition"))
-                    .MakeGenericMethod(type);
+                var readMethod = underlyingTypeNullable switch
+                {
+                    _ when underlyingTypeNullable == typeof(int) => GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)),
+                    _ when underlyingTypeNullable == typeof(long) => GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)),
+                    _ when underlyingTypeNullable == typeof(double) => GetDocMethod(nameof(BlittableBsonDocument.GetDouble), typeof(int)),
+                    _ when underlyingTypeNullable == typeof(bool) => GetDocMethod(nameof(BlittableBsonDocument.GetBoolean), typeof(int)),
+                    _ when underlyingTypeNullable == typeof(ObjectId) => GetDocMethod(nameof(BlittableBsonDocument.GetObjectId), typeof(int)),
+                    _ when underlyingTypeNullable == typeof(DateTime) => GetDocMethod(nameof(BlittableBsonDocument.GetDateTime), typeof(int)),
+                    _ when underlyingTypeNullable == typeof(Guid) => GetDocMethod(nameof(BlittableBsonDocument.GetGuid), typeof(int)),
+                    _ when underlyingTypeNullable == typeof(decimal) => GetDocMethod(nameof(BlittableBsonDocument.GetDecimal128), typeof(int)),
+                    _ => null
+                };
 
-                var updateExprColl = Expression.Call(builder, setMethodColl, Expression.Convert(Expression.Constant(fullPath), typeof(FieldDefinition<,>).MakeGenericType(typeof(BsonDocument), type)), propValue);
-                
-                var combineExprColl = Expression.Assign(combined, 
-                    Expression.Condition(
-                        Expression.Equal(combined, Expression.Constant(null, typeof(UpdateDefinition<BsonDocument>))),
-                        updateExprColl,
-                        Expression.Call(builder, typeof(UpdateDefinitionBuilder<BsonDocument>).GetMethod("Combine", [typeof(UpdateDefinition<BsonDocument>[] )])!, Expression.NewArrayInit(typeof(UpdateDefinition<BsonDocument>), combined, updateExprColl))
-                    )
-                );
+                if (readMethod != null)
+                {
+                    var hasValueProp = type.GetProperty("HasValue")!;
+                    var valueProp = type.GetProperty("Value")!;
+                    var setMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Set", [typeof(ReadOnlySpan<char>), underlyingTypeNullable])!;
+                    var setNullMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("SetNull", [typeof(ReadOnlySpan<char>)])!;
 
-                return Expression.IfThen(
-                    Expression.NotEqual(propValue, Expression.Constant(null, type)),
-                    combineExprColl
-                );
+                    pathBody.Add(Expression.Block([offsetVar],
+                        Expression.IfThenElse(
+                            Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, elementNameExpr, offsetVar),
+                            Expression.IfThenElse(
+                                Expression.Property(propValue, hasValueProp),
+                                Expression.IfThen(
+                                    Expression.NotEqual(Expression.Property(propValue, valueProp), Expression.Call(snapshot, readMethod, offsetVar)),
+                                    Expression.Call(builder, setMethod, pathVar, Expression.Property(propValue, valueProp))
+                                ),
+                                Expression.IfThen(
+                                    Expression.NotEqual(Expression.Constant(BlittableBsonConstants.BsonType.Null), Expression.Call(null, typeof(ArenaBsonReader).GetMethod("GetElementType")!, snapshot, offsetVar)),
+                                    Expression.Call(builder, setNullMethod, pathVar)
+                                )
+                            ),
+                            Expression.IfThen(
+                                Expression.Property(propValue, hasValueProp),
+                                Expression.Call(builder, setMethod, pathVar, Expression.Property(propValue, valueProp))
+                            )
+                        )
+                    ));
+                }
             }
-            
-            Expression? compareExpr;
-            if (type.IsEnum)
+            else if (IsCollection(type, out _) || IsDictionary(type, out _))
+            {
+                var setObjectMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("SetObject")!.MakeGenericMethod(type);
+                
+                pathBody.Add(Expression.IfThenElse(
+                    Expression.NotEqual(propValue, Expression.Constant(null, type)),
+                    Expression.Call(builder, setObjectMethod, pathVar, propValue),
+                    Expression.IfThen(
+                         Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, elementNameExpr, offsetVar),
+                         Expression.Call(builder, typeof(ArenaUpdateDefinitionBuilder).GetMethod("Unset", [typeof(ReadOnlySpan<char>)])!, pathVar)
+                    )
+                ));
+            }
+            else if (type.IsEnum)
             {
                 var underlyingType = Enum.GetUnderlyingType(type);
                 var underlyingRead = underlyingType switch
@@ -364,48 +452,57 @@ public static class DynamicBlittableSerializer<T>
                     _ when underlyingType == typeof(long) => Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)), offsetVar),
                     _ => throw new NotSupportedException($"Enum with underlying type {underlyingType} is not supported")
                 };
-                compareExpr = Expression.NotEqual(Expression.Convert(propValue, underlyingType), underlyingRead);
+                var compareExpr = Expression.NotEqual(Expression.Convert(propValue, underlyingType), underlyingRead);
+                var enumSetMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Set", [typeof(ReadOnlySpan<char>), underlyingType])!;
+                var setCall = Expression.Call(builder, enumSetMethod, pathVar, Expression.Convert(propValue, underlyingType));
+
+                pathBody.Add(Expression.Block([offsetVar],
+                    Expression.IfThenElse(
+                        Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, elementNameExpr, offsetVar),
+                        Expression.IfThen(compareExpr, setCall),
+                        Expression.Call(builder, enumSetMethod, pathVar, Expression.Convert(propValue, underlyingType))
+                    )
+                ));
             }
             else
             {
-                compareExpr = type switch
+                var readMethod = type switch
                 {
-                    _ when type == typeof(int) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)), offsetVar)),
-                    _ when type == typeof(long) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)), offsetVar)),
-                    _ when type == typeof(double) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetDouble), typeof(int)), offsetVar)),
-                    _ when type == typeof(bool) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetBoolean), typeof(int)), offsetVar)),
-                    _ when type == typeof(string) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetString), typeof(int)), offsetVar)),
-                    _ when type == typeof(ObjectId) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetObjectId), typeof(int)), offsetVar)),
-                    _ when type == typeof(DateTime) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetDateTime), typeof(int)), offsetVar)),
-                    _ when type == typeof(Guid) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetGuid), typeof(int)), offsetVar)),
-                    _ when type == typeof(decimal) => Expression.NotEqual(propValue, Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetDecimal128), typeof(int)), offsetVar)),
+                    _ when type == typeof(int) => GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)),
+                    _ when type == typeof(long) => GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)),
+                    _ when type == typeof(double) => GetDocMethod(nameof(BlittableBsonDocument.GetDouble), typeof(int)),
+                    _ when type == typeof(bool) => GetDocMethod(nameof(BlittableBsonDocument.GetBoolean), typeof(int)),
+                    _ when type == typeof(string) => GetDocMethod(nameof(BlittableBsonDocument.GetString), typeof(int)),
+                    _ when type == typeof(ObjectId) => GetDocMethod(nameof(BlittableBsonDocument.GetObjectId), typeof(int)),
+                    _ when type == typeof(DateTime) => GetDocMethod(nameof(BlittableBsonDocument.GetDateTime), typeof(int)),
+                    _ when type == typeof(Guid) => GetDocMethod(nameof(BlittableBsonDocument.GetGuid), typeof(int)),
+                    _ when type == typeof(decimal) => GetDocMethod(nameof(BlittableBsonDocument.GetDecimal128), typeof(int)),
                     _ => null
                 };
+
+                if (readMethod != null)
+                {
+                    var compareExpr = Expression.NotEqual(propValue, Expression.Call(snapshot, readMethod, offsetVar));
+                    var primitiveSetMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Set", [typeof(ReadOnlySpan<char>), type])!;
+                    var setCall = Expression.Call(builder, primitiveSetMethod, pathVar, propValue);
+
+                    pathBody.Add(Expression.Block([offsetVar],
+                        Expression.IfThenElse(
+                            Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, elementNameExpr, offsetVar),
+                            Expression.IfThen(compareExpr, setCall),
+                            Expression.Call(builder, primitiveSetMethod, pathVar, propValue)
+                        )
+                    ));
+                }
             }
 
-            if (compareExpr == null) return Expression.Empty();
+            return Expression.Block([pathVar, offsetVar], pathBody);
+        }
 
-            var setMethod = typeof(UpdateDefinitionBuilder<BsonDocument>)
-                .GetMethods()
-                .First(m => m is { Name: "Set", IsGenericMethod: true } && m.GetParameters().Length == 2 && m.GetParameters()[0].ParameterType.Name.StartsWith("FieldDefinition"))
-                .MakeGenericMethod(type);
-
-            var updateExpr = Expression.Call(builder, setMethod, Expression.Convert(Expression.Constant(fullPath), typeof(FieldDefinition<,>).MakeGenericType(typeof(BsonDocument), type)), propValue);
-            
-            var combineExpr = Expression.Assign(combined, 
-                Expression.Condition(
-                    Expression.Equal(combined, Expression.Constant(null, typeof(UpdateDefinition<BsonDocument>))),
-                    updateExpr,
-                    Expression.Call(builder, typeof(UpdateDefinitionBuilder<BsonDocument>).GetMethod("Combine", [typeof(UpdateDefinition<BsonDocument>[] )])!, Expression.NewArrayInit(typeof(UpdateDefinition<BsonDocument>), combined, updateExpr))
-                )
-            );
-
-            var ifFound = Expression.IfThen(
-                Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, nameSpan, offsetVar),
-                Expression.IfThen(compareExpr, combineExpr)
-            );
-
-            return Expression.Block([offsetVar], ifFound);
+        private static bool IsNullable(Type type, out Type underlyingType)
+        {
+            underlyingType = Nullable.GetUnderlyingType(type)!;
+            return underlyingType != null;
         }
 
         private static string GetElementName(PropertyInfo prop)
@@ -477,6 +574,7 @@ public static class DynamicBlittableSerializer<T>
             foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (!prop.CanRead) continue;
+                if (prop.GetIndexParameters().Length > 0) continue;
                 if (prop.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonIgnoreAttribute>() != null) continue;
                 if (prop.PropertyType.IsByRefLike || prop.PropertyType.IsPointer) continue;
                 yield return prop;

@@ -11,6 +11,18 @@ public static class CollectionHelper<T>
 {
     public static void WriteArray(ref ArenaBsonWriter writer, ReadOnlySpan<char> name, IEnumerable<T> collection)
     {
+        if (collection is List<T> list)
+        {
+            WriteList(ref writer, name, list);
+            return;
+        }
+        
+        if (collection is T[] array)
+        {
+            WriteSpan(ref writer, name, array);
+            return;
+        }
+
         writer.WriteStartArray(name);
         int i = 0;
         foreach (var item in collection)
@@ -20,24 +32,84 @@ public static class CollectionHelper<T>
         writer.WriteEndArray();
     }
 
+    public static void WriteList(ref ArenaBsonWriter writer, ReadOnlySpan<char> name, List<T> list)
+    {
+        writer.WriteStartArray(name);
+        for (int i = 0; i < list.Count; i++)
+        {
+            EmitValue(ref writer, i, list[i]);
+        }
+        writer.WriteEndArray();
+    }
+
+    public static void WriteSpan(ref ArenaBsonWriter writer, ReadOnlySpan<char> name, ReadOnlySpan<T> span)
+    {
+        writer.WriteStartArray(name);
+        for (int i = 0; i < span.Length; i++)
+        {
+            EmitValue(ref writer, i, span[i]);
+        }
+        writer.WriteEndArray();
+    }
+
     private static void EmitValue(ref ArenaBsonWriter writer, int index, T value)
     {
         Span<char> name = stackalloc char[11];
         index.TryFormat(name, out int charsWritten);
-        var nameSpan = name.Slice(0, charsWritten);
+        var nameSpan = name[..charsWritten];
 
-        if (typeof(T) == typeof(int)) writer.WriteInt32(nameSpan, (int)(object)value!);
-        else if (typeof(T) == typeof(string)) writer.WriteString(nameSpan, (string)(object)value!);
-        else if (typeof(T) == typeof(long)) writer.WriteInt64(nameSpan, (long)(object)value!);
-        else if (typeof(T) == typeof(double)) writer.WriteDouble(nameSpan, (double)(object)value!);
-        else if (typeof(T) == typeof(bool)) writer.WriteBoolean(nameSpan, (bool)(object)value!);
-        else if (typeof(T) == typeof(ObjectId)) writer.WriteObjectId(nameSpan, (ObjectId)(object)value!);
-        else if (typeof(T) == typeof(DateTime)) writer.WriteDateTime(nameSpan, (DateTime)(object)value!);
+        if (value == null)
+        {
+            writer.WriteNull(nameSpan);
+            return;
+        }
+
+        if (typeof(T) == typeof(int))
+        {
+            writer.WriteInt32(nameSpan, (int)(object)value!);
+        }
+        else if (typeof(T) == typeof(string))
+        {
+            writer.WriteString(nameSpan, (string)(object)value!);
+        }
+        else if (typeof(T) == typeof(long))
+        {
+            writer.WriteInt64(nameSpan, (long)(object)value!);
+        }
+        else if (typeof(T) == typeof(double))
+        {
+            writer.WriteDouble(nameSpan, (double)(object)value!);
+        }
+        else if (typeof(T) == typeof(bool))
+        {
+            writer.WriteBoolean(nameSpan, (bool)(object)value!);
+        }
+        else if (typeof(T) == typeof(ObjectId))
+        {
+            writer.WriteObjectId(nameSpan, (ObjectId)(object)value!);
+        }
+        else if (typeof(T) == typeof(DateTime))
+        {
+            writer.WriteDateTime(nameSpan, (DateTime)(object)value!);
+        }
         else
         {
             writer.WriteName(nameSpan, BlittableBsonConstants.BsonType.Document);
             BlittableConverter<T>.Instance.Write(ref writer, value);
         }
+    }
+
+    public static BsonValue ToBsonValue(IEnumerable<T> collection)
+    {
+        if (collection == null) return BsonNull.Value;
+
+        var type = typeof(T);
+        if (type.IsPrimitive || type == typeof(string) || type == typeof(decimal) || type == typeof(ObjectId) || type == typeof(Guid) || type == typeof(DateTime))
+        {
+            return BsonValue.Create(collection);
+        }
+
+        return new BsonArray(collection.Select(x => x == null ? BsonNull.Value : (BsonValue)BsonDocumentWrapper.Create(x)));
     }
 
     public static T[] ReadArray(BlittableBsonArray array, ArenaAllocator arena)
@@ -49,19 +121,22 @@ public static class CollectionHelper<T>
                              type != typeof(ObjectId) && type != typeof(Guid) &&
                              !(type.Namespace?.StartsWith("MongoDB.Bson") ?? false);
 
-        if (isComplexPoco)
+        for (int i = 0; i < array.Count; i++)
         {
-            var deserializer = DynamicBlittableSerializer<T>.DeserializeDelegate;
-            for (int i = 0; i < array.Count; i++)
+            var element = array[i];
+            if (element.Type == BlittableBsonConstants.BsonType.Null)
             {
-                result[i] = deserializer(array[i].GetDocument(), arena);
+                result[i] = default!;
+                continue;
             }
-        }
-        else
-        {
-            for (int i = 0; i < array.Count; i++)
+
+            if (isComplexPoco)
             {
-                result[i] = array[i].Get<T>();
+                result[i] = DynamicBlittableSerializer<T>.DeserializeDelegate(element.GetDocument(), arena);
+            }
+            else
+            {
+                result[i] = element.Get<T>();
             }
         }
         return result;
@@ -76,19 +151,22 @@ public static class CollectionHelper<T>
                              type != typeof(ObjectId) && type != typeof(Guid) &&
                              !(type.Namespace?.StartsWith("MongoDB.Bson") ?? false);
 
-        if (isComplexPoco)
+        for (int i = 0; i < array.Count; i++)
         {
-            var deserializer = DynamicBlittableSerializer<T>.DeserializeDelegate;
-            for (int i = 0; i < array.Count; i++)
+            var element = array[i];
+            if (element.Type == BlittableBsonConstants.BsonType.Null)
             {
-                result.Add(deserializer(array[i].GetDocument(), arena));
+                result.Add(default!);
+                continue;
             }
-        }
-        else
-        {
-            for (int i = 0; i < array.Count; i++)
+
+            if (isComplexPoco)
             {
-                result.Add(array[i].Get<T>());
+                result.Add(DynamicBlittableSerializer<T>.DeserializeDelegate(element.GetDocument(), arena));
+            }
+            else
+            {
+                result.Add(element.Get<T>());
             }
         }
         return result;
@@ -102,39 +180,52 @@ public static class DictionaryHelper<TValue>
         writer.WriteStartDocument(name);
         foreach (var kvp in dictionary)
         {
-            EmitValue(ref writer, kvp.Key, kvp.Value);
+            if (typeof(TValue) == typeof(int))
+            {
+                writer.WriteInt32(kvp.Key, (int)(object)kvp.Value!);
+            }
+            else if (typeof(TValue) == typeof(string))
+            {
+                writer.WriteString(kvp.Key, (string)(object)kvp.Value!);
+            }
+            else
+            {
+                writer.WriteName(kvp.Key, BlittableBsonConstants.BsonType.Document);
+                BlittableConverter<TValue>.Instance.Write(ref writer, kvp.Value);
+            }
         }
         writer.WriteEndDocument();
     }
 
-    private static void EmitValue(ref ArenaBsonWriter writer, string key, TValue value)
+    public static BsonValue ToBsonValue(IDictionary<string, TValue> dictionary)
     {
+        if (dictionary == null) return BsonNull.Value;
+
         var type = typeof(TValue);
-        if (type == typeof(int)) writer.WriteInt32(key, (int)(object)value!);
-        else if (type == typeof(string)) writer.WriteString(key, (string)(object)value!);
-        else if (type == typeof(long)) writer.WriteInt64(key, (long)(object)value!);
-        else if (type == typeof(double)) writer.WriteDouble(key, (double)(object)value!);
-        else if (type == typeof(bool)) writer.WriteBoolean(key, (bool)(object)value!);
-        else if (type == typeof(ObjectId)) writer.WriteObjectId(key, (ObjectId)(object)value!);
-        else if (type == typeof(DateTime)) writer.WriteDateTime(key, (DateTime)(object)value!);
-        else
+        if (type.IsPrimitive || type == typeof(string) || type == typeof(decimal) || type == typeof(ObjectId) || type == typeof(Guid) || type == typeof(DateTime))
         {
-            writer.WriteName(key, BlittableBsonConstants.BsonType.Document);
-            BlittableConverter<TValue>.Instance.Write(ref writer, value);
+            return BsonValue.Create(dictionary);
         }
+
+        var doc = new BsonDocument();
+        foreach (var kvp in dictionary)
+        {
+            doc[kvp.Key] = kvp.Value == null ? BsonNull.Value : BsonDocumentWrapper.Create(kvp.Value);
+        }
+        return doc;
     }
 
     public static Dictionary<string, TValue> ReadDictionary(BlittableBsonDocument doc, ArenaAllocator arena)
     {
         var result = new Dictionary<string, TValue>();
-        var type = typeof(TValue);
-        bool isComplexPoco = (type.IsClass || (type.IsValueType && !type.IsPrimitive && !type.IsEnum)) && 
-                             type != typeof(string) && type != typeof(decimal) && 
-                             type != typeof(ObjectId) && type != typeof(Guid) &&
-                             !(type.Namespace?.StartsWith("MongoDB.Bson") ?? false);
-
-        foreach (var key in doc.Keys)
+        foreach (var key in doc.KeysEnumerable)
         {
+            var type = typeof(TValue);
+            bool isComplexPoco = (type.IsClass || (type.IsValueType && !type.IsPrimitive && !type.IsEnum)) && 
+                                 type != typeof(string) && type != typeof(decimal) && 
+                                 type != typeof(ObjectId) && type != typeof(Guid) &&
+                                 !(type.Namespace?.StartsWith("MongoDB.Bson") ?? false);
+
             if (isComplexPoco)
             {
                 result[key.ToString()] = DynamicBlittableSerializer<TValue>.DeserializeDelegate(doc.GetDocument(key, arena), arena);

@@ -23,6 +23,9 @@ public readonly unsafe struct BlittableBsonDocument
     }
 
     public byte* Pointer => _bsonBytes;
+    public bool IsDefault => _bsonBytes == null;
+
+    public bool ContainsKey(ReadOnlySpan<char> name) => TryGetElementOffset(name, out _);
 
     public ReadOnlySpan<byte> AsReadOnlySpan() => new(_bsonBytes, _length);
 
@@ -63,15 +66,7 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type);
-        return type switch
-        {
-            BlittableBsonConstants.BsonType.Int32 => *(int*)p,
-            BlittableBsonConstants.BsonType.Int64 => (int)*(long*)p,
-            BlittableBsonConstants.BsonType.Double => (int)*(double*)p,
-            _ => throw new InvalidCastException($"Cannot cast {type} to Int32")
-        };
+        return GetInt32(offset);
     }
 
     public long GetInt64(ReadOnlySpan<char> name)
@@ -80,15 +75,7 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type);
-        return type switch
-        {
-            BlittableBsonConstants.BsonType.Int64 => *(long*)p,
-            BlittableBsonConstants.BsonType.Int32 => *(int*)p,
-            BlittableBsonConstants.BsonType.Double => (long)*(double*)p,
-            _ => throw new InvalidCastException($"Cannot cast {type} to Int64")
-        };
+        return GetInt64(offset);
     }
 
     public double GetDouble(ReadOnlySpan<char> name)
@@ -97,15 +84,7 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type);
-        return type switch
-        {
-            BlittableBsonConstants.BsonType.Double => *(double*)p,
-            BlittableBsonConstants.BsonType.Int32 => *(int*)p,
-            BlittableBsonConstants.BsonType.Int64 => *(long*)p,
-            _ => throw new InvalidCastException($"Cannot cast {type} to Double")
-        };
+        return GetDouble(offset);
     }
 
     public bool GetBoolean(ReadOnlySpan<char> name)
@@ -114,14 +93,7 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type);
-        if (type != BlittableBsonConstants.BsonType.Boolean)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to Boolean");
-        }
-
-        return *p != 0;
+        return GetBoolean(offset);
     }
 
     public ReadOnlySpan<byte> GetStringBytes(ReadOnlySpan<char> name)
@@ -130,15 +102,7 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type);
-        if (type != BlittableBsonConstants.BsonType.String)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to String");
-        }
-
-        int len = *(int*)p;
-        return new ReadOnlySpan<byte>(p + 4, len - 1);
+        return GetStringBytes(offset);
     }
 
     public ObjectId GetObjectId(ReadOnlySpan<char> name)
@@ -147,16 +111,7 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type);
-        if (type != BlittableBsonConstants.BsonType.ObjectId)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to ObjectId");
-        }
-        
-        byte[] bytes = new byte[12];
-        for (int i = 0; i < 12; i++) bytes[i] = p[i];
-        return new ObjectId(bytes);
+        return GetObjectId(offset);
     }
 
     public DateTime GetDateTime(ReadOnlySpan<char> name)
@@ -165,50 +120,25 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type);
-        if (type != BlittableBsonConstants.BsonType.DateTime)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to DateTime");
-        }
-
-        return DateTime.UnixEpoch.AddMilliseconds(*(long*)p);
+        return GetDateTime(offset);
     }
 
-    public BlittableBsonDocument GetDocument(ArenaUtf8String name, ArenaAllocator arena)
+    public Guid GetGuid(ReadOnlySpan<char> name)
     {
-        if (!_index.TryGetValue(name, out var offset))
+        if (!TryGetElementOffset(name, out var offset))
         {
-            throw new KeyNotFoundException($"Property '{name}' not found.");
+            throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type, out var length);
-        if (type != BlittableBsonConstants.BsonType.Document)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to Document");
-        }
-
-        return ArenaBsonReader.ReadInPlace(p, length, arena);
+        return GetGuid(offset);
     }
 
-    public T Get<T>(ArenaUtf8String name)
+    public decimal GetDecimal128(ReadOnlySpan<char> name)
     {
-        if (!_index.TryGetValue(name, out var offset))
+        if (!TryGetElementOffset(name, out var offset))
         {
-            throw new KeyNotFoundException($"Property '{name}' not found.");
+            throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type, out var length);
-
-        if (typeof(T) == typeof(int)) return (T)(object)GetInt32(offset);
-        if (typeof(T) == typeof(long)) return (T)(object)GetInt64(offset);
-        if (typeof(T) == typeof(double)) return (T)(object)GetDouble(offset);
-        if (typeof(T) == typeof(bool)) return (T)(object)GetBoolean(offset);
-        if (typeof(T) == typeof(string)) return (T)(object)GetString(offset);
-        if (typeof(T) == typeof(ObjectId)) return (T)(object)GetObjectId(offset);
-        if (typeof(T) == typeof(DateTime)) return (T)(object)GetDateTime(offset);
-
-        return BlittableConverter<T>.Instance.Read(p, type, length);
+        return GetDecimal128(offset);
     }
 
     public BlittableBsonDocument GetDocument(ReadOnlySpan<char> name, ArenaAllocator arena)
@@ -217,14 +147,25 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
+        return GetDocument(offset, arena);
+    }
 
-        var p = GetDataPointer(offset, out var type, out var length);
-        if (type != BlittableBsonConstants.BsonType.Document)
+    public BlittableBsonDocument GetDocument(ArenaUtf8String name, ArenaAllocator arena)
+    {
+        if (!_index.TryGetValue(name, out var offset))
         {
-            throw new InvalidCastException($"Cannot cast {type} to Document");
+            throw new KeyNotFoundException($"Property '{name}' not found.");
         }
+        return GetDocument(offset, arena);
+    }
 
-        return ArenaBsonReader.ReadInPlace(p, length, arena);
+    public T Get<T>(ArenaUtf8String name)
+    {
+        if (!_index.TryGetValue(name, out var offset))
+        {
+            throw new KeyNotFoundException($"Property '{name}' not found.");
+        }
+        return Get<T>(offset);
     }
 
     public BlittableBsonArray GetArray(ReadOnlySpan<char> name, ArenaAllocator arena)
@@ -233,14 +174,7 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type, out var length);
-        if (type != BlittableBsonConstants.BsonType.Array)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to Array");
-        }
-
-        return new BlittableBsonArray(p, length, arena);
+        return GetArray(offset, arena);
     }
 
     public string GetString(ReadOnlySpan<char> name)
@@ -251,7 +185,7 @@ public readonly unsafe struct BlittableBsonDocument
 
     public int GetInt32(int offset)
     {
-        var p = GetDataPointerAtOffset(offset, out var type, out var length);
+        var p = GetDataPointerAtOffset(offset, out var type, out _);
         return type switch
         {
             BlittableBsonConstants.BsonType.Int32 => *(int*)p,
@@ -263,7 +197,7 @@ public readonly unsafe struct BlittableBsonDocument
 
     public long GetInt64(int offset)
     {
-        var p = GetDataPointerAtOffset(offset, out var type, out var length);
+        var p = GetDataPointerAtOffset(offset, out var type, out _);
         return type switch
         {
             BlittableBsonConstants.BsonType.Int64 => *(long*)p,
@@ -275,7 +209,7 @@ public readonly unsafe struct BlittableBsonDocument
 
     public double GetDouble(int offset)
     {
-        var p = GetDataPointerAtOffset(offset, out var type, out var length);
+        var p = GetDataPointerAtOffset(offset, out var type, out _);
         return type switch
         {
             BlittableBsonConstants.BsonType.Double => *(double*)p,
@@ -288,14 +222,22 @@ public readonly unsafe struct BlittableBsonDocument
     public bool GetBoolean(int offset)
     {
         var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.Boolean) throw new InvalidCastException($"Cannot cast {type} to Boolean");  
+        if (type != BlittableBsonConstants.BsonType.Boolean)
+        {
+            throw new InvalidCastException($"Cannot cast {type} to Boolean");
+        }
+
         return *p != 0;
     }
 
     public ReadOnlySpan<byte> GetStringBytes(int offset)
     {
-        var p = GetDataPointerAtOffset(offset, out var type, out var length);
-        if (type != BlittableBsonConstants.BsonType.String) throw new InvalidCastException($"Cannot cast {type} to String");    
+        var p = GetDataPointerAtOffset(offset, out var type, out _);
+        if (type != BlittableBsonConstants.BsonType.String)
+        {
+            throw new InvalidCastException($"Cannot cast {type} to String");
+        }
+
         int strLen = *(int*)p;
         return new ReadOnlySpan<byte>(p + 4, strLen - 1);
     }
@@ -305,42 +247,69 @@ public readonly unsafe struct BlittableBsonDocument
     public ObjectId GetObjectId(int offset)
     {
         var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.ObjectId) throw new InvalidCastException($"Cannot cast {type} to ObjectId");
+        if (type != BlittableBsonConstants.BsonType.ObjectId)
+        {
+            throw new InvalidCastException($"Cannot cast {type} to ObjectId");
+        }
 
         byte[] bytes = new byte[12];
-        for (int i = 0; i < 12; i++) bytes[i] = p[i];
+        for (int i = 0; i < 12; i++)
+        {
+            bytes[i] = p[i];
+        }
+
         return new ObjectId(bytes);
     }
 
     public DateTime GetDateTime(int offset)
     {
         var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.DateTime) throw new InvalidCastException($"Cannot cast {type} to DateTime");
+        if (type != BlittableBsonConstants.BsonType.DateTime)
+        {
+            throw new InvalidCastException($"Cannot cast {type} to DateTime");
+        }
+
         long ms = *(long*)p;
         return DateTime.UnixEpoch.AddMilliseconds(ms);
     }
 
     public Guid GetGuid(int offset)
     {
-        var p = GetDataPointerAtOffset(offset, out var type, out var length);
-        if (type != BlittableBsonConstants.BsonType.Binary) throw new InvalidCastException($"Cannot cast {type} to Guid");
-        
+        var p = GetDataPointerAtOffset(offset, out var type, out _);
+        if (type != BlittableBsonConstants.BsonType.Binary)
+        {
+            throw new InvalidCastException($"Cannot cast {type} to Guid");
+        }
+
         int len = *(int*)p;
         byte subtype = p[4];
-        if (len != 16) throw new InvalidOperationException($"Invalid Guid length: {len}");
+        if (len != 16)
+        {
+            throw new InvalidOperationException($"Invalid Guid length: {len}");
+        }
 
         var span = new ReadOnlySpan<byte>(p + 5, 16);
-        if (subtype == 4) return new Guid(span, bigEndian: true);
-        if (subtype == 3) return new Guid(span);
-        
+        if (subtype == 4)
+        {
+            return new Guid(span, bigEndian: true);
+        }
+
+        if (subtype == 3)
+        {
+            return new Guid(span);
+        }
+
         throw new InvalidOperationException($"Unsupported Guid subtype: {subtype}");
     }
 
     public decimal GetDecimal128(int offset)
     {
         var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.Decimal128) throw new InvalidCastException($"Cannot cast {type} to Decimal128");
-        
+        if (type != BlittableBsonConstants.BsonType.Decimal128)
+        {
+            throw new InvalidCastException($"Cannot cast {type} to Decimal128");
+        }
+
         long low = *(long*)p;
         long high = *(long*)(p + 8);
         var d128 = Decimal128.FromIEEEBits((ulong)high, (ulong)low);
@@ -350,14 +319,22 @@ public readonly unsafe struct BlittableBsonDocument
     public BlittableBsonDocument GetDocument(int offset, ArenaAllocator arena)
     {
         var p = GetDataPointerAtOffset(offset, out var type, out var length);
-        if (type != BlittableBsonConstants.BsonType.Document) throw new InvalidCastException($"Cannot cast {type} to Document");
+        if (type != BlittableBsonConstants.BsonType.Document)
+        {
+            throw new InvalidCastException($"Cannot cast {type} to Document");
+        }
+
         return ArenaBsonReader.ReadInPlace(p, length, arena);
     }
 
     public BlittableBsonArray GetArray(int offset, ArenaAllocator arena)
     {
         var p = GetDataPointerAtOffset(offset, out var type, out var length);
-        if (type != BlittableBsonConstants.BsonType.Array) throw new InvalidCastException($"Cannot cast {type} to Array");      
+        if (type != BlittableBsonConstants.BsonType.Array)
+        {
+            throw new InvalidCastException($"Cannot cast {type} to Array");
+        }
+
         return new BlittableBsonArray(p, length, arena);
     }
 
@@ -367,33 +344,55 @@ public readonly unsafe struct BlittableBsonDocument
         {
             throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
         }
-
-        var p = GetDataPointer(offset, out var type, out var length);
-
-        if (typeof(T) == typeof(int)) return (T)(object)GetInt32(offset);
-        if (typeof(T) == typeof(long)) return (T)(object)GetInt64(offset);
-        if (typeof(T) == typeof(double)) return (T)(object)GetDouble(offset);
-        if (typeof(T) == typeof(bool)) return (T)(object)GetBoolean(offset);
-        if (typeof(T) == typeof(string)) return (T)(object)GetString(offset);
-        if (typeof(T) == typeof(ObjectId)) return (T)(object)GetObjectId(offset);
-        if (typeof(T) == typeof(DateTime)) return (T)(object)GetDateTime(offset);
-        if (typeof(T) == typeof(Guid)) return (T)(object)GetGuid(offset);
-        if (typeof(T) == typeof(decimal)) return (T)(object)GetDecimal128(offset);
-
-        return BlittableConverter<T>.Instance.Read(p, type, length);
+        return Get<T>(offset);
     }
 
     public T Get<T>(int offset)
     {
-        if (typeof(T) == typeof(int)) return (T)(object)GetInt32(offset);
-        if (typeof(T) == typeof(long)) return (T)(object)GetInt64(offset);
-        if (typeof(T) == typeof(double)) return (T)(object)GetDouble(offset);
-        if (typeof(T) == typeof(bool)) return (T)(object)GetBoolean(offset);
-        if (typeof(T) == typeof(string)) return (T)(object)GetString(offset);
-        if (typeof(T) == typeof(ObjectId)) return (T)(object)GetObjectId(offset);
-        if (typeof(T) == typeof(DateTime)) return (T)(object)GetDateTime(offset);
-        if (typeof(T) == typeof(Guid)) return (T)(object)GetGuid(offset);
-        if (typeof(T) == typeof(decimal)) return (T)(object)GetDecimal128(offset);
+        if (typeof(T) == typeof(int))
+        {
+            return (T)(object)GetInt32(offset);
+        }
+
+        if (typeof(T) == typeof(long))
+        {
+            return (T)(object)GetInt64(offset);
+        }
+
+        if (typeof(T) == typeof(double))
+        {
+            return (T)(object)GetDouble(offset);
+        }
+
+        if (typeof(T) == typeof(bool))
+        {
+            return (T)(object)GetBoolean(offset);
+        }
+
+        if (typeof(T) == typeof(string))
+        {
+            return (T)(object)GetString(offset);
+        }
+
+        if (typeof(T) == typeof(ObjectId))
+        {
+            return (T)(object)GetObjectId(offset);
+        }
+
+        if (typeof(T) == typeof(DateTime))
+        {
+            return (T)(object)GetDateTime(offset);
+        }
+
+        if (typeof(T) == typeof(Guid))
+        {
+            return (T)(object)GetGuid(offset);
+        }
+
+        if (typeof(T) == typeof(decimal))
+        {
+            return (T)(object)GetDecimal128(offset);
+        }
 
         var p = GetDataPointerAtOffset(offset, out var type, out var length);
         return BlittableConverter<T>.Instance.Read(p, type, length);
@@ -403,28 +402,11 @@ public readonly unsafe struct BlittableBsonDocument
     {
         type = (BlittableBsonConstants.BsonType)_bsonBytes[offset];
         var ptr = _bsonBytes + offset + 1;
-        while (*ptr != 0) ptr++; // skip field name (c string)
+        while (*ptr != 0) ptr++; 
         var dataPtr = ptr + 1;
         int dataPos = (int)(dataPtr - _bsonBytes);
         int endPos = ArenaBsonReader.SkipElement(_bsonBytes, dataPos, type);
         length = endPos - dataPos;
-        return dataPtr;
-    }
-
-    private byte* GetDataPointer(int elementOffset, out BlittableBsonConstants.BsonType type)
-    {
-        return GetDataPointer(elementOffset, out type, out _);
-    }
-
-    private byte* GetDataPointer(int elementOffset, out BlittableBsonConstants.BsonType type, out int dataLength)
-    {
-        type = (BlittableBsonConstants.BsonType)_bsonBytes[elementOffset];
-        var ptr = _bsonBytes + elementOffset + 1;
-        while (*ptr != 0) ptr++; // skip field name (c string)
-        var dataPtr = ptr + 1;
-        int dataPos = (int)(dataPtr - _bsonBytes);
-        int endPos = ArenaBsonReader.SkipElement(_bsonBytes, dataPos, type);
-        dataLength = endPos - dataPos;
         return dataPtr;
     }
 }

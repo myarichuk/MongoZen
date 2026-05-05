@@ -46,12 +46,39 @@ internal sealed class BlittableGridFSDownloadStream : Stream
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        return ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+        if (_position >= _length)
+        {
+            return 0;
+        }
+
+        int chunkIndex = (int)(_position / _chunkSize);
+        int chunkOffset = (int)(_position % _chunkSize);
+
+        if (_currentChunkIndex != chunkIndex)
+        {
+            LoadChunk(chunkIndex);
+        }
+
+        if (_currentChunkData == null)
+        {
+            return 0;
+        }
+
+        int available = _currentChunkData.Length - chunkOffset;
+        int toCopy = Math.Min(count, available);
+        
+        Buffer.BlockCopy(_currentChunkData, chunkOffset, buffer, offset, toCopy);
+        
+        _position += toCopy;
+        return toCopy;
     }
 
     public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
     {
-        if (_position >= _length) return 0;
+        if (_position >= _length)
+        {
+            return 0;
+        }
 
         int chunkIndex = (int)(_position / _chunkSize);
         int chunkOffset = (int)(_position % _chunkSize);
@@ -61,7 +88,10 @@ internal sealed class BlittableGridFSDownloadStream : Stream
             await LoadChunkAsync(chunkIndex, cancellationToken);
         }
 
-        if (_currentChunkData == null) return 0;
+        if (_currentChunkData == null)
+        {
+            return 0;
+        }
 
         int available = _currentChunkData.Length - chunkOffset;
         int toCopy = Math.Min(count, available);
@@ -70,6 +100,32 @@ internal sealed class BlittableGridFSDownloadStream : Stream
         
         _position += toCopy;
         return toCopy;
+    }
+
+    private void LoadChunk(int chunkIndex)
+    {
+        var filter = Builders<BsonDocument>.Filter.And(
+            Builders<BsonDocument>.Filter.Eq("files_id", _filesId),
+            Builders<BsonDocument>.Filter.Eq("n", chunkIndex)
+        );
+
+        BsonDocument? chunkDoc;
+        if (_session != null)
+        {
+            chunkDoc = _chunks.Find(_session, filter).FirstOrDefault();
+        }
+        else
+        {
+            chunkDoc = _chunks.Find(filter).FirstOrDefault();
+        }
+
+        if (chunkDoc == null)
+        {
+            throw new EndOfStreamException($"Chunk {chunkIndex} for file {_filesId} not found.");
+        }
+
+        _currentChunkData = chunkDoc["data"].AsByteArray;
+        _currentChunkIndex = chunkIndex;
     }
 
     private async Task LoadChunkAsync(int chunkIndex, CancellationToken cancellationToken)

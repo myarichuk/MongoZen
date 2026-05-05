@@ -1,7 +1,4 @@
-using System;
 using System.Buffers;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Text;
 using SharpArena.Allocators;
 using SharpArena.Collections;
@@ -14,15 +11,20 @@ namespace MongoZen.Bson;
 /// </summary>
 public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity = 256)
 {
-    private readonly ArenaAllocator _arena = arena;
     private ArenaList<byte> _buffer = new(arena, initialCapacity);
     private ArenaList<int> _lengthOffsets = new(arena, 8);
 
     private static readonly string[] IndexStrings = GenerateIndexStrings();
+    private const int IndexCacheSize = 100; //most arrays in real-world have less elements that this
+    
     private static string[] GenerateIndexStrings()
     {
-        var strings = new string[100];
-        for (int i = 0; i < 100; i++) strings[i] = i.ToString();
+        var strings = new string[IndexCacheSize];
+        for (int i = 0; i < IndexCacheSize; i++)
+        {
+            strings[i] = i.ToString();
+        }
+
         return strings;
     }
 
@@ -50,8 +52,11 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
 
     public void WriteEndDocument()
     {
-        if (_lengthOffsets.Length == 0) throw new InvalidOperationException("No open document/array.");
-        
+        if (_lengthOffsets.Length == 0)
+        {
+            throw new InvalidOperationException("No open document/array.");
+        }
+
         _buffer.Add(BlittableBsonConstants.DocumentTerminator);
         
         int offsetIndex = _lengthOffsets.Length - 1;
@@ -77,7 +82,10 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         {
             Span<byte> nameBytes = stackalloc byte[128];
             int written = Encoding.UTF8.GetBytes(name, nameBytes);
-            for (int i = 0; i < written; i++) _buffer.Add(nameBytes[i]);
+            for (int i = 0; i < written; i++)
+            {
+                _buffer.Add(nameBytes[i]);
+            }
         }
         else
         {
@@ -85,7 +93,10 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
             try
             {
                 int written = Encoding.UTF8.GetBytes(name, rented);
-                for (int i = 0; i < written; i++) _buffer.Add(rented[i]);
+                for (int i = 0; i < written; i++)
+                {
+                    _buffer.Add(rented[i]);
+                }
             }
             finally
             {
@@ -205,7 +216,10 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         {
             Span<byte> valBytes = stackalloc byte[512];
             int written = Encoding.UTF8.GetBytes(value, valBytes);
-            for (int i = 0; i < written; i++) _buffer.Add(valBytes[i]);
+            for (int i = 0; i < written; i++)
+            {
+                _buffer.Add(valBytes[i]);
+            }
         }
         else
         {
@@ -213,7 +227,10 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
             try
             {
                 int written = Encoding.UTF8.GetBytes(value, rented);
-                for (int i = 0; i < written; i++) _buffer.Add(rented[i]);
+                for (int i = 0; i < written; i++)
+                {
+                    _buffer.Add(rented[i]);
+                }
             }
             finally
             {
@@ -227,7 +244,10 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
     public void WriteObjectIdValue(ObjectId value)
     {
         var bytes = value.ToByteArray();
-        for (int i = 0; i < 12; i++) _buffer.Add(bytes[i]);
+        for (int i = 0; i < 12; i++)
+        {
+            _buffer.Add(bytes[i]);
+        }
     }
 
     public void WriteDateTimeValue(DateTime value)
@@ -240,7 +260,10 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
     {
         WriteInt32Value(bytes.Length);
         _buffer.Add(subtype);
-        for (int i = 0; i < bytes.Length; i++) _buffer.Add(bytes[i]);
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            _buffer.Add(bytes[i]);
+        }
     }
 
     public void WriteGuidValue(Guid value)
@@ -250,7 +273,10 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         
         Span<byte> bytes = stackalloc byte[16];
         value.TryWriteBytes(bytes, bigEndian: true, out _);
-        for (int i = 0; i < 16; i++) _buffer.Add(bytes[i]);
+        for (int i = 0; i < 16; i++)
+        {
+            _buffer.Add(bytes[i]);
+        }
     }
 
     public void WriteDecimal128(ReadOnlySpan<char> name, decimal value)
@@ -268,7 +294,10 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
 
     public void WriteRaw(ReadOnlySpan<byte> bytes)
     {
-        for (int i = 0; i < bytes.Length; i++) _buffer.Add(bytes[i]);
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            _buffer.Add(bytes[i]);
+        }
     }
 
     // Value-only versions for arrays (using index as string key)
@@ -282,7 +311,7 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         {
             Span<char> name = stackalloc char[11];
             index.TryFormat(name, out int charsWritten);
-            WriteInt32(name.Slice(0, charsWritten), value);
+            WriteInt32(name[..charsWritten], value);
         }
     }
 
@@ -295,8 +324,8 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         else
         {
             Span<char> name = stackalloc char[11];
-            index.TryFormat(name, out int charsWritten);
-            WriteString(name.Slice(0, charsWritten), value);
+            index.TryFormat(name, out var charsWritten);
+            WriteString(name[..charsWritten], value);
         }
     }
 }

@@ -83,7 +83,11 @@ public readonly unsafe struct BlittableBsonArray : IReadOnlyList<BlittableBsonAr
 
         public bool MoveNext()
         {
-            if (++_index >= _array.Count) return false;
+            if (++_index >= _array.Count)
+            {
+                return false;
+            }
+
             _current = _array[_index];
             return true;
         }
@@ -122,40 +126,75 @@ public readonly unsafe struct BlittableBsonArray : IReadOnlyList<BlittableBsonAr
         public string GetString()
         {
             if (_type != BlittableBsonConstants.BsonType.String)
+            {
                 throw new InvalidCastException($"Cannot cast {_type} to String");
+            }
+
             int len = *(int*)_p;
             return System.Text.Encoding.UTF8.GetString(_p + 4, len - 1);
         }
 
         public T Get<T>()
         {
-            if (typeof(T) == typeof(int)) return (T)(object)GetInt32();
-            if (typeof(T) == typeof(string)) return (T)(object)GetString();
+            if (typeof(T) == typeof(int))
+            {
+                return (T)(object)GetInt32();
+            }
+
+            if (typeof(T) == typeof(string))
+            {
+                return (T)(object)GetString();
+            }
+
             if (typeof(T) == typeof(long))
             {
-                if (_type != BlittableBsonConstants.BsonType.Int64) throw new InvalidCastException($"Cannot cast {_type} to Int64");
+                if (_type != BlittableBsonConstants.BsonType.Int64)
+                {
+                    throw new InvalidCastException($"Cannot cast {_type} to Int64");
+                }
+
                 return (T)(object)*(long*)_p;
             }
             if (typeof(T) == typeof(double))
             {
-                if (_type != BlittableBsonConstants.BsonType.Double) throw new InvalidCastException($"Cannot cast {_type} to Double");
+                if (_type != BlittableBsonConstants.BsonType.Double)
+                {
+                    throw new InvalidCastException($"Cannot cast {_type} to Double");
+                }
+
                 return (T)(object)*(double*)_p;
             }
             if (typeof(T) == typeof(bool))
             {
-                if (_type != BlittableBsonConstants.BsonType.Boolean) throw new InvalidCastException($"Cannot cast {_type} to Boolean");
+                if (_type != BlittableBsonConstants.BsonType.Boolean)
+                {
+                    throw new InvalidCastException($"Cannot cast {_type} to Boolean");
+                }
+
                 return (T)(object)(*_p != 0);
             }
             if (typeof(T) == typeof(ObjectId))
             {
-                if (_type != BlittableBsonConstants.BsonType.ObjectId) throw new InvalidCastException($"Cannot cast {_type} to ObjectId");
+                if (_type != BlittableBsonConstants.BsonType.ObjectId)
+                {
+                    throw new InvalidCastException($"Cannot cast {_type} to ObjectId");
+                }
+
                 byte[] bytes = new byte[12];
-                for(int i=0; i<12; i++) bytes[i] = _p[i];
+                for(int i=0; i<12; i++)
+                {
+                    bytes[i] = _p[i];
+                }
+
                 return (T)(object)new ObjectId(bytes);
             }
             if (typeof(T) == typeof(DateTime))
             {
-                if (_type != BlittableBsonConstants.BsonType.DateTime) throw new InvalidCastException($"Cannot cast {_type} to DateTime");
+                if (_type != BlittableBsonConstants.BsonType.DateTime)
+                {
+                    throw new InvalidCastException($"Cannot cast {_type} to DateTime");
+                }
+
                 return (T)(object)DateTime.UnixEpoch.AddMilliseconds(*(long*)_p);
             }
 
@@ -165,7 +204,10 @@ public readonly unsafe struct BlittableBsonArray : IReadOnlyList<BlittableBsonAr
         public BlittableBsonDocument GetDocument()
         {
             if (_type != BlittableBsonConstants.BsonType.Document)
+            {
                 throw new InvalidCastException($"Cannot cast {_type} to Document");
+            }
+
             return ArenaBsonReader.ReadInPlace(_p, _length, _arena);
         }
     }
