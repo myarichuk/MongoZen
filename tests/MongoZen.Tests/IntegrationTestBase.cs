@@ -7,6 +7,18 @@ namespace MongoZen.Tests;
 
 public abstract class IntegrationTestBase : IAsyncLifetime
 {
+    static IntegrationTestBase()
+    {
+        try
+        {
+            MongoDB.Bson.Serialization.BsonSerializer.RegisterSerializer(new MongoDB.Bson.Serialization.Serializers.GuidSerializer(GuidRepresentation.Standard));
+        }
+        catch (InvalidOperationException)
+        {
+            // Already registered
+        }
+    }
+
     private static readonly Lazy<Task<(MongoDbContainer Container, MongoClient Client)>> ContainerLazy = new(async () =>
     {
         var container = new MongoDbBuilder()

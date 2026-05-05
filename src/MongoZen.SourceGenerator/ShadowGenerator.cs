@@ -153,7 +153,6 @@ public class ShadowGenerator : IIncrementalGenerator
                 return TypeCategory.Document;
             }
             
-            // Support for common MongoDB types like ObjectId
             if (ns == "MongoDB.Bson" && type.Name == "ObjectId")
             {
                 return TypeCategory.Primitive;
@@ -205,6 +204,7 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine("using System.Linq;");
         sb.AppendLine("using MongoZen;");
         sb.AppendLine("using MongoZen.Bson;");
+        sb.AppendLine("using MongoZen.ChangeTracking;");
         sb.AppendLine("using SharpArena.Allocators;");
         sb.AppendLine("using MongoDB.Driver;");
         sb.AppendLine("using MongoDB.Bson;");
@@ -241,14 +241,12 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine();
 
         // BuildUpdate
-        sb.AppendLine($"    public static UpdateDefinition<BsonDocument>? BuildUpdate({info.Name} entity, BlittableBsonDocument snapshot, UpdateDefinitionBuilder<BsonDocument> builder, SharpArena.Allocators.ArenaAllocator arena)");
+        sb.AppendLine($"    public static void BuildUpdate({info.Name} entity, BlittableBsonDocument snapshot, ref ArenaUpdateDefinitionBuilder builder, SharpArena.Allocators.ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)");
         sb.AppendLine("    {");
-        sb.AppendLine("        UpdateDefinition<BsonDocument>? combined = null;");
         foreach (var prop in info.Properties)
         {
-            EmitPropertyDiff(sb, prop, "entity", "snapshot", "builder", "combined", "");
+            EmitPropertyDiff(sb, prop, "entity", "snapshot", "builder", "pathPrefix");
         }
-        sb.AppendLine("        return combined;");
         sb.AppendLine("    }");
 
 
@@ -335,50 +333,57 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine("        }");
     }
 
-    private void EmitPropertyDiff(StringBuilder sb, PropertyInfo prop, string entityVar, string snapVar, string builderVar, string combinedVar, string pathPrefix)
+    private void EmitPropertyDiff(StringBuilder sb, PropertyInfo prop, string entityVar, string snapVar, string builderVar, string prefixVar)
     {
         var name = prop.ElementName;
-        var fullPath = string.IsNullOrEmpty(pathPrefix) ? name : pathPrefix + "." + name;
         var propAccess = $"{entityVar}.{prop.Symbol.Name}";
         
         sb.AppendLine($"        if ({snapVar}.TryGetElementOffset(\"{name}\", out var off_{prop.Symbol.Name}))");
         sb.AppendLine("        {");
-        
+        sb.AppendLine($"            Span<char> fullPath_{prop.Symbol.Name} = stackalloc char[{prefixVar}.Length + {name.Length} + 1];");
+        sb.AppendLine($"            int len_{prop.Symbol.Name} = 0;");
+        sb.AppendLine($"            if ({prefixVar}.Length > 0) {{ {prefixVar}.CopyTo(fullPath_{prop.Symbol.Name}); fullPath_{prop.Symbol.Name}[{prefixVar}.Length] = '.'; len_{prop.Symbol.Name} = {prefixVar}.Length + 1; }}");
+        sb.AppendLine($"            \"{name}\".AsSpan().CopyTo(fullPath_{prop.Symbol.Name}.Slice(len_{prop.Symbol.Name}));");
+        sb.AppendLine($"            var path_{prop.Symbol.Name} = fullPath_{prop.Symbol.Name}.Slice(0, len_{prop.Symbol.Name} + {name.Length});");
+
         switch (prop.Category)
         {
             case TypeCategory.Enum:
                 var underlyingType = ((INamedTypeSymbol)prop.Symbol.Type).EnumUnderlyingType!;
                 var enumMethod = GetReadMethod(underlyingType);
                 sb.AppendLine($"            if (({underlyingType.ToDisplayString()}){propAccess} != {snapVar}.{enumMethod}(off_{prop.Symbol.Name}))");
-                sb.AppendLine($"                {combinedVar} = ({combinedVar} == null) ? {builderVar}.Set(\"{fullPath}\", {propAccess}) : {builderVar}.Combine({combinedVar}, {builderVar}.Set(\"{fullPath}\", {propAccess}));");
+                sb.AppendLine($"                {builderVar}.Set(path_{prop.Symbol.Name}, ({underlyingType.ToDisplayString()}){propAccess});");
                 break;
             case TypeCategory.Primitive:
                 var method = GetReadMethod(prop.Symbol.Type);
                 sb.AppendLine($"            if ({propAccess} != {snapVar}.{method}(off_{prop.Symbol.Name}))");
-                sb.AppendLine($"                {combinedVar} = ({combinedVar} == null) ? {builderVar}.Set(\"{fullPath}\", {propAccess}) : {builderVar}.Combine({combinedVar}, {builderVar}.Set(\"{fullPath}\", {propAccess}));");
+                sb.AppendLine($"                {builderVar}.Set(path_{prop.Symbol.Name}, {propAccess});");
                 break;
             case TypeCategory.String:
                 sb.AppendLine($"            if (!object.Equals({snapVar}.GetString(off_{prop.Symbol.Name}), {propAccess}))");
-                sb.AppendLine($"                {combinedVar} = ({combinedVar} == null) ? {builderVar}.Set(\"{fullPath}\", {propAccess}) : {builderVar}.Combine({combinedVar}, {builderVar}.Set(\"{fullPath}\", {propAccess}));");
+                sb.AppendLine($"                {builderVar}.Set(path_{prop.Symbol.Name}, {propAccess});");
                 break;
             case TypeCategory.Nullable:
                 var nMethod = GetReadMethod(prop.NestedType!);
                 sb.AppendLine($"            var snap_{prop.Symbol.Name} = {snapVar}.{nMethod}(off_{prop.Symbol.Name});");
                 sb.AppendLine($"            if (!object.Equals({propAccess}, snap_{prop.Symbol.Name}))");
-                sb.AppendLine($"                {combinedVar} = ({combinedVar} == null) ? {builderVar}.Set(\"{fullPath}\", {propAccess}) : {builderVar}.Combine({combinedVar}, {builderVar}.Set(\"{fullPath}\", {propAccess}));");
+                sb.AppendLine($"                {builderVar}.SetObject<{prop.Symbol.Type.ToDisplayString()}>(path_{prop.Symbol.Name}, {propAccess});");
                 break;
             case TypeCategory.Document:
-                // DEEP DIFFING: Recursively call BuildUpdate on the nested document
                 sb.AppendLine($"            if ({propAccess} != null)");
                 sb.AppendLine("            {");
                 sb.AppendLine($"                var nestedSnap_{prop.Symbol.Name} = {snapVar}.GetDocument(off_{prop.Symbol.Name}, arena);");
-                sb.AppendLine($"                var nestedUpdate = {prop.NestedType!.Name}.BuildUpdate({propAccess}, nestedSnap_{prop.Symbol.Name}, {builderVar}, arena);");
-                sb.AppendLine($"                if (nestedUpdate != null) {combinedVar} = ({combinedVar} == null) ? nestedUpdate : {builderVar}.Combine({combinedVar}, nestedUpdate);");
+                sb.AppendLine($"                {prop.NestedType!.Name}.BuildUpdate({propAccess}, nestedSnap_{prop.Symbol.Name}, ref {builderVar}, arena, path_{prop.Symbol.Name});");
                 sb.AppendLine("            }");
                 break;
+            case TypeCategory.Collection:
+                sb.AppendLine($"            {builderVar}.Set(path_{prop.Symbol.Name}, CollectionHelper<{prop.NestedType!.ToDisplayString()}>.ToBsonValue({propAccess}));");
+                break;
+            case TypeCategory.Dictionary:
+                sb.AppendLine($"            {builderVar}.Set(path_{prop.Symbol.Name}, DictionaryHelper<{prop.SecondaryNestedType!.ToDisplayString()}>.ToBsonValue({propAccess}));");
+                break;
             default:
-                sb.AppendLine($"            // Full set for complex type {prop.Category}");
-                sb.AppendLine($"            {combinedVar} = ({combinedVar} == null) ? {builderVar}.Set(\"{fullPath}\", {propAccess}) : {builderVar}.Combine({combinedVar}, {builderVar}.Set(\"{fullPath}\", {propAccess}));");
+                sb.AppendLine($"            {builderVar}.Set(path_{prop.Symbol.Name}, BsonValue.Create({propAccess}));");
                 break;
         }
         

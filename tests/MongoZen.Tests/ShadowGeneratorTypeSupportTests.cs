@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using MongoZen;
 using MongoZen.Bson;
+using MongoZen.ChangeTracking;
 using SharpArena.Allocators;
 using Xunit;
 using MongoDB.Bson;
@@ -67,15 +68,15 @@ public class ShadowGeneratorTypeSupportTests
         doc.EnumProp = TestEnum.Value2;
         doc.DecimalProp = 789.012m;
 
-        var builder = Builders<BsonDocument>.Update;
-        var update = TypeSupportDoc.BuildUpdate(doc, snapshot, builder, arena);
+        var builder = new ArenaUpdateDefinitionBuilder(arena);
+        TypeSupportDoc.BuildUpdate(doc, snapshot, ref builder, arena, default);
 
-        Assert.NotNull(update);
-        var rendered = update.Render(new RenderArgs<BsonDocument>(BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(), BsonSerializer.SerializerRegistry));
-        var json = rendered.ToString();
+        Assert.True(builder.HasChanges);
+        var update = builder.Build();
         
-        Assert.Contains("EnumProp", json);
-        Assert.Contains("DecimalProp", json);
-        Assert.DoesNotContain("GuidProp", json);
+        var setDoc = update.GetDocument("$set".AsSpan(), arena);
+        Assert.Equal((int)TestEnum.Value2, setDoc.GetInt32("EnumProp".AsSpan()));
+        Assert.Equal(789.012m, setDoc.GetDecimal128("DecimalProp".AsSpan()));
+        Assert.False(setDoc.ContainsKey("GuidProp".AsSpan()));
     }
 }
