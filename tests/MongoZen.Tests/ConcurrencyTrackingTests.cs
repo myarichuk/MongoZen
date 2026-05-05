@@ -30,7 +30,7 @@ public class ConcurrencyTrackingTests
     [Fact]
     public void Should_Inject_Initial_ETag_On_Insert()
     {
-        var tracker = new ChangeTracker(_allocator);
+        var tracker = new ChangeTracker(new DocumentConventions(), _allocator);
         var entity = new ConcurrencyEntity { Id = 1, Name = "New" };
         
         tracker.Track(entity);
@@ -38,7 +38,7 @@ public class ConcurrencyTrackingTests
         
         var updates = groupedUpdates.Values.First();
         var insertOp = updates.First();
-        Assert.IsType<InsertOperation<ConcurrencyEntity>>(insertOp);
+        Assert.IsType<InsertOperation>(insertOp);
         
         // ETag should have been set on the entity
         Assert.NotEqual(Guid.Empty, entity.Version);
@@ -52,7 +52,7 @@ public class ConcurrencyTrackingTests
     [Fact]
     public void Should_Include_ETag_In_Update_Filter()
     {
-        var tracker = new ChangeTracker(_allocator);
+        var tracker = new ChangeTracker(new DocumentConventions(), _allocator);
         var initialETag = Guid.NewGuid();
         var entity = new ConcurrencyEntity { Id = 1, Name = "Original", Version = initialETag };
         
@@ -94,7 +94,7 @@ public class ConcurrencyTrackingTests
     [Fact]
     public void Should_Handle_Hidden_ETag_Update()
     {
-        var tracker = new ChangeTracker(_allocator);
+        var tracker = new ChangeTracker(new DocumentConventions(), _allocator);
         var initialETag = Guid.NewGuid();
         var entity = new HiddenConcurrencyEntity { Id = 1, Name = "Original" };
         
@@ -151,7 +151,7 @@ public class ConcurrencyTrackingTests
     [Fact]
     public void Should_Not_Update_If_No_Changes_Detected()
     {
-        var tracker = new ChangeTracker(_allocator);
+        var tracker = new ChangeTracker(new DocumentConventions(), _allocator);
         var initialETag = Guid.NewGuid();
         var entity = new ConcurrencyEntity { Id = 1, Name = "Original", Version = initialETag };
         

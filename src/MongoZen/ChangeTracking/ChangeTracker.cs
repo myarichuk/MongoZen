@@ -9,7 +9,7 @@ using SharpArena.Allocators;
 
 namespace MongoZen.ChangeTracking;
 
-public sealed class ChangeTracker(ArenaAllocator arena)
+public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocator arena)
 {
     private ArenaAllocator _arena = arena;
     private readonly ConcurrentDictionary<object, EntityEntry> _trackedEntities = new();
@@ -17,7 +17,10 @@ public sealed class ChangeTracker(ArenaAllocator arena)
     public void Track<T>(T entity, BlittableBsonDocument? snapshot = null)
     // ... rest of Track method ...
     {
-        if (entity == null) throw new ArgumentNullException(nameof(entity));
+        if (entity == null)
+        {
+            throw new ArgumentNullException(nameof(entity));
+        }
 
         var entry = new EntityEntry
         {
@@ -37,7 +40,10 @@ public sealed class ChangeTracker(ArenaAllocator arena)
 
     public void Track(object entity, Guid expectedEtag)
     {
-        if (entity == null) throw new ArgumentNullException(nameof(entity));
+        if (entity == null)
+        {
+            throw new ArgumentNullException(nameof(entity));
+        }
 
         _trackedEntities[entity] = new EntityEntry
         {
@@ -50,19 +56,30 @@ public sealed class ChangeTracker(ArenaAllocator arena)
 
     public void Evict(object entity)
     {
-        if (entity == null) return;
+        if (entity == null)
+        {
+            return;
+        }
+
         _trackedEntities.TryRemove(entity, out _);
     }
 
     public Guid? GetExpectedETag(object entity)
     {
-        if (entity == null) return null;
+        if (entity == null)
+        {
+            return null;
+        }
+
         return _trackedEntities.TryGetValue(entity, out var entry) ? entry.ExpectedETag : null;
     }
 
     public void TrackDelete<T>(T entity)
     {
-        if (entity == null) throw new ArgumentNullException(nameof(entity));
+        if (entity == null)
+        {
+            throw new ArgumentNullException(nameof(entity));
+        }
 
         if (_trackedEntities.TryGetValue(entity, out var entry))
         {
@@ -116,27 +133,32 @@ public sealed class ChangeTracker(ArenaAllocator arena)
         {
             foreach (var entry in _trackedEntities.Values)
             {
-                if (entry.IsDeleted && entry.IsNew)
+                if (entry is { IsDeleted: true, IsNew: true })
                 {
                     // Entity was added and deleted in the same session without being persisted.
                     continue;
                 }
 
-                var collectionName = DocumentTypeTracker.GetDefaultCollectionName(entry.Type);
+                var collectionName = conventions.GetCollectionName(entry.Type);
                 IPendingUpdate? update = null;
 
                 if (entry.IsDeleted)
                 {
                     var id = EntityIdAccessor.GetId(entry.Entity);
-                    update = new DeleteOperation(id!, entry.ExpectedETag ?? Guid.Empty, collectionName, entry.Entity);
+                    update = new DeleteOperation(id!, entry.ExpectedETag ?? Guid.Empty, collectionName, entry.Entity, conventions);
                 }
                 else if (entry.IsNew)
                 {
                     var newEtag = Guid.NewGuid();
-                    if (entry.HasConcurrencyCheck) entry.SetNewETag(newEtag);
-                    
-                    var operationType = typeof(InsertOperation<>).MakeGenericType(entry.Type);
-                    update = (IPendingUpdate)Activator.CreateInstance(operationType, [entry.Entity, newEtag, collectionName])!;
+                    if (entry.HasConcurrencyCheck)
+                    {
+                        entry.SetNewETag(newEtag);
+                    }
+
+                    var writer = new ArenaBsonWriter(_arena);
+                    entry.UpdateSnapshot(ref writer, _arena);
+
+                    update = new InsertOperation(entry.Snapshot!.Value, collectionName, entry.Entity, conventions);
                 }
                 else
                 {
@@ -158,7 +180,7 @@ public sealed class ChangeTracker(ArenaAllocator arena)
 
                         var updateDoc = builder.Build();
                         var id = EntityIdAccessor.GetId(entry.Entity);
-                        update = new UpdateOperation(id!, entry.ExpectedETag ?? Guid.Empty, updateDoc, collectionName, entry.Entity);
+                        update = new UpdateOperation(id!, entry.ExpectedETag ?? Guid.Empty, updateDoc, collectionName, entry.Entity, conventions);
                     }
                 }
 
@@ -195,14 +217,16 @@ public sealed class ChangeTracker(ArenaAllocator arena)
 
         public void SetNewETag(Guid etag) => GetDispatcher().SetETag(Entity, etag);
 
-        public void UpdateSnapshot(ref ArenaBsonWriter writer, ArenaAllocator arena)
-        {
+        public void UpdateSnapshot(ref ArenaBsonWriter writer, ArenaAllocator arena) => 
             GetDispatcher().UpdateSnapshot(this, ref writer, arena);
-        }
 
         public void BuildUpdate(ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
         {
-            if (Snapshot == null) return;
+            if (Snapshot == null)
+            {
+                return;
+            }
+
             GetDispatcher().BuildUpdate(this, ref builder, arena, pathPrefix);
         }
 
@@ -222,13 +246,16 @@ public sealed class ChangeTracker(ArenaAllocator arena)
         private class EntityDispatcher<T> : IEntityDispatcher
         {
             private static readonly Action<T, Guid>? ETagSetter = CompileETagSetter();
-
+            
             private static Action<T, Guid>? CompileETagSetter()
             {
                 var prop = typeof(T).GetProperties()
                     .FirstOrDefault(p => p.GetCustomAttribute<ConcurrencyCheckAttribute>() != null);
                 
-                if (prop == null || prop.PropertyType != typeof(Guid) || !prop.CanWrite) return null;
+                if (prop == null || prop.PropertyType != typeof(Guid) || !prop.CanWrite)
+                {
+                    return null;
+                }
 
                 var entityParam = Expression.Parameter(typeof(T), "entity");
                 var etagParam = Expression.Parameter(typeof(Guid), "etag");
@@ -238,10 +265,8 @@ public sealed class ChangeTracker(ArenaAllocator arena)
 
             public bool HasConcurrencyCheck => ETagSetter != null;
 
-            public void SetETag(object entity, Guid etag)
-            {
+            public void SetETag(object entity, Guid etag) => 
                 ETagSetter?.Invoke((T)entity, etag);
-            }
 
             public void UpdateSnapshot(EntityEntry entry, ref ArenaBsonWriter writer, ArenaAllocator arena)
             {
@@ -259,8 +284,8 @@ public sealed class ChangeTracker(ArenaAllocator arena)
 
         private static class EntityDispatcherCache
         {
-            private static readonly ConcurrentDictionary<Type, IEntityDispatcher> _cache = new();
-            public static IEntityDispatcher Get(Type type) => _cache.GetOrAdd(type, t => 
+            private static readonly ConcurrentDictionary<Type, IEntityDispatcher> Cache = new();
+            public static IEntityDispatcher Get(Type type) => Cache.GetOrAdd(type, t => 
                 (IEntityDispatcher)Activator.CreateInstance(typeof(EntityDispatcher<>).MakeGenericType(t))!);
         }
     }
@@ -273,26 +298,13 @@ public interface IPendingUpdate
     Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct);
 }
 
-public sealed class InsertOperation<T>(T entity, Guid etag, string collectionName) : IPendingUpdate
+public sealed class InsertOperation(BlittableBsonDocument document, string collectionName, object entity, DocumentConventions conventions) : IPendingUpdate
 {
     public string CollectionName => collectionName;
 
     public WriteModel<BsonDocument> ToWriteModel()
     {
-        using var arena = new ArenaAllocator(1024);
-        var writer = new ArenaBsonWriter(arena);
-        DynamicBlittableSerializer<T>.SerializeDelegate(ref writer, entity);
-        var doc = writer.Commit(arena);
-        
-        var raw = new RawBsonDocument(doc.AsReadOnlySpan().ToArray());
-        if (!raw.Contains("_etag"))
-        {
-            var docWithEtag = new BsonDocument(raw);
-            docWithEtag["_etag"] = new BsonBinaryData(etag, GuidRepresentation.Standard);
-            return new InsertOneModel<BsonDocument>(docWithEtag);
-        }
-        
-        // Use new BsonDocument(raw) to avoid immutability issues with RawBsonDocument in the driver
+        var raw = new RawBsonDocument(document.AsReadOnlySpan().ToArray());
         return new InsertOneModel<BsonDocument>(new BsonDocument(raw));
     }
 
@@ -303,13 +315,17 @@ public sealed class InsertOperation<T>(T entity, Guid etag, string collectionNam
         var insertModel = (InsertOneModel<BsonDocument>)model;
 
         if (session != null)
+        {
             await collection.InsertOneAsync(session, insertModel.Document, cancellationToken: ct);
+        }
         else
+        {
             await collection.InsertOneAsync(insertModel.Document, cancellationToken: ct);
+        }
     }
 }
 
-public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonDocument update, string collectionName, object entity) : IPendingUpdate
+public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonDocument update, string collectionName, object entity, DocumentConventions conventions) : IPendingUpdate
 {
     public string CollectionName => collectionName;
     public object Id => id;
@@ -318,10 +334,10 @@ public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonD
 
     public WriteModel<BsonDocument> ToWriteModel()
     {
-        var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+        var filter = Builders<BsonDocument>.Filter.Eq("_id", conventions.CreateBsonValue(id));
         if (expectedEtag != Guid.Empty)
         {
-            filter = Builders<BsonDocument>.Filter.And(filter, Builders<BsonDocument>.Filter.Eq("_etag", expectedEtag));
+            filter = Builders<BsonDocument>.Filter.And(filter, Builders<BsonDocument>.Filter.Eq("_etag", conventions.CreateBsonValue(expectedEtag)));
         }
         var updateDoc = new RawBsonDocument(update.AsReadOnlySpan().ToArray());
         return new UpdateOneModel<BsonDocument>(filter, updateDoc);
@@ -334,13 +350,17 @@ public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonD
         var updateModel = (UpdateOneModel<BsonDocument>)model;
         
         if (session != null)
+        {
             await collection.UpdateOneAsync(session, updateModel.Filter, updateModel.Update, cancellationToken: ct);
+        }
         else
+        {
             await collection.UpdateOneAsync(updateModel.Filter, updateModel.Update, cancellationToken: ct);
+        }
     }
 }
 
-public sealed class DeleteOperation(object id, Guid expectedEtag, string collectionName, object entity) : IPendingUpdate
+public sealed class DeleteOperation(object id, Guid expectedEtag, string collectionName, object entity, DocumentConventions conventions) : IPendingUpdate
 {
     public string CollectionName => collectionName;
     public object Id => id;
@@ -349,10 +369,10 @@ public sealed class DeleteOperation(object id, Guid expectedEtag, string collect
 
     public WriteModel<BsonDocument> ToWriteModel()
     {
-        var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+        var filter = Builders<BsonDocument>.Filter.Eq("_id", conventions.CreateBsonValue(id));
         if (expectedEtag != Guid.Empty)
         {
-            filter = Builders<BsonDocument>.Filter.And(filter, Builders<BsonDocument>.Filter.Eq("_etag", expectedEtag));
+            filter = Builders<BsonDocument>.Filter.And(filter, Builders<BsonDocument>.Filter.Eq("_etag", conventions.CreateBsonValue(expectedEtag)));
         }
         return new DeleteOneModel<BsonDocument>(filter);
     }
@@ -364,8 +384,12 @@ public sealed class DeleteOperation(object id, Guid expectedEtag, string collect
         var deleteModel = (DeleteOneModel<BsonDocument>)model;
         
         if (session != null)
+        {
             await collection.DeleteOneAsync(session, deleteModel.Filter, cancellationToken: ct);
+        }
         else
+        {
             await collection.DeleteOneAsync(deleteModel.Filter, cancellationToken: ct);
+        }
     }
 }
