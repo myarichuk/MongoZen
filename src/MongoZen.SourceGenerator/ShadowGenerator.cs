@@ -245,6 +245,17 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine("    }");
         sb.AppendLine();
 
+        // DeserializeInto
+        sb.AppendLine($"    public static void DeserializeInto(BlittableBsonDocument doc, ArenaAllocator arena, {info.Name} entity)");
+        sb.AppendLine("    {");
+        foreach (var prop in info.Properties)
+        {
+            if (prop.Symbol.SetMethod == null) continue;
+            GenerateReadCall(sb, prop, "entity." + prop.Symbol.Name, "doc", "arena");
+        }
+        sb.AppendLine("    }");
+        sb.AppendLine();
+
         // BuildUpdate
         sb.AppendLine($"    public static void BuildUpdate({info.Name} entity, BlittableBsonDocument snapshot, ref ArenaUpdateDefinitionBuilder builder, SharpArena.Allocators.ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)");
         sb.AppendLine("    {");

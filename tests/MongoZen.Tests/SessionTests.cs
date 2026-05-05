@@ -3,6 +3,7 @@ using MongoZen;
 using MongoDB.Driver;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Attributes;
 using MongoZen.Bson;
 using MongoZen.ChangeTracking;
 using Xunit;
@@ -174,6 +175,16 @@ public class SessionTests : IntegrationTestBase
     }
 }
 
+[Document]
+[BsonIgnoreExtraElements]
+public partial class SimpleEntity
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public int Age { get; set; }
+}
+
+[BsonIgnoreExtraElements]
 public partial class ComprehensiveEntity
 {
     public ObjectId Id { get; set; }
@@ -185,12 +196,4 @@ public partial class ComprehensiveEntity
     public string Text { get; set; } = "";
     public SimpleEntity Child { get; set; } = new();
     public List<int> Numbers { get; set; } = new();
-}
-
-[Document]
-public partial class SimpleEntity
-{
-    public int Id { get; set; }
-    public string Name { get; set; } = "";
-    public int Age { get; set; }
 }

@@ -277,12 +277,13 @@ public sealed class InsertOperation<T>(T entity, Guid etag, string collectionNam
         var raw = new RawBsonDocument(doc.AsReadOnlySpan().ToArray());
         if (!raw.Contains("_etag"))
         {
-            var docWithEtag = raw.ToBsonDocument();
-            docWithEtag["_etag"] = BsonValue.Create(etag);
+            var docWithEtag = new BsonDocument(raw);
+            docWithEtag["_etag"] = new BsonBinaryData(etag, GuidRepresentation.Standard);
             return new InsertOneModel<BsonDocument>(docWithEtag);
         }
         
-        return new InsertOneModel<BsonDocument>(raw);
+        // Use new BsonDocument(raw) to avoid immutability issues with RawBsonDocument in the driver
+        return new InsertOneModel<BsonDocument>(new BsonDocument(raw));
     }
 
     public async Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct)
@@ -307,10 +308,11 @@ public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonD
 
     public WriteModel<BsonDocument> ToWriteModel()
     {
-        var filter = Builders<BsonDocument>.Filter.And(
-            Builders<BsonDocument>.Filter.Eq("_id", id),
-            Builders<BsonDocument>.Filter.Eq("_etag", expectedEtag)
-        );
+        var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+        if (expectedEtag != Guid.Empty)
+        {
+            filter = Builders<BsonDocument>.Filter.And(filter, Builders<BsonDocument>.Filter.Eq("_etag", expectedEtag));
+        }
         var updateDoc = new RawBsonDocument(update.AsReadOnlySpan().ToArray());
         return new UpdateOneModel<BsonDocument>(filter, updateDoc);
     }
@@ -337,10 +339,11 @@ public sealed class DeleteOperation(object id, Guid expectedEtag, string collect
 
     public WriteModel<BsonDocument> ToWriteModel()
     {
-        var filter = Builders<BsonDocument>.Filter.And(
-            Builders<BsonDocument>.Filter.Eq("_id", id),
-            Builders<BsonDocument>.Filter.Eq("_etag", expectedEtag)
-        );
+        var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+        if (expectedEtag != Guid.Empty)
+        {
+            filter = Builders<BsonDocument>.Filter.And(filter, Builders<BsonDocument>.Filter.Eq("_etag", expectedEtag));
+        }
         return new DeleteOneModel<BsonDocument>(filter);
     }
 

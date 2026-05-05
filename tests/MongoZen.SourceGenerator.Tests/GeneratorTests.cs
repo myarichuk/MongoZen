@@ -16,7 +16,8 @@ public interface IBlittableDocument<T>
 {
     static abstract void Serialize(ref MongoZen.Bson.ArenaBsonWriter writer, T entity);
     static abstract T Deserialize(MongoZen.Bson.BlittableBsonDocument doc, SharpArena.Allocators.ArenaAllocator arena);
-    static abstract MongoDB.Driver.UpdateDefinition<MongoDB.Bson.BsonDocument>? BuildUpdate(T entity, MongoZen.Bson.BlittableBsonDocument snapshot, MongoDB.Driver.UpdateDefinitionBuilder<MongoDB.Bson.BsonDocument> builder);
+    static abstract void DeserializeInto(MongoZen.Bson.BlittableBsonDocument doc, SharpArena.Allocators.ArenaAllocator arena, T entity);
+    static abstract void BuildUpdate(T entity, MongoZen.Bson.BlittableBsonDocument snapshot, ref MongoZen.ChangeTracking.ArenaUpdateDefinitionBuilder builder, SharpArena.Allocators.ArenaAllocator arena, System.ReadOnlySpan<char> pathPrefix);
 }
 ";
 
@@ -33,6 +34,13 @@ public struct BlittableBsonDocument {
     public int GetInt32(int offset) => 0;
     public string GetString(int offset) => """";
     public BlittableBsonDocument GetDocument(int offset, SharpArena.Allocators.ArenaAllocator arena) => default;
+}
+";
+
+    private const string ChangeTrackingSource = @"
+namespace MongoZen.ChangeTracking;
+public struct ArenaUpdateDefinitionBuilder {
+    public void Set<T>(System.ReadOnlySpan<char> path, T value) {}
 }
 ";
 
@@ -56,7 +64,7 @@ public partial class SimpleEntity
         {
             TestState =
             {
-                Sources = { AttributeSource, BsonEngineSource, inputSource },
+                Sources = { AttributeSource, BsonEngineSource, ChangeTrackingSource, inputSource },
                 GeneratedSources =
                 {
                     (typeof(ShadowGenerator), "SimpleEntity.Blittable.g.cs", @"#nullable enable
@@ -65,6 +73,7 @@ using System.Collections.Generic;
 using System.Linq;
 using MongoZen;
 using MongoZen.Bson;
+using MongoZen.ChangeTracking;
 using SharpArena.Allocators;
 using MongoDB.Driver;
 using MongoDB.Bson;
@@ -95,20 +104,40 @@ partial class SimpleEntity : IBlittableDocument<SimpleEntity>
         return entity;
     }
 
-    public static UpdateDefinition<BsonDocument>? BuildUpdate(SimpleEntity entity, BlittableBsonDocument snapshot, UpdateDefinitionBuilder<BsonDocument> builder)
+    public static void DeserializeInto(BlittableBsonDocument doc, ArenaAllocator arena, SimpleEntity entity)
     {
-        UpdateDefinition<BsonDocument>? combined = null;
+        if (doc.TryGetElementOffset(""_id"", out var offset_Id))
+        {
+            entity.Id = doc.GetInt32(offset_Id);
+        }
+        if (doc.TryGetElementOffset(""Name"", out var offset_Name))
+        {
+            entity.Name = doc.GetString(offset_Name);
+        }
+    }
+
+    public static void BuildUpdate(SimpleEntity entity, BlittableBsonDocument snapshot, ref ArenaUpdateDefinitionBuilder builder, SharpArena.Allocators.ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
+    {
         if (snapshot.TryGetElementOffset(""_id"", out var off_Id))
         {
+            Span<char> fullPath_Id = stackalloc char[pathPrefix.Length + 3 + 1];
+            int len_Id = 0;
+            if (pathPrefix.Length > 0) { pathPrefix.CopyTo(fullPath_Id); fullPath_Id[pathPrefix.Length] = '.'; len_Id = pathPrefix.Length + 1; }
+            ""_id"".AsSpan().CopyTo(fullPath_Id.Slice(len_Id));
+            var path_Id = fullPath_Id.Slice(0, len_Id + 3);
             if (entity.Id != snapshot.GetInt32(off_Id))
-                combined = (combined == null) ? builder.Set(""_id"", entity.Id) : builder.Combine(combined, builder.Set(""_id"", entity.Id));
+                builder.Set(path_Id, entity.Id);
         }
         if (snapshot.TryGetElementOffset(""Name"", out var off_Name))
         {
+            Span<char> fullPath_Name = stackalloc char[pathPrefix.Length + 4 + 1];
+            int len_Name = 0;
+            if (pathPrefix.Length > 0) { pathPrefix.CopyTo(fullPath_Name); fullPath_Name[pathPrefix.Length] = '.'; len_Name = pathPrefix.Length + 1; }
+            ""Name"".AsSpan().CopyTo(fullPath_Name.Slice(len_Name));
+            var path_Name = fullPath_Name.Slice(0, len_Name + 4);
             if (!object.Equals(snapshot.GetString(off_Name), entity.Name))
-                combined = (combined == null) ? builder.Set(""Name"", entity.Name) : builder.Combine(combined, builder.Set(""Name"", entity.Name));
+                builder.Set(path_Name, entity.Name);
         }
-        return combined;
     }
 }
 ")

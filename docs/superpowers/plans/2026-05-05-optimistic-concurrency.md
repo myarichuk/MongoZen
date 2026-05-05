@@ -90,11 +90,10 @@ Should reload from DB, update POCO, and reset the `ChangeTracker` snapshot/ETag.
 **Files:**
 - Modify: `src/MongoZen/DocumentSession.cs`
 
-- [ ] **Step 1: Detect MatchedCount mismatch after BulkWriteAsync**
-- [ ] **Step 2: Implement `IdentifyConcurrencyConflictAsync`**
-Private helper that queries the DB for current ETags of the batch IDs to find the mismatching entity.
-- [ ] **Step 3: Throw precise ConcurrencyException**
-- [ ] **Step 4: Commit**
+- [x] **Step 1: Detect MatchedCount mismatch after BulkWriteAsync**
+- [x] **Step 2: Implement `IdentifyConcurrencyConflictAsync`**
+- [x] **Step 3: Throw precise ConcurrencyException**
+- [x] **Step 4: Commit**
 
 ---
 

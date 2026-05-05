@@ -43,13 +43,7 @@ public sealed class DocumentStore : IDisposable
 
     private ClusterFeatures GetOrDiscoverFeatures(string key)
     {
-        return TopologyCache.GetOrAdd(key, _ =>
-        {
-            // Eager discovery or lazy? 
-            // For now, let's assume we'll discover on first transaction start
-            // and update the object.
-            return new ClusterFeatures();
-        });
+        return new ClusterFeatures();
     }
 
     /// <summary>

@@ -38,11 +38,11 @@ public abstract class IntegrationTestBase : IAsyncLifetime
 
         if (!connectionString.Contains("replicaSet="))
         {
-            connectionString += (connectionString.Contains("?") ? "&" : "?") + "replicaSet=rs0&directConnection=true";      
+            connectionString += (connectionString.Contains("?") ? "&" : "?") + "replicaSet=rs0";      
         }
-        else if (!connectionString.Contains("directConnection="))
+        else if (connectionString.Contains("directConnection=true"))
         {
-            connectionString += "&directConnection=true";
+            connectionString = connectionString.Replace("directConnection=true", "directConnection=false");
         }
 
         var client = new MongoClient(connectionString);
