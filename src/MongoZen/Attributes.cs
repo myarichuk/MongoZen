@@ -21,3 +21,9 @@ public sealed class DocumentAttribute : Attribute
     /// </summary>
     public string? CollectionName { get; set; }
 }
+
+/// <summary>
+/// Specifies that this property should be used for optimistic concurrency checks.
+/// </summary>
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class ConcurrencyCheckAttribute : Attribute { }
