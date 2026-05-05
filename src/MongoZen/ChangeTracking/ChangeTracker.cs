@@ -93,51 +93,53 @@ public sealed class ChangeTracker(ArenaAllocator arena)
             }
 
             var collectionName = DocumentTypeTracker.GetDefaultCollectionName(entry.Type);
-            if (!groups.TryGetValue(collectionName, out var updates))
-            {
-                updates = new List<IPendingUpdate>();
-                groups[collectionName] = updates;
-            }
+            IPendingUpdate? update = null;
 
             if (entry.IsDeleted)
             {
                 var id = EntityIdAccessor.GetId(entry.Entity);
-                updates.Add(new DeleteOperation(id!, collectionName));
-                continue;
+                update = new DeleteOperation(id!, entry.ExpectedETag ?? Guid.Empty, collectionName);
             }
-
-            if (entry.IsNew)
+            else if (entry.IsNew)
             {
                 var newEtag = Guid.NewGuid();
                 if (entry.HasConcurrencyCheck) entry.SetNewETag(newEtag);
                 
                 var operationType = typeof(InsertOperation<>).MakeGenericType(entry.Type);
-                updates.Add((IPendingUpdate)Activator.CreateInstance(operationType, [entry.Entity, newEtag, collectionName])!);
-                continue;
-            }
-
-            var builder = new ArenaUpdateDefinitionBuilder(_arena);
-            var nextEtag = Guid.NewGuid();
-
-            // If we have concurrency check, generate a new ETag and set it on the POCO
-            // so it's included in the update.
-            if (entry.HasConcurrencyCheck)
-            {
-                entry.SetNewETag(nextEtag);
+                update = (IPendingUpdate)Activator.CreateInstance(operationType, [entry.Entity, newEtag, collectionName])!;
             }
             else
             {
-                // For hidden ETag, manually add it to the update.
-                builder.Set("_etag", nextEtag);
+                var builder = new ArenaUpdateDefinitionBuilder(_arena);
+                entry.BuildUpdate(ref builder, _arena, default);
+                
+                if (builder.HasChanges)
+                {
+                    var nextEtag = Guid.NewGuid();
+                    // If we have concurrency check, generate a new ETag and set it on the POCO
+                    // so it's included in the update.
+                    if (entry.HasConcurrencyCheck)
+                    {
+                        entry.SetNewETag(nextEtag);
+                    }
+                    
+                    // Always add the ETag update to the builder if we have changes
+                    builder.Set("_etag", nextEtag);
+
+                    var updateDoc = builder.Build();
+                    var id = EntityIdAccessor.GetId(entry.Entity);
+                    update = new UpdateOperation(id!, entry.ExpectedETag ?? Guid.Empty, updateDoc, collectionName);
+                }
             }
 
-            entry.BuildUpdate(ref builder, _arena, default);
-            
-            if (builder.HasChanges)
+            if (update != null)
             {
-                var updateDoc = builder.Build();
-                var id = EntityIdAccessor.GetId(entry.Entity);
-                updates.Add(new UpdateOperation(id!, entry.ExpectedETag ?? Guid.Empty, updateDoc, collectionName));
+                if (!groups.TryGetValue(collectionName, out var updates))
+                {
+                    updates = new List<IPendingUpdate>();
+                    groups[collectionName] = updates;
+                }
+                updates.Add(update);
             }
         }
         return groups;
@@ -298,24 +300,29 @@ public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonD
     }
 }
 
-public sealed class DeleteOperation(object id, string collectionName) : IPendingUpdate
+public sealed class DeleteOperation(object id, Guid expectedEtag, string collectionName) : IPendingUpdate
 {
     public string CollectionName => collectionName;
     public object Id => id;
 
     public WriteModel<BsonDocument> ToWriteModel()
     {
-        return new DeleteOneModel<BsonDocument>(Builders<BsonDocument>.Filter.Eq("_id", id));
+        var filter = Builders<BsonDocument>.Filter.And(
+            Builders<BsonDocument>.Filter.Eq("_id", id),
+            Builders<BsonDocument>.Filter.Eq("_etag", expectedEtag)
+        );
+        return new DeleteOneModel<BsonDocument>(filter);
     }
 
     public async Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct)
     {
         var collection = database.GetCollection<BsonDocument>(collectionName);
-        var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+        var model = ToWriteModel();
+        var deleteModel = (DeleteOneModel<BsonDocument>)model;
         
         if (session != null)
-            await collection.DeleteOneAsync(session, filter, cancellationToken: ct);
+            await collection.DeleteOneAsync(session, deleteModel.Filter, cancellationToken: ct);
         else
-            await collection.DeleteOneAsync(filter, cancellationToken: ct);
+            await collection.DeleteOneAsync(deleteModel.Filter, cancellationToken: ct);
     }
 }

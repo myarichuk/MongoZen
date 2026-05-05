@@ -13,7 +13,7 @@ public abstract class IntegrationTestBase : IAsyncLifetime
         {
             MongoDB.Bson.Serialization.BsonSerializer.RegisterSerializer(new MongoDB.Bson.Serialization.Serializers.GuidSerializer(GuidRepresentation.Standard));
         }
-        catch (InvalidOperationException)
+        catch (MongoDB.Bson.BsonSerializationException)
         {
             // Already registered
         }

@@ -130,6 +130,35 @@ public class ConcurrencyTrackingTests
         Assert.True(updateDoc["$set"].AsBsonDocument.Contains("_etag"));
         Assert.NotEqual(initialETag, updateDoc["$set"]["_etag"].AsGuid);
     }
+
+    [Fact]
+    public void Should_Not_Update_If_No_Changes_Detected()
+    {
+        var tracker = new ChangeTracker(_allocator);
+        var initialETag = Guid.NewGuid();
+        var entity = new ConcurrencyEntity { Id = 1, Name = "Original", Version = initialETag };
+        
+        // Create a snapshot that has the initial ETag
+        using var tempArena = new ArenaAllocator(1024);
+        var writer = new ArenaBsonWriter(tempArena);
+        writer.WriteStartDocument();
+        writer.WriteInt32("_id", 1);
+        writer.WriteString("Name", "Original".AsSpan());
+        writer.WriteGuid("_etag", initialETag);
+        writer.WriteEndDocument();
+        var snapshot = writer.Commit(tempArena);
+        
+        tracker.Track(entity, snapshot);
+        
+        // No changes to entity
+        var groupedUpdates = tracker.GetGroupedUpdates();
+        
+        // No updates should be generated
+        Assert.Empty(groupedUpdates);
+        
+        // ETag should NOT have been updated on the entity
+        Assert.Equal(initialETag, entity.Version);
+    }
 }
 
 [Document]
