@@ -132,6 +132,23 @@ public class ConcurrencyTrackingTests
     }
 
     [Fact]
+    public void Should_Deserialize_ETag_Into_Property()
+    {
+        var expectedETag = Guid.NewGuid();
+        using var tempArena = new ArenaAllocator(1024);
+        var writer = new ArenaBsonWriter(tempArena);
+        writer.WriteStartDocument();
+        writer.WriteInt32("_id", 1);
+        writer.WriteGuid("_etag", expectedETag);
+        writer.WriteEndDocument();
+        var snapshot = writer.Commit(tempArena);
+
+        var entity = DynamicBlittableSerializer<ConcurrencyEntity>.DeserializeDelegate(snapshot, tempArena);
+        
+        Assert.Equal(expectedETag, entity.Version);
+    }
+
+    [Fact]
     public void Should_Not_Update_If_No_Changes_Detected()
     {
         var tracker = new ChangeTracker(_allocator);

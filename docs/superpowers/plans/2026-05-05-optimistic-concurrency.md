@@ -39,9 +39,9 @@ public sealed class ConcurrencyException : Exception
 **Files:**
 - Modify: `src/MongoZen/ChangeTracking/ChangeTracker.cs`
 
-- [ ] **Step 1: Add ETag to EntityEntry**
+- [x] **Step 1: Add ETag to EntityEntry**
 Update `EntityEntry` internal class to have a `Guid? ExpectedETag` property.
-- [ ] **Step 2: Update UpdateOperation to use ETag filter**
+- [x] **Step 2: Update UpdateOperation to use ETag filter**
 ```csharp
 public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonDocument update, string collectionName) : IPendingUpdate
 {
@@ -56,9 +56,9 @@ public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonD
     }
 }
 ```
-- [ ] **Step 3: Update InsertOperation to inject initial ETag**
+- [x] **Step 3: Update InsertOperation to inject initial ETag**
 Ensure the `_etag` is generated and injected into the BSON during the `InsertOperation`.
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ---
 
@@ -66,10 +66,10 @@ Ensure the `_etag` is generated and injected into the BSON during the `InsertOpe
 **Files:**
 - Modify: `src/MongoZen/Bson/DynamicBlittableSerializer.cs`
 
-- [ ] **Step 1: Add logic to detect [ConcurrencyCheck] property in `PrepareSerializer`**
-- [ ] **Step 2: Update Deserialization to read `_etag` into the marked property**
-- [ ] **Step 3: Update Serialization to ensure `_etag` is NOT overwritten by the POCO value (database wins)**
-- [ ] **Step 4: Commit**
+- [x] **Step 1: Add logic to detect [ConcurrencyCheck] property in `PrepareSerializer`**
+- [x] **Step 2: Update Deserialization to read `_etag` into the marked property**
+- [x] **Step 3: Update Serialization to ensure `_etag` is NOT overwritten by the POCO value (database wins)**
+- [x] **Step 4: Commit**
 
 ---
 

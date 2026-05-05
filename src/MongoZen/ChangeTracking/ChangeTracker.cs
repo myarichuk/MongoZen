@@ -33,6 +33,31 @@ public sealed class ChangeTracker(ArenaAllocator arena)
         _trackedEntities[entity] = entry;
     }
 
+    public void Track(object entity, Guid expectedEtag)
+    {
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        _trackedEntities[entity] = new EntityEntry
+        {
+            Entity = entity,
+            Type = entity.GetType(),
+            ExpectedETag = expectedEtag,
+            IsNew = false
+        };
+    }
+
+    public void Evict(object entity)
+    {
+        if (entity == null) return;
+        _trackedEntities.TryRemove(entity, out _);
+    }
+
+    public Guid? GetExpectedETag(object entity)
+    {
+        if (entity == null) return null;
+        return _trackedEntities.TryGetValue(entity, out var entry) ? entry.ExpectedETag : null;
+    }
+
     public void TrackDelete<T>(T entity)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));

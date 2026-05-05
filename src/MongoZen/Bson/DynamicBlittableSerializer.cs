@@ -16,9 +16,11 @@ public static class DynamicBlittableSerializer<T>
 {
     public delegate void SerializeAction(ref ArenaBsonWriter writer, T value);
     public delegate void BuildUpdateAction(T entity, BlittableBsonDocument snapshot, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix);
+    public delegate void DeserializeIntoAction(BlittableBsonDocument doc, ArenaAllocator arena, T instance);
     
     public static readonly SerializeAction SerializeDelegate;
     public static readonly Func<BlittableBsonDocument, ArenaAllocator, T> DeserializeDelegate;
+    public static readonly DeserializeIntoAction DeserializeIntoDelegate;
     public static readonly BuildUpdateAction BuildUpdateDelegate;
 
     static DynamicBlittableSerializer()
@@ -27,12 +29,14 @@ public static class DynamicBlittableSerializer<T>
         {
             SerializeDelegate = CompileTier1Serialize();
             DeserializeDelegate = CompileTier1Deserialize();
+            DeserializeIntoDelegate = CompileTier1DeserializeInto();
             BuildUpdateDelegate = CompileTier1BuildUpdate();
         }
         else
         {
             SerializeDelegate = Emitter.CompileSerializer();
             DeserializeDelegate = Emitter.CompileDeserializer();
+            DeserializeIntoDelegate = Emitter.CompileDeserializerInto();
             BuildUpdateDelegate = Emitter.CompileUpdateBuilder();
         }
     }
@@ -51,6 +55,19 @@ public static class DynamicBlittableSerializer<T>
         var arenaParam = Expression.Parameter(typeof(ArenaAllocator), "arena");
         var method = typeof(T).GetMethod("Deserialize", [typeof(BlittableBsonDocument), typeof(ArenaAllocator)])!;
         return Expression.Lambda<Func<BlittableBsonDocument, ArenaAllocator, T>>(Expression.Call(null, method, docParam, arenaParam), docParam, arenaParam).Compile();
+    }
+
+    private static DeserializeIntoAction CompileTier1DeserializeInto()
+    {
+        var docParam = Expression.Parameter(typeof(BlittableBsonDocument), "doc");
+        var arenaParam = Expression.Parameter(typeof(ArenaAllocator), "arena");
+        var instanceParam = Expression.Parameter(typeof(T), "instance");
+        var method = typeof(T).GetMethod("DeserializeInto", [typeof(BlittableBsonDocument), typeof(ArenaAllocator), typeof(T)])!;
+        if (method == null)
+        {
+            return Emitter.CompileDeserializerInto();
+        }
+        return Expression.Lambda<DeserializeIntoAction>(Expression.Call(null, method, docParam, arenaParam, instanceParam), docParam, arenaParam, instanceParam).Compile();
     }
 
     private static BuildUpdateAction CompileTier1BuildUpdate()
@@ -195,16 +212,31 @@ public static class DynamicBlittableSerializer<T>
             var arenaParam = Expression.Parameter(typeof(ArenaAllocator), "arena");
             var objVar = Expression.Variable(type, "obj");
 
-            var body = new List<Expression> { Expression.Assign(objVar, Expression.New(type)) };
+            var body = new List<Expression> { 
+                Expression.Assign(objVar, Expression.New(type)),
+                Expression.Invoke(Expression.Constant(CompileDeserializerInto()), docParam, arenaParam, objVar),
+                objVar
+            };
+
+            return Expression.Lambda<Func<BlittableBsonDocument, ArenaAllocator, T>>(Expression.Block([objVar], body), docParam, arenaParam).Compile();
+        }
+
+        public static DeserializeIntoAction CompileDeserializerInto()
+        {
+            var type = typeof(T);
+            var docParam = Expression.Parameter(typeof(BlittableBsonDocument), "doc");
+            var arenaParam = Expression.Parameter(typeof(ArenaAllocator), "arena");
+            var objParam = Expression.Parameter(type, "obj");
+
+            var body = new List<Expression>();
 
             foreach (var prop in GetValidProperties(type))
             {
                 if (prop.SetMethod == null) continue;
-                body.Add(EmitPropertyRead(docParam, arenaParam, objVar, prop));
+                body.Add(EmitPropertyRead(docParam, arenaParam, objParam, prop));
             }
 
-            body.Add(objVar);
-            return Expression.Lambda<Func<BlittableBsonDocument, ArenaAllocator, T>>(Expression.Block([objVar], body), docParam, arenaParam).Compile();
+            return Expression.Lambda<DeserializeIntoAction>(Expression.Block(body), docParam, arenaParam, objParam).Compile();
         }
 
         private static Expression EmitPropertyRead(ParameterExpression doc, ParameterExpression arena, ParameterExpression obj, PropertyInfo prop)

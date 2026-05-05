@@ -37,6 +37,68 @@ public sealed class DocumentSession : IDisposable
 
     public IAttachmentsSessionOperations Attachments => _attachments ??= new AttachmentsSessionOperations(this);
 
+    public ISessionAdvancedOperations Advanced => new AdvancedOperations(this);
+
+    private class AdvancedOperations(DocumentSession session) : ISessionAdvancedOperations
+    {
+        public Guid? GetETagFor(object entity) => session._changeTracker.GetExpectedETag(entity);
+
+        public void Store(object entity, Guid expectedEtag)
+        {
+            if (entity == null) throw new ArgumentNullException(nameof(entity));
+            
+            var id = EntityIdAccessor.GetId(entity);
+            if (id != null)
+            {
+                var docId = DocId.From(id);
+                session._identityMap.TryAdd((entity.GetType(), docId), entity);
+            }
+
+            session._changeTracker.Track(entity, expectedEtag);
+        }
+
+        public void Evict(object entity)
+        {
+            if (entity == null) return;
+
+            var id = EntityIdAccessor.GetId(entity);
+            if (id != null)
+            {
+                var docId = DocId.From(id);
+                session._identityMap.TryRemove((entity.GetType(), docId), out _);
+            }
+
+            session._changeTracker.Evict(entity);
+        }
+
+        public async Task RefreshAsync<T>(T entity, CancellationToken ct = default)
+        {
+            if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+            var id = EntityIdAccessor.GetId(entity);
+            if (id == null) throw new InvalidOperationException("Entity must have an ID to be refreshed.");
+
+            var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(T));
+            var collection = session._database.GetCollection<BsonDocument>(collectionName);
+            var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+
+            var cursor = session._clientSession != null
+                ? await collection.FindAsync(session._clientSession, filter, cancellationToken: ct)
+                : await collection.FindAsync(filter, cancellationToken: ct);
+
+            var bsonDoc = await cursor.FirstOrDefaultAsync(ct);
+            if (bsonDoc != null)
+            {
+                // We convert BsonDocument to arena bytes for compatibility with the rest of the engine
+                var bytes = bsonDoc.ToBson();
+                var doc = ArenaBsonReader.Read(bytes, session._arena);
+                
+                DynamicBlittableSerializer<T>.DeserializeIntoDelegate(doc, session._arena, entity);
+                session._changeTracker.Track(entity, doc);
+            }
+        }
+    }
+
     internal async Task EnsureTransactionStartedAsync(CancellationToken token = default)
     {
         if (_clientSession != null)
