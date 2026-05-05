@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using SharpArena.Allocators;
 using MongoDB.Driver;
-using MongoDB.Driver.Core.Clusters;
 using MongoDB.Bson;
 using MongoZen.Bson;
 using MongoZen.ChangeTracking;

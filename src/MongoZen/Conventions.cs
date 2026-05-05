@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using MongoDB.Bson;
 
 namespace MongoZen;
 
@@ -15,6 +16,8 @@ public static class Conventions
     /// </summary>
     public static Func<Type, string> FindCollectionName { get; set; } = 
         type => CachedCollectionNames.GetOrAdd(type, t => Inflector.Pluralize(t.Name));
+    
+    public static GuidRepresentation GuidRepresentation { get; set; } = GuidRepresentation.Standard;
 }
 
 internal static class Inflector

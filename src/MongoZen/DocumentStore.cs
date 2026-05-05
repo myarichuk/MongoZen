@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Conventions;
+using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 
 namespace MongoZen;
@@ -17,17 +19,6 @@ public sealed class DocumentStore : IDisposable
     private static readonly ConcurrentDictionary<string, ClusterFeatures> TopologyCache = new();
 
     /// <summary>
-    /// Initializes a new instance of the DocumentStore with a connection string and database name.
-    /// </summary>
-    public DocumentStore(string connectionString, string databaseName)
-    {
-        _client = new MongoClient(connectionString);
-        _databaseName = databaseName;
-        _database = _client.GetDatabase(databaseName);
-        _features = GetOrDiscoverFeatures(connectionString);
-    }
-
-    /// <summary>
     /// Initializes a new instance of the DocumentStore with an existing IMongoClient.
     /// </summary>
     public DocumentStore(IMongoClient client, string databaseName)
@@ -39,12 +30,14 @@ public sealed class DocumentStore : IDisposable
         // For shared clients, we use the servers list as the key
         var servers = string.Join(",", client.Settings.Servers);
         _features = GetOrDiscoverFeatures(servers);
+        
+        var guidConvention = new ConventionPack { 
+            new GuidSerializerConvention() 
+        };
+        ConventionRegistry.Register("GuidStandard", guidConvention, _ => true);        
     }
 
-    private ClusterFeatures GetOrDiscoverFeatures(string key)
-    {
-        return new ClusterFeatures();
-    }
+    private ClusterFeatures GetOrDiscoverFeatures(string key) => new();
 
     /// <summary>
     /// Gets the underlying MongoDB database.

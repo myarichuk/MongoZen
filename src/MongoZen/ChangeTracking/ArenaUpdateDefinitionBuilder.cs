@@ -9,13 +9,46 @@ namespace MongoZen.ChangeTracking;
 /// It maintains state for various MongoDB operators ($set, $unset, etc.) and
 /// renders them into a single update document.
 /// </summary>
-public struct ArenaUpdateDefinitionBuilder(ArenaAllocator arena)
+public struct ArenaUpdateDefinitionBuilder
 {
-    private ArenaBsonWriter _writer = new(arena);
+    private ArenaBsonWriter _writer;
+    private readonly ArenaAllocator _arena;
+    private readonly char[] _pathBuffer;
     private bool _hasSet;
     private bool _hasUnset;
 
+    public ArenaUpdateDefinitionBuilder(ArenaAllocator arena) : this(arena, new char[256]) { }
+
+    public ArenaUpdateDefinitionBuilder(ArenaAllocator arena, char[] pathBuffer)
+    {
+        _writer = new ArenaBsonWriter(arena);
+        _arena = arena;
+        _pathBuffer = pathBuffer ?? new char[256];
+        _hasSet = false;
+        _hasUnset = false;
+    }
+
     public readonly bool HasChanges => _hasSet || _hasUnset;
+
+    public ReadOnlySpan<char> CombinePath(ReadOnlySpan<char> prefix, string elementName)
+    {
+        if (prefix.Length == 0)
+        {
+            return elementName.AsSpan();
+        }
+
+        int totalLength = prefix.Length + 1 + elementName.Length;
+        if (totalLength > _pathBuffer.Length)
+        {
+            // Fallback for extremely deep nesting
+            return string.Concat(prefix.ToString(), ".", elementName).AsSpan();
+        }
+
+        prefix.CopyTo(_pathBuffer);
+        _pathBuffer[prefix.Length] = '.';
+        elementName.AsSpan().CopyTo(_pathBuffer.AsSpan(prefix.Length + 1));
+        return new ReadOnlySpan<char>(_pathBuffer, 0, totalLength);
+    }
 
     private void EnsureSetStarted()
     {
@@ -161,27 +194,48 @@ public struct ArenaUpdateDefinitionBuilder(ArenaAllocator arena)
             return;
         }
 
-        var type = typeof(T);
-        if (type == typeof(string)) { _writer.WriteString(path, (value as string).AsSpan()); return; }
-        if (type == typeof(int)) { _writer.WriteInt32(path, (int)(object)value); return; }
-        if (type == typeof(long)) { _writer.WriteInt64(path, (long)(object)value); return; }
-        if (type == typeof(double)) { _writer.WriteDouble(path, (double)(object)value); return; }
-        if (type == typeof(bool)) { _writer.WriteBoolean(path, (bool)(object)value); return; }
-        if (type == typeof(ObjectId)) { _writer.WriteObjectId(path, (ObjectId)(object)value); return; }
-        if (type == typeof(Guid)) { _writer.WriteGuid(path, (Guid)(object)value); return; }
-        if (type == typeof(DateTime)) { _writer.WriteDateTime(path, (DateTime)(object)value); return; }
-        if (type == typeof(decimal)) { _writer.WriteDecimal128(path, (decimal)(object)value); return; }
+        if (TypeCache<T>.IsString) { _writer.WriteString(path, (value as string).AsSpan()); return; }
+        if (TypeCache<T>.IsInt) { _writer.WriteInt32(path, (int)(object)value); return; }
+        if (TypeCache<T>.IsLong) { _writer.WriteInt64(path, (long)(object)value); return; }
+        if (TypeCache<T>.IsDouble) { _writer.WriteDouble(path, (double)(object)value); return; }
+        if (TypeCache<T>.IsBool) { _writer.WriteBoolean(path, (bool)(object)value); return; }
+        if (TypeCache<T>.IsObjectId) { _writer.WriteObjectId(path, (ObjectId)(object)value); return; }
+        if (TypeCache<T>.IsGuid) { _writer.WriteGuid(path, (Guid)(object)value); return; }
+        if (TypeCache<T>.IsDateTime) { _writer.WriteDateTime(path, (DateTime)(object)value); return; }
+        if (TypeCache<T>.IsDecimal) { _writer.WriteDecimal128(path, (decimal)(object)value); return; }
 
-        if (IsCollection(type, out _) || IsDictionary(type, out _))
+        if (TypeCache<T>.IsCollection || TypeCache<T>.IsDictionary)
         {
-            var bsonType = IsCollection(type, out _) ? BlittableBsonConstants.BsonType.Array : BlittableBsonConstants.BsonType.Document;
-            _writer.WriteName(path, bsonType);
+            _writer.WriteName(path, TypeCache<T>.BsonType);
             BlittableConverter<T>.Instance.Write(ref _writer, value);
             return;
         }
 
         _writer.WriteName(path, BlittableBsonConstants.BsonType.Document);
         BlittableConverter<T>.Instance.Write(ref _writer, value);
+    }
+
+    private static class TypeCache<T>
+    {
+        public static readonly bool IsString = typeof(T) == typeof(string);
+        public static readonly bool IsInt = typeof(T) == typeof(int);
+        public static readonly bool IsLong = typeof(T) == typeof(long);
+        public static readonly bool IsDouble = typeof(T) == typeof(double);
+        public static readonly bool IsBool = typeof(T) == typeof(bool);
+        public static readonly bool IsObjectId = typeof(T) == typeof(ObjectId);
+        public static readonly bool IsGuid = typeof(T) == typeof(Guid);
+        public static readonly bool IsDateTime = typeof(T) == typeof(DateTime);
+        public static readonly bool IsDecimal = typeof(T) == typeof(decimal);
+        public static readonly bool IsCollection;
+        public static readonly bool IsDictionary;
+        public static readonly BlittableBsonConstants.BsonType BsonType;
+
+        static TypeCache()
+        {
+            IsCollection = ArenaUpdateDefinitionBuilder.IsCollection(typeof(T), out _);
+            IsDictionary = ArenaUpdateDefinitionBuilder.IsDictionary(typeof(T), out _);
+            BsonType = IsCollection ? BlittableBsonConstants.BsonType.Array : BlittableBsonConstants.BsonType.Document;
+        }
     }
 
     private static bool IsDictionary(Type type, out Type valueType)
@@ -257,6 +311,6 @@ public struct ArenaUpdateDefinitionBuilder(ArenaAllocator arena)
         _writer.WriteEndDocument(); // Close the last open operator document ($set or $unset)
         _writer.WriteEndDocument(); // Close root document
         
-        return _writer.Commit(arena);
+        return _writer.Commit(_arena);
     }
 }

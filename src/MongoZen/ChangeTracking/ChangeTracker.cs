@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -14,6 +15,7 @@ public sealed class ChangeTracker(ArenaAllocator arena)
     private readonly ConcurrentDictionary<object, EntityEntry> _trackedEntities = new();
 
     public void Track<T>(T entity, BlittableBsonDocument? snapshot = null)
+    // ... rest of Track method ...
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
@@ -108,64 +110,72 @@ public sealed class ChangeTracker(ArenaAllocator arena)
     public Dictionary<string, List<IPendingUpdate>> GetGroupedUpdates()
     {
         var groups = new Dictionary<string, List<IPendingUpdate>>();
+        var pathBuffer = ArrayPool<char>.Shared.Rent(256);
 
-        foreach (var entry in _trackedEntities.Values)
+        try
         {
-            if (entry.IsDeleted && entry.IsNew)
+            foreach (var entry in _trackedEntities.Values)
             {
-                // Entity was added and deleted in the same session without being persisted.
-                continue;
-            }
-
-            var collectionName = DocumentTypeTracker.GetDefaultCollectionName(entry.Type);
-            IPendingUpdate? update = null;
-
-            if (entry.IsDeleted)
-            {
-                var id = EntityIdAccessor.GetId(entry.Entity);
-                update = new DeleteOperation(id!, entry.ExpectedETag ?? Guid.Empty, collectionName, entry.Entity);
-            }
-            else if (entry.IsNew)
-            {
-                var newEtag = Guid.NewGuid();
-                if (entry.HasConcurrencyCheck) entry.SetNewETag(newEtag);
-                
-                var operationType = typeof(InsertOperation<>).MakeGenericType(entry.Type);
-                update = (IPendingUpdate)Activator.CreateInstance(operationType, [entry.Entity, newEtag, collectionName])!;
-            }
-            else
-            {
-                var builder = new ArenaUpdateDefinitionBuilder(_arena);
-                entry.BuildUpdate(ref builder, _arena, default);
-                
-                if (builder.HasChanges)
+                if (entry.IsDeleted && entry.IsNew)
                 {
-                    var nextEtag = Guid.NewGuid();
-                    // If we have concurrency check, generate a new ETag and set it on the POCO
-                    // so it's included in the update.
-                    if (entry.HasConcurrencyCheck)
-                    {
-                        entry.SetNewETag(nextEtag);
-                    }
-                    
-                    // Always add the ETag update to the builder if we have changes
-                    builder.Set("_etag", nextEtag);
+                    // Entity was added and deleted in the same session without being persisted.
+                    continue;
+                }
 
-                    var updateDoc = builder.Build();
+                var collectionName = DocumentTypeTracker.GetDefaultCollectionName(entry.Type);
+                IPendingUpdate? update = null;
+
+                if (entry.IsDeleted)
+                {
                     var id = EntityIdAccessor.GetId(entry.Entity);
-                    update = new UpdateOperation(id!, entry.ExpectedETag ?? Guid.Empty, updateDoc, collectionName, entry.Entity);
+                    update = new DeleteOperation(id!, entry.ExpectedETag ?? Guid.Empty, collectionName, entry.Entity);
                 }
-            }
-
-            if (update != null)
-            {
-                if (!groups.TryGetValue(collectionName, out var updates))
+                else if (entry.IsNew)
                 {
-                    updates = new List<IPendingUpdate>();
-                    groups[collectionName] = updates;
+                    var newEtag = Guid.NewGuid();
+                    if (entry.HasConcurrencyCheck) entry.SetNewETag(newEtag);
+                    
+                    var operationType = typeof(InsertOperation<>).MakeGenericType(entry.Type);
+                    update = (IPendingUpdate)Activator.CreateInstance(operationType, [entry.Entity, newEtag, collectionName])!;
                 }
-                updates.Add(update);
+                else
+                {
+                    var builder = new ArenaUpdateDefinitionBuilder(_arena, pathBuffer);
+                    entry.BuildUpdate(ref builder, _arena, default);
+                    
+                    if (builder.HasChanges)
+                    {
+                        var nextEtag = Guid.NewGuid();
+                        // If we have concurrency check, generate a new ETag and set it on the POCO
+                        // so it's included in the update.
+                        if (entry.HasConcurrencyCheck)
+                        {
+                            entry.SetNewETag(nextEtag);
+                        }
+                        
+                        // Always add the ETag update to the builder if we have changes
+                        builder.Set("_etag", nextEtag);
+
+                        var updateDoc = builder.Build();
+                        var id = EntityIdAccessor.GetId(entry.Entity);
+                        update = new UpdateOperation(id!, entry.ExpectedETag ?? Guid.Empty, updateDoc, collectionName, entry.Entity);
+                    }
+                }
+
+                if (update != null)
+                {
+                    if (!groups.TryGetValue(collectionName, out var updates))
+                    {
+                        updates = new List<IPendingUpdate>();
+                        groups[collectionName] = updates;
+                    }
+                    updates.Add(update);
+                }
             }
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(pathBuffer);
         }
         return groups;
     }

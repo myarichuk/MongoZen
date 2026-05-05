@@ -380,12 +380,8 @@ public static class DynamicBlittableSerializer<T>
             var pathVar = Expression.Variable(typeof(ReadOnlySpan<char>), "path");
             var pathBody = new List<Expression>();
             
-            var fullPathExpr = Expression.Call(typeof(string).GetMethod("Concat", [typeof(string), typeof(string), typeof(string)])!,
-                Expression.Condition(Expression.Equal(Expression.Property(prefix, "Length"), Expression.Constant(0)), Expression.Constant(""), Expression.Call(prefix, typeof(object).GetMethod("ToString")!)),
-                Expression.Condition(Expression.Equal(Expression.Property(prefix, "Length"), Expression.Constant(0)), Expression.Constant(""), Expression.Constant(".")),
-                Expression.Constant(elementName));
-            
-            pathBody.Add(Expression.Assign(pathVar, Expression.Call(AsSpanMethod, fullPathExpr)));
+            var combineMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("CombinePath", [typeof(ReadOnlySpan<char>), typeof(string)])!;
+            pathBody.Add(Expression.Assign(pathVar, Expression.Call(builder, combineMethod, prefix, Expression.Constant(elementName))));
 
             var offsetVar = Expression.Variable(typeof(int), "offset");
 

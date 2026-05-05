@@ -43,6 +43,16 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
 
                 chunkIndex++;
                 totalLength += bytesRead;
+
+                if (chunks.Count >= 4) // Batch of ~1MB
+                {
+                    if (_session.ClientSession != null)
+                        await ChunksCollection.InsertManyAsync(_session.ClientSession, chunks, null, cancellationToken);
+                    else
+                        await ChunksCollection.InsertManyAsync(chunks, null, cancellationToken);
+                    
+                    chunks.Clear();
+                }
             }
 
             if (chunks.Count > 0)
