@@ -92,6 +92,11 @@ public class ShadowGenerator : IIncrementalGenerator
             {
                 elementName = "_id";
             }
+            var concurrencyCheckAttr = prop.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == "ConcurrencyCheckAttribute" || a.AttributeClass?.ToDisplayString() == "MongoZen.ConcurrencyCheckAttribute");
+            if (concurrencyCheckAttr != null)
+            {
+                elementName = "_etag";
+            }
 
             if (category == TypeCategory.Document && nestedType is INamedTypeSymbol namedNested)
             {

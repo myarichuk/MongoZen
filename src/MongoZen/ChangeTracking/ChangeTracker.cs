@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Linq.Expressions;
+using System.Reflection;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoZen.Bson;
@@ -22,6 +24,11 @@ public sealed class ChangeTracker(ArenaAllocator arena)
             Snapshot = snapshot,
             IsNew = snapshot == null
         };
+
+        if (snapshot.HasValue && snapshot.Value.TryGetElementOffset("_etag", out _))
+        {
+            entry.ExpectedETag = snapshot.Value.GetGuid("_etag");
+        }
 
         _trackedEntities[entity] = entry;
     }
@@ -58,6 +65,12 @@ public sealed class ChangeTracker(ArenaAllocator arena)
             var writer = new ArenaBsonWriter(newArena);
             entry.UpdateSnapshot(ref writer, newArena);
             entry.IsNew = false;
+            
+            // Refresh ExpectedETag from the new snapshot
+            if (entry.Snapshot.HasValue && entry.Snapshot.Value.TryGetElementOffset("_etag", out _))
+            {
+                entry.ExpectedETag = entry.Snapshot.Value.GetGuid("_etag");
+            }
         }
         _arena = newArena;
     }
@@ -95,19 +108,36 @@ public sealed class ChangeTracker(ArenaAllocator arena)
 
             if (entry.IsNew)
             {
+                var newEtag = Guid.NewGuid();
+                if (entry.HasConcurrencyCheck) entry.SetNewETag(newEtag);
+                
                 var operationType = typeof(InsertOperation<>).MakeGenericType(entry.Type);
-                updates.Add((IPendingUpdate)Activator.CreateInstance(operationType, [entry.Entity, collectionName])!);
+                updates.Add((IPendingUpdate)Activator.CreateInstance(operationType, [entry.Entity, newEtag, collectionName])!);
                 continue;
             }
 
             var builder = new ArenaUpdateDefinitionBuilder(_arena);
+            var nextEtag = Guid.NewGuid();
+
+            // If we have concurrency check, generate a new ETag and set it on the POCO
+            // so it's included in the update.
+            if (entry.HasConcurrencyCheck)
+            {
+                entry.SetNewETag(nextEtag);
+            }
+            else
+            {
+                // For hidden ETag, manually add it to the update.
+                builder.Set("_etag", nextEtag);
+            }
+
             entry.BuildUpdate(ref builder, _arena, default);
             
             if (builder.HasChanges)
             {
                 var updateDoc = builder.Build();
                 var id = EntityIdAccessor.GetId(entry.Entity);
-                updates.Add(new UpdateOperation(id!, updateDoc, collectionName));
+                updates.Add(new UpdateOperation(id!, entry.ExpectedETag ?? Guid.Empty, updateDoc, collectionName));
             }
         }
         return groups;
@@ -120,8 +150,13 @@ public sealed class ChangeTracker(ArenaAllocator arena)
         public BlittableBsonDocument? Snapshot { get; set; }
         public bool IsNew { get; set; }
         public bool IsDeleted { get; set; }
+        public Guid? ExpectedETag { get; set; }
         
         private IEntityDispatcher? _dispatcher;
+
+        public bool HasConcurrencyCheck => GetDispatcher().HasConcurrencyCheck;
+
+        public void SetNewETag(Guid etag) => GetDispatcher().SetETag(Entity, etag);
 
         public void UpdateSnapshot(ref ArenaBsonWriter writer, ArenaAllocator arena)
         {
@@ -141,12 +176,36 @@ public sealed class ChangeTracker(ArenaAllocator arena)
 
         private interface IEntityDispatcher
         {
+            bool HasConcurrencyCheck { get; }
+            void SetETag(object entity, Guid etag);
             void UpdateSnapshot(EntityEntry entry, ref ArenaBsonWriter writer, ArenaAllocator arena);
             void BuildUpdate(EntityEntry entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix);
         }
 
         private class EntityDispatcher<T> : IEntityDispatcher
         {
+            private static readonly Action<T, Guid>? ETagSetter = CompileETagSetter();
+
+            private static Action<T, Guid>? CompileETagSetter()
+            {
+                var prop = typeof(T).GetProperties()
+                    .FirstOrDefault(p => p.GetCustomAttribute<ConcurrencyCheckAttribute>() != null);
+                
+                if (prop == null || prop.PropertyType != typeof(Guid) || !prop.CanWrite) return null;
+
+                var entityParam = Expression.Parameter(typeof(T), "entity");
+                var etagParam = Expression.Parameter(typeof(Guid), "etag");
+                var assign = Expression.Assign(Expression.Property(entityParam, prop), etagParam);
+                return Expression.Lambda<Action<T, Guid>>(assign, entityParam, etagParam).Compile();
+            }
+
+            public bool HasConcurrencyCheck => ETagSetter != null;
+
+            public void SetETag(object entity, Guid etag)
+            {
+                ETagSetter?.Invoke((T)entity, etag);
+            }
+
             public void UpdateSnapshot(EntityEntry entry, ref ArenaBsonWriter writer, ArenaAllocator arena)
             {
                 var entity = (T)entry.Entity;
@@ -177,56 +236,65 @@ public interface IPendingUpdate
     Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct);
 }
 
-public sealed class InsertOperation<T>(T entity, string collectionName) : IPendingUpdate
+public sealed class InsertOperation<T>(T entity, Guid etag, string collectionName) : IPendingUpdate
 {
     public string CollectionName => collectionName;
 
     public WriteModel<BsonDocument> ToWriteModel()
     {
-        // Use a temporary arena for the initial BSON capture
-        // In a real high-perf scenario, we might want to pass an arena here
         using var arena = new ArenaAllocator(1024);
         var writer = new ArenaBsonWriter(arena);
         DynamicBlittableSerializer<T>.SerializeDelegate(ref writer, entity);
         var doc = writer.Commit(arena);
         
-        // We must copy the bytes because RawBsonDocument needs them
-        // but since this is for the driver's BulkWrite, it's unavoidable unless we use a custom WriteModel
-        var bytes = doc.AsReadOnlySpan().ToArray();
-        return new InsertOneModel<BsonDocument>(new RawBsonDocument(bytes));
-    }
-
-    public async Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct)
-    {
-        var collection = database.GetCollection<T>(collectionName);
-        if (session != null)
-            await collection.InsertOneAsync(session, entity, cancellationToken: ct);
-        else
-            await collection.InsertOneAsync(entity, cancellationToken: ct);
-    }
-}
-
-public sealed class UpdateOperation(object id, BlittableBsonDocument update, string collectionName) : IPendingUpdate
-{
-    public string CollectionName => collectionName;
-
-    public WriteModel<BsonDocument> ToWriteModel()
-    {
-        // We use RawBsonDocument to wrap our arena bytes for the driver
-        var updateDoc = new RawBsonDocument(update.AsReadOnlySpan().ToArray());
-        return new UpdateOneModel<BsonDocument>(Builders<BsonDocument>.Filter.Eq("_id", id), updateDoc);
+        var raw = new RawBsonDocument(doc.AsReadOnlySpan().ToArray());
+        if (!raw.Contains("_etag"))
+        {
+            var docWithEtag = raw.ToBsonDocument();
+            docWithEtag["_etag"] = BsonValue.Create(etag);
+            return new InsertOneModel<BsonDocument>(docWithEtag);
+        }
+        
+        return new InsertOneModel<BsonDocument>(raw);
     }
 
     public async Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct)
     {
         var collection = database.GetCollection<BsonDocument>(collectionName);
-        var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+        var model = ToWriteModel();
+        var insertModel = (InsertOneModel<BsonDocument>)model;
+
+        if (session != null)
+            await collection.InsertOneAsync(session, insertModel.Document, cancellationToken: ct);
+        else
+            await collection.InsertOneAsync(insertModel.Document, cancellationToken: ct);
+    }
+}
+
+public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonDocument update, string collectionName) : IPendingUpdate
+{
+    public string CollectionName => collectionName;
+
+    public WriteModel<BsonDocument> ToWriteModel()
+    {
+        var filter = Builders<BsonDocument>.Filter.And(
+            Builders<BsonDocument>.Filter.Eq("_id", id),
+            Builders<BsonDocument>.Filter.Eq("_etag", expectedEtag)
+        );
         var updateDoc = new RawBsonDocument(update.AsReadOnlySpan().ToArray());
+        return new UpdateOneModel<BsonDocument>(filter, updateDoc);
+    }
+
+    public async Task ExecuteAsync(IMongoDatabase database, IClientSessionHandle? session, CancellationToken ct)
+    {
+        var collection = database.GetCollection<BsonDocument>(collectionName);
+        var model = ToWriteModel();
+        var updateModel = (UpdateOneModel<BsonDocument>)model;
         
         if (session != null)
-            await collection.UpdateOneAsync(session, filter, updateDoc, cancellationToken: ct);
+            await collection.UpdateOneAsync(session, updateModel.Filter, updateModel.Update, cancellationToken: ct);
         else
-            await collection.UpdateOneAsync(filter, updateDoc, cancellationToken: ct);
+            await collection.UpdateOneAsync(updateModel.Filter, updateModel.Update, cancellationToken: ct);
     }
 }
 

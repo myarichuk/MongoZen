@@ -510,6 +510,8 @@ public static class DynamicBlittableSerializer<T>
             var idAttr = prop.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonIdAttribute>();
             if (idAttr != null || prop.Name == "Id") return "_id";
 
+            if (prop.GetCustomAttribute<ConcurrencyCheckAttribute>() != null) return "_etag";
+
             var elementAttr = prop.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonElementAttribute>();
             return elementAttr?.ElementName ?? prop.Name;
         }
