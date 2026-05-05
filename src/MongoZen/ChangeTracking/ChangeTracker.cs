@@ -123,7 +123,7 @@ public sealed class ChangeTracker(ArenaAllocator arena)
             if (entry.IsDeleted)
             {
                 var id = EntityIdAccessor.GetId(entry.Entity);
-                update = new DeleteOperation(id!, entry.ExpectedETag ?? Guid.Empty, collectionName);
+                update = new DeleteOperation(id!, entry.ExpectedETag ?? Guid.Empty, collectionName, entry.Entity);
             }
             else if (entry.IsNew)
             {
@@ -153,7 +153,7 @@ public sealed class ChangeTracker(ArenaAllocator arena)
 
                     var updateDoc = builder.Build();
                     var id = EntityIdAccessor.GetId(entry.Entity);
-                    update = new UpdateOperation(id!, entry.ExpectedETag ?? Guid.Empty, updateDoc, collectionName);
+                    update = new UpdateOperation(id!, entry.ExpectedETag ?? Guid.Empty, updateDoc, collectionName, entry.Entity);
                 }
             }
 
@@ -298,9 +298,12 @@ public sealed class InsertOperation<T>(T entity, Guid etag, string collectionNam
     }
 }
 
-public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonDocument update, string collectionName) : IPendingUpdate
+public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonDocument update, string collectionName, object entity) : IPendingUpdate
 {
     public string CollectionName => collectionName;
+    public object Id => id;
+    public Guid ExpectedEtag => expectedEtag;
+    public object Entity => entity;
 
     public WriteModel<BsonDocument> ToWriteModel()
     {
@@ -325,10 +328,12 @@ public sealed class UpdateOperation(object id, Guid expectedEtag, BlittableBsonD
     }
 }
 
-public sealed class DeleteOperation(object id, Guid expectedEtag, string collectionName) : IPendingUpdate
+public sealed class DeleteOperation(object id, Guid expectedEtag, string collectionName, object entity) : IPendingUpdate
 {
     public string CollectionName => collectionName;
     public object Id => id;
+    public Guid ExpectedEtag => expectedEtag;
+    public object Entity => entity;
 
     public WriteModel<BsonDocument> ToWriteModel()
     {

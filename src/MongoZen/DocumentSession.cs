@@ -268,13 +268,30 @@ public sealed class DocumentSession : IDisposable
                     continue;
                 }
 
-                if (_clientSession != null)
+                BulkWriteResult<BsonDocument> result;
+                try
                 {
-                    await collection.BulkWriteAsync(_clientSession, models, cancellationToken: cancellationToken);
+                    if (_clientSession != null)
+                    {
+                        result = await collection.BulkWriteAsync(_clientSession, models, cancellationToken: cancellationToken);
+                    }
+                    else
+                    {
+                        result = await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
+                    }
                 }
-                else
+                catch (Exception ex) when (ex is MongoCommandException or MongoBulkWriteException)
                 {
-                    await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
+                    await IdentifyConcurrencyConflictAsync(updates, cancellationToken);
+                    throw;
+                }
+
+                var expectedMatched = updates.Count(u => u is UpdateOperation);
+                var expectedDeleted = updates.Count(u => u is DeleteOperation);
+
+                if (result.MatchedCount < expectedMatched || result.DeletedCount < expectedDeleted)
+                {
+                    await IdentifyConcurrencyConflictAsync(updates, cancellationToken);
                 }
 
                 // Cascading delete for attachments
@@ -316,6 +333,59 @@ public sealed class DocumentSession : IDisposable
         var oldArena = _arena;
         _arena = nextArena;
         oldArena.Dispose();
+    }
+
+    private async Task IdentifyConcurrencyConflictAsync(List<IPendingUpdate> updates, CancellationToken ct)
+    {
+        foreach (var update in updates)
+        {
+            object id;
+            Guid expectedEtag;
+            object entity;
+            string collectionName;
+
+            if (update is UpdateOperation uo)
+            {
+                id = uo.Id;
+                expectedEtag = uo.ExpectedEtag;
+                entity = uo.Entity;
+                collectionName = uo.CollectionName;
+            }
+            else if (update is DeleteOperation del)
+            {
+                id = del.Id;
+                expectedEtag = del.ExpectedEtag;
+                entity = del.Entity;
+                collectionName = del.CollectionName;
+            }
+            else
+            {
+                continue;
+            }
+
+            var collection = _database.GetCollection<BsonDocument>(collectionName);
+            var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+            var projection = Builders<BsonDocument>.Projection.Include("_etag");
+
+            var doc = await collection.Find(filter).Project(projection).FirstOrDefaultAsync(ct);
+            if (doc == null)
+            {
+                throw new ConcurrencyException($"Document with ID {id} in collection {collectionName} was deleted by another user.", entity);
+            }
+
+            if (!doc.Contains("_etag"))
+            {
+                throw new ConcurrencyException($"Document with ID {id} in collection {collectionName} does not have an _etag in the database.", entity);
+            }
+
+            var actualEtag = doc["_etag"].AsGuid;
+            if (actualEtag != expectedEtag)
+            {
+                throw new ConcurrencyException($"Document with ID {id} in collection {collectionName} was modified by another user (Expected ETag: {expectedEtag}, Actual: {actualEtag}).", entity);
+            }
+        }
+
+        throw new ConcurrencyException("A concurrency conflict occurred, but it could not be identified specifically.");
     }
 
     public void Dispose()

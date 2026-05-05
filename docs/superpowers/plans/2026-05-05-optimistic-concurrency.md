@@ -77,12 +77,12 @@ Ensure the `_etag` is generated and injected into the BSON during the `InsertOpe
 **Files:**
 - Modify: `src/MongoZen/DocumentSession.cs`
 
-- [ ] **Step 1: Create ISessionAdvancedOperations and implement in DocumentSession**
-- [ ] **Step 2: Implement `Evict(entity)`**
+- [x] **Step 1: Create ISessionAdvancedOperations and implement in DocumentSession**
+- [x] **Step 2: Implement `Evict(entity)`**
 Should remove from `_identityMap` and `_changeTracker`.
-- [ ] **Step 3: Implement `RefreshAsync(entity)`**
+- [x] **Step 3: Implement `RefreshAsync(entity)`**
 Should reload from DB, update POCO, and reset the `ChangeTracker` snapshot/ETag.
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ---
 
