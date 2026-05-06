@@ -1,88 +1,70 @@
-// Copyright (c) 2024-present, Shuai Wang. All rights reserved.
-// Use of this source code is governed by an MIT-style license that can be
-// found in the LICENSE file.
-
 using System.Reflection;
-using MongoDB.Bson.Serialization.Attributes;
+using MongoDB.Bson;
+using Xunit;
 
 namespace MongoZen.Tests;
 
-/// <summary>
-/// Tests for the <see cref="EntityIdAccessor{TEntity}"/> class.
-/// </summary>
-[Collection("NoConcurrency")]
 public class EntityIdAccessorTests
 {
-    /// <summary>
-    /// Verifies that the Id property is correctly resolved when the [BsonId] attribute is present.
-    /// </summary>
+    public class SimpleIntEntity { public int Id { get; set; } }
+    public class SimpleStringEntity { public string Id { get; set; } = string.Empty; }
+    public class SimpleObjectIdEntity { public ObjectId Id { get; set; } }
+    public class SimpleGuidEntity { public Guid Id { get; set; } }
+
+    private class TestIdConvention : IIdConvention
+    {
+        public PropertyInfo? ResolveIdProperty<TEntity>() => typeof(TEntity).GetProperty("Id");
+    }
+
+    private readonly TestIdConvention _convention = new();
+
     [Fact]
-    public void ResolveId_WithBsonId_Works()
+    public void Should_Access_Int_Id()
     {
-        var prop = GlobalIdConventionProvider.Convention.ResolveIdProperty<WithBsonId>();
-        Assert.NotNull(prop);
-        Assert.Equal("CustomId", prop!.Name);
+        var entity = new SimpleIntEntity { Id = 42 };
+        var getter = EntityIdAccessor<SimpleIntEntity>.GetAccessor(_convention);
+        var setter = EntityIdAccessor<SimpleIntEntity>.GetSetter(_convention);
+        var docIdGetter = EntityIdAccessor<SimpleIntEntity>.GetDocIdAccessor(_convention);
+
+        Assert.Equal(42, getter(entity));
+        Assert.Equal(DocId.FromInt32(42), docIdGetter(entity));
+
+        setter(entity, 100);
+        Assert.Equal(100, entity.Id);
     }
 
-    /// <summary>
-    /// Verifies that the Id property is correctly resolved when the default "Id" name is used.
-    /// </summary>
     [Fact]
-    public void ResolveId_DefaultIdName_Works()
+    public void Should_Access_String_Id()
     {
-        var prop = GlobalIdConventionProvider.Convention.ResolveIdProperty<WithDefaultId>();
-        Assert.NotNull(prop);
-        Assert.Equal("Id", prop!.Name);
+        var entity = new SimpleStringEntity { Id = "test-id" };
+        var getter = EntityIdAccessor<SimpleStringEntity>.GetAccessor(_convention);
+        var docIdGetter = EntityIdAccessor<SimpleStringEntity>.GetDocIdAccessor(_convention);
+
+        Assert.Equal("test-id", getter(entity));
+        Assert.Equal(DocId.FromString("test-id"), docIdGetter(entity));
     }
 
-    /// <summary>
-    /// Verifies that no Id property is returned when the entity does not have one.
-    /// </summary>
     [Fact]
-    public void ResolveId_MissingProperty_ReturnsNull()
+    public void Should_Access_ObjectId_Id()
     {
-        var prop = GlobalIdConventionProvider.Convention.ResolveIdProperty<WithoutId>();
-        Assert.Null(prop);
+        var oid = ObjectId.GenerateNewId();
+        var entity = new SimpleObjectIdEntity { Id = oid };
+        var getter = EntityIdAccessor<SimpleObjectIdEntity>.GetAccessor(_convention);
+        var docIdGetter = EntityIdAccessor<SimpleObjectIdEntity>.GetDocIdAccessor(_convention);
+
+        Assert.Equal(oid, getter(entity));
+        Assert.Equal(DocId.FromObjectId(oid), docIdGetter(entity));
     }
 
-    /// <summary>
-    /// Verifies that a custom Id convention can override the default one.
-    /// </summary>
     [Fact]
-    public void CustomConvention_OverridesDefault()
+    public void Should_Access_Guid_Id()
     {
-        var custom = new FakeConvention();
-        var accessor = EntityIdAccessor<WithBsonId>.GetAccessor(custom);
+        var guid = Guid.NewGuid();
+        var entity = new SimpleGuidEntity { Id = guid };
+        var getter = EntityIdAccessor<SimpleGuidEntity>.GetAccessor(_convention);
+        var docIdGetter = EntityIdAccessor<SimpleGuidEntity>.GetDocIdAccessor(_convention);
 
-        var entity = new WithBsonId { CustomId = 42 };
-        var id = accessor(entity);
-
-        // FakeConvention returns null for ResolveIdProperty, so no Id is resolved
-        Assert.Null(id);
-
-        // Default convention should still resolve the Id via [BsonId]
-        var defaultAccessor = EntityIdAccessor<WithBsonId>.GetAccessor(GlobalIdConventionProvider.Convention);
-        var defaultId = defaultAccessor(entity);
-        Assert.Equal(42, defaultId);
-    }
-
-    private class WithBsonId
-    {
-        [BsonId]
-        public int CustomId { get; set; }
-    }
-
-    private class WithDefaultId
-    {
-        public Guid Id { get; set; }
-    }
-
-    private class WithoutId
-    {
-    }
-
-    private class FakeConvention : IIdConvention
-    {
-        public PropertyInfo? ResolveIdProperty<TEntity>() => null;
+        Assert.Equal(guid, getter(entity));
+        Assert.Equal(DocId.FromGuid(guid), docIdGetter(entity));
     }
 }

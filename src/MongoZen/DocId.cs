@@ -1,5 +1,4 @@
-using System;
-using System.IO.Hashing;
+﻿using System.IO.Hashing;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using MongoDB.Bson;
@@ -32,32 +31,27 @@ public readonly struct DocId : IEquatable<DocId>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Equals(DocId other)
-    {
-        return Kind == other.Kind && _part1 == other._part1 && _part2 == other._part2;
-    }
+    public bool Equals(DocId other) => 
+        Kind == other.Kind && _part1 == other._part1 && _part2 == other._part2;
 
     public override bool Equals(object? obj) => obj is DocId d && Equals(d);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override int GetHashCode()
-    {
-        return HashCode.Combine(Kind, _part1, _part2);
-    }
+    public override int GetHashCode() => 
+        HashCode.Combine(Kind, _part1, _part2);
 
     public static bool operator ==(in DocId a, in DocId b) => a.Equals(b);
     public static bool operator !=(in DocId a, in DocId b) => !a.Equals(b);
 
     public static DocId FromObjectId(ObjectId oid)
     {
-        var oidSpan = MemoryMarshal.CreateReadOnlySpan(ref oid, 1);
-        var oidBytes = MemoryMarshal.AsBytes(oidSpan);
+        var bytes = oid.ToByteArray();
 
         ulong p1;
         ulong p2;
         unsafe
         {
-            fixed (byte* src = oidBytes)
+            fixed (byte* src = bytes)
             {
                 p1 = *(ulong*)src;           
                 var low = *(uint*)(src + 8);
@@ -69,10 +63,16 @@ public readonly struct DocId : IEquatable<DocId>
 
     public static DocId FromGuid(Guid g)
     {
+        // Guids are 16 bytes, fits perfectly in 2 ulongs
+        Span<byte> bytes = stackalloc byte[16];
+        g.TryWriteBytes(bytes);
+        
         unsafe
         {
-            var ptr = (ulong*)&g;
-            return new DocId(1, ptr[0], ptr[1]);
+            fixed (byte* src = bytes)
+            {
+                return new DocId(1, ((ulong*)src)[0], ((ulong*)src)[1]);
+            }
         }
     }
 
@@ -86,6 +86,15 @@ public readonly struct DocId : IEquatable<DocId>
         return new DocId(3, (ulong)value, 0);
     }
 
+    /// <summary>
+    /// Creates a DocId from a string by computing a 128-bit hash.
+    /// </summary>
+    /// <remarks>
+    /// For string IDs, MongoZen stores a 128-bit hash (XxHash128) instead of the raw string to maintain 
+    /// a fixed 20-byte blittable representation. While this offers significant performance benefits 
+    /// in the Identity Map, it introduces a statistically negligible risk of hash collisions 
+    /// (50% probability after ~2^64 unique strings in a single session).
+    /// </remarks>
     public static DocId FromString(string s)
     {
         // Note: For strings, we store a hash. This means we cannot reconstruct the raw ID
@@ -94,6 +103,13 @@ public readonly struct DocId : IEquatable<DocId>
         return new DocId(4, (ulong)(hash & ulong.MaxValue), (ulong)(hash >> 64));
     }
 
+    /// <summary>
+    /// Creates a DocId from a hashable object by computing a 128-bit hash of its byte representation.
+    /// </summary>
+    /// <remarks>
+    /// Similar to FromString, this uses XxHash128. Collisions are statistically negligible 
+    /// within the scope of a single session's tracking.
+    /// </remarks>
     public static DocId FromHashable(IDocIdHashable hashable)
     {
         Span<byte> buf = stackalloc byte[256];
@@ -112,7 +128,10 @@ public readonly struct DocId : IEquatable<DocId>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DocId From(object? rawId)
     {
-        if (rawId == null) return default;
+        if (rawId == null)
+        {
+            return default;
+        }
 
         return rawId switch
         {
@@ -136,7 +155,7 @@ public readonly struct DocId : IEquatable<DocId>
         return Kind switch
         {
             0 => ToObjectId(),
-            1 => BsonValue.Create(ToGuid()),
+            1 => new BsonBinaryData(ToGuid(), GuidRepresentation.Standard),
             2 => (int)(uint)_part1,
             3 => (long)_part1,
             _ => null // Cannot reconstruct from hash
@@ -145,7 +164,7 @@ public readonly struct DocId : IEquatable<DocId>
 
     private ObjectId ToObjectId()
     {
-        Span<byte> bytes = stackalloc byte[12];
+        var bytes = new byte[12];
         unsafe
         {
             fixed (byte* dst = bytes)
@@ -154,21 +173,20 @@ public readonly struct DocId : IEquatable<DocId>
                 *(uint*)(dst + 8) = (uint)_part2;
             }
         }
-        return new ObjectId(bytes.ToArray());
+        return new ObjectId(bytes);
     }
 
     private Guid ToGuid()
     {
+        Span<byte> bytes = stackalloc byte[16];
         unsafe
         {
-            var p1 = _part1;
-            var p2 = _part2;
-            var ptr = (byte*)&p1; // This is a bit hacky but works for blittable structs
-            // Actually simpler:
-            Span<ulong> parts = stackalloc ulong[2];
-            parts[0] = _part1;
-            parts[1] = _part2;
-            return MemoryMarshal.Cast<ulong, Guid>(parts)[0];
+            fixed (byte* dst = bytes)
+            {
+                ((ulong*)dst)[0] = _part1;
+                ((ulong*)dst)[1] = _part2;
+            }
         }
+        return new Guid(bytes);
     }
 }
