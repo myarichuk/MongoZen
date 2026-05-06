@@ -232,7 +232,11 @@ public static class DynamicBlittableSerializer<T>
 
             foreach (var prop in GetValidProperties(type))
             {
-                if (prop.SetMethod == null) continue;
+                if (prop.SetMethod == null)
+                {
+                    continue;
+                }
+
                 body.Add(EmitPropertyRead(docParam, arenaParam, objParam, prop));
             }
 
@@ -293,7 +297,10 @@ public static class DynamicBlittableSerializer<T>
                 };
             }
 
-            if (readExpr == null) return Expression.Empty();
+            if (readExpr == null)
+            {
+                return Expression.Empty();
+            }
 
             var isNullExpr = Expression.Equal(
                 Expression.Call(null, typeof(ArenaBsonReader).GetMethod(nameof(ArenaBsonReader.GetElementType))!, doc, offsetVar),
@@ -322,7 +329,11 @@ public static class DynamicBlittableSerializer<T>
             var arrayExpr = Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetArray), typeof(int), typeof(ArenaAllocator)), offset, arena);
             var result = Expression.Call(method, arrayExpr, arena);
             
-            if (type.IsArray) return result;
+            if (type.IsArray)
+            {
+                return result;
+            }
+
             if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
             {
                 var listCtor = type.GetConstructor([typeof(IEnumerable<>).MakeGenericType(elementType)])!;
@@ -536,9 +547,15 @@ public static class DynamicBlittableSerializer<T>
         private static string GetElementName(PropertyInfo prop)
         {
             var idAttr = prop.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonIdAttribute>();
-            if (idAttr != null || prop.Name == "Id") return "_id";
+            if (idAttr != null || prop.Name == "Id")
+            {
+                return "_id";
+            }
 
-            if (prop.GetCustomAttribute<ConcurrencyCheckAttribute>() != null) return "_etag";
+            if (prop.GetCustomAttribute<ConcurrencyCheckAttribute>() != null)
+            {
+                return "_etag";
+            }
 
             var elementAttr = prop.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonElementAttribute>();
             return elementAttr?.ElementName ?? prop.Name;
@@ -603,10 +620,26 @@ public static class DynamicBlittableSerializer<T>
         {
             foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
-                if (!prop.CanRead) continue;
-                if (prop.GetIndexParameters().Length > 0) continue;
-                if (prop.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonIgnoreAttribute>() != null) continue;
-                if (prop.PropertyType.IsByRefLike || prop.PropertyType.IsPointer) continue;
+                if (!prop.CanRead)
+                {
+                    continue;
+                }
+
+                if (prop.GetIndexParameters().Length > 0)
+                {
+                    continue;
+                }
+
+                if (prop.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonIgnoreAttribute>() != null)
+                {
+                    continue;
+                }
+
+                if (prop.PropertyType.IsByRefLike || prop.PropertyType.IsPointer)
+                {
+                    continue;
+                }
+
                 yield return prop;
             }
         }

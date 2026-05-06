@@ -22,25 +22,4 @@ public static class DocumentTypeTracker
             (t.Namespace != null && namespaces.Any(ns => t.Namespace == ns || t.Namespace.StartsWith(ns + ".")))
         );
     }
-
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, string> _collectionNameCache = new();
-
-    public static void ClearCache() => _collectionNameCache.Clear();
-
-    /// <summary>
-    /// Returns the default collection name for a document type.
-    /// </summary>
-    public static string GetDefaultCollectionName(Type type)
-    {
-        return _collectionNameCache.GetOrAdd(type, t => 
-        {
-            var docAttr = t.GetCustomAttribute<DocumentAttribute>();
-            if (docAttr?.CollectionName != null)
-            {
-                return docAttr.CollectionName;
-            }
-
-            return Conventions.FindCollectionName(t);
-        });
-    }
 }

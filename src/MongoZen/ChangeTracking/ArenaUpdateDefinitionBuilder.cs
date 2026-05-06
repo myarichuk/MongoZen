@@ -160,15 +160,42 @@ public struct ArenaUpdateDefinitionBuilder
     public void Set(ReadOnlySpan<char> path, BsonValue value)
     {
         EnsureSetStarted();
-        if (value.IsInt32) _writer.WriteInt32(path, value.AsInt32);
-        else if (value.IsInt64) _writer.WriteInt64(path, value.AsInt64);
-        else if (value.IsDouble) _writer.WriteDouble(path, value.AsDouble);
-        else if (value.IsBoolean) _writer.WriteBoolean(path, value.AsBoolean);
-        else if (value.IsString) _writer.WriteString(path, value.AsString.AsSpan());
-        else if (value.IsObjectId) _writer.WriteObjectId(path, value.AsObjectId);
-        else if (value.BsonType == BsonType.DateTime) _writer.WriteDateTime(path, value.ToUniversalTime());
-        else if (value.IsGuid) _writer.WriteGuid(path, value.AsGuid);
-        else if (value.IsBsonNull) _writer.WriteNull(path);
+        if (value.IsInt32)
+        {
+            _writer.WriteInt32(path, value.AsInt32);
+        }
+        else if (value.IsInt64)
+        {
+            _writer.WriteInt64(path, value.AsInt64);
+        }
+        else if (value.IsDouble)
+        {
+            _writer.WriteDouble(path, value.AsDouble);
+        }
+        else if (value.IsBoolean)
+        {
+            _writer.WriteBoolean(path, value.AsBoolean);
+        }
+        else if (value.IsString)
+        {
+            _writer.WriteString(path, value.AsString.AsSpan());
+        }
+        else if (value.IsObjectId)
+        {
+            _writer.WriteObjectId(path, value.AsObjectId);
+        }
+        else if (value.BsonType == BsonType.DateTime)
+        {
+            _writer.WriteDateTime(path, value.ToUniversalTime());
+        }
+        else if (value.IsGuid)
+        {
+            _writer.WriteGuid(path, value.AsGuid);
+        }
+        else if (value.IsBsonNull)
+        {
+            _writer.WriteNull(path);
+        }
         else
         {
             _writer.WriteName(path, (BlittableBsonConstants.BsonType)value.BsonType);

@@ -34,31 +34,25 @@ public class DocumentTypeTrackerTests
     [Fact]
     public void Should_Infer_Default_Collection_Names()
     {
-        Assert.Equal("ExplicitDocs", DocumentTypeTracker.GetDefaultCollectionName(typeof(ExplicitDoc)));
-        Assert.Equal("CustomCollection", DocumentTypeTracker.GetDefaultCollectionName(typeof(CustomDoc)));
+        var conventions = new DocumentConventions();
+        Assert.Equal("ExplicitDocs", conventions.GetCollectionName(typeof(ExplicitDoc)));
+        Assert.Equal("CustomCollection", conventions.GetCollectionName(typeof(CustomDoc)));
         
-        Assert.Equal("Categories", DocumentTypeTracker.GetDefaultCollectionName(typeof(Category)));
-        Assert.Equal("Foxes", DocumentTypeTracker.GetDefaultCollectionName(typeof(Fox)));
-        Assert.Equal("Statuses", DocumentTypeTracker.GetDefaultCollectionName(typeof(Status)));
-        Assert.Equal("Leaves", DocumentTypeTracker.GetDefaultCollectionName(typeof(Leaf)));
-        Assert.Equal("Wives", DocumentTypeTracker.GetDefaultCollectionName(typeof(Wife)));
-        Assert.Equal("Days", DocumentTypeTracker.GetDefaultCollectionName(typeof(Day)));
+        Assert.Equal("Categories", conventions.GetCollectionName(typeof(Category)));
+        Assert.Equal("Foxes", conventions.GetCollectionName(typeof(Fox)));
+        Assert.Equal("Statuses", conventions.GetCollectionName(typeof(Status)));
+        Assert.Equal("Leaves", conventions.GetCollectionName(typeof(Leaf)));
+        Assert.Equal("Wives", conventions.GetCollectionName(typeof(Wife)));
+        Assert.Equal("Days", conventions.GetCollectionName(typeof(Day)));
     }
 
     [Fact]
-    public void Should_Respect_Global_Convention_Override()
+    public void Should_Respect_Convention_Override()
     {
-        var original = Conventions.FindCollectionName;
-        DocumentTypeTracker.ClearCache();
-        try
+        var conventions = new DocumentConventions
         {
-            Conventions.FindCollectionName = type => "Global_" + type.Name;
-            Assert.Equal("Global_ExplicitDoc", DocumentTypeTracker.GetDefaultCollectionName(typeof(ExplicitDoc)));
-        }
-        finally
-        {
-            Conventions.FindCollectionName = original;
-            DocumentTypeTracker.ClearCache();
-        }
+            FindCollectionName = type => "Prefix_" + type.Name
+        };
+        Assert.Equal("Prefix_ExplicitDoc", conventions.GetCollectionName(typeof(ExplicitDoc)));
     }
 }

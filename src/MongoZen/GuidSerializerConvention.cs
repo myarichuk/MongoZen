@@ -7,7 +7,12 @@ namespace MongoZen;
 
 public class GuidSerializerConvention : ConventionBase, IMemberMapConvention
 {
-    private readonly GuidSerializer _serializer = new(Conventions.GuidRepresentation);
+    private readonly GuidSerializer _serializer;
+
+    public GuidSerializerConvention(GuidRepresentation representation)
+    {
+        _serializer = new GuidSerializer(representation);
+    }
 
     public void Apply(BsonMemberMap memberMap)
     {

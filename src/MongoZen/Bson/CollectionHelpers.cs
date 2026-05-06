@@ -101,7 +101,10 @@ public static class CollectionHelper<T>
 
     public static BsonValue ToBsonValue(IEnumerable<T> collection)
     {
-        if (collection == null) return BsonNull.Value;
+        if (collection == null)
+        {
+            return BsonNull.Value;
+        }
 
         var type = typeof(T);
         if (type.IsPrimitive || type == typeof(string) || type == typeof(decimal) || type == typeof(ObjectId) || type == typeof(Guid) || type == typeof(DateTime))
@@ -199,7 +202,10 @@ public static class DictionaryHelper<TValue>
 
     public static BsonValue ToBsonValue(IDictionary<string, TValue> dictionary)
     {
-        if (dictionary == null) return BsonNull.Value;
+        if (dictionary == null)
+        {
+            return BsonNull.Value;
+        }
 
         var type = typeof(TValue);
         if (type.IsPrimitive || type == typeof(string) || type == typeof(decimal) || type == typeof(ObjectId) || type == typeof(Guid) || type == typeof(DateTime))

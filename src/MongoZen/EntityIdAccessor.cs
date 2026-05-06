@@ -58,17 +58,29 @@ internal static class EntityIdAccessor<TEntity>
 
         MethodInfo? method = null;
         if (underlyingType == typeof(int))
+        {
             method = typeof(DocId).GetMethod(nameof(DocId.FromInt32), [typeof(int)]);
+        }
         else if (underlyingType == typeof(long))
+        {
             method = typeof(DocId).GetMethod(nameof(DocId.FromInt64), [typeof(long)]);
+        }
         else if (underlyingType == typeof(Guid))
+        {
             method = typeof(DocId).GetMethod(nameof(DocId.FromGuid), [typeof(Guid)]);
+        }
         else if (underlyingType == typeof(ObjectId))
+        {
             method = typeof(DocId).GetMethod(nameof(DocId.FromObjectId), [typeof(ObjectId)]);
+        }
         else if (underlyingType == typeof(string))
+        {
             method = typeof(DocId).GetMethod(nameof(DocId.FromString), [typeof(string)]);
+        }
         else if (typeof(IDocIdHashable).IsAssignableFrom(underlyingType))
+        {
             method = typeof(DocId).GetMethod(nameof(DocId.FromHashable), [typeof(IDocIdHashable)]);
+        }
 
         if (method != null)
         {

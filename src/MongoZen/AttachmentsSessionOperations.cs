@@ -47,10 +47,14 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
                 if (chunks.Count >= 4) // Batch of ~1MB
                 {
                     if (_session.ClientSession != null)
+                    {
                         await ChunksCollection.InsertManyAsync(_session.ClientSession, chunks, null, cancellationToken);
+                    }
                     else
+                    {
                         await ChunksCollection.InsertManyAsync(chunks, null, cancellationToken);
-                    
+                    }
+
                     chunks.Clear();
                 }
             }
@@ -58,9 +62,13 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
             if (chunks.Count > 0)
             {
                 if (_session.ClientSession != null)
+                {
                     await ChunksCollection.InsertManyAsync(_session.ClientSession, chunks, null, cancellationToken);
+                }
                 else
+                {
                     await ChunksCollection.InsertManyAsync(chunks, null, cancellationToken);
+                }
             }
 
             // 2. Write files metadata
@@ -73,16 +81,20 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
                 { "filename", name },
                 { "metadata", new BsonDocument
                     {
-                        { "documentId", BsonValue.Create(documentId) },
+                        { "documentId", _session.Conventions.CreateBsonValue(documentId) },
                         { "contentType", contentType ?? "application/octet-stream" }
                     }
                 }
             };
 
             if (_session.ClientSession != null)
+            {
                 await FilesCollection.InsertOneAsync(_session.ClientSession, fileDoc, null, cancellationToken);
+            }
             else
+            {
                 await FilesCollection.InsertOneAsync(fileDoc, null, cancellationToken);
+            }
         }
         finally
         {
@@ -96,7 +108,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
 
         var filter = Builders<BsonDocument>.Filter.And(
             Builders<BsonDocument>.Filter.Eq("filename", name),
-            Builders<BsonDocument>.Filter.Eq("metadata.documentId", BsonValue.Create(documentId))
+            Builders<BsonDocument>.Filter.Eq("metadata.documentId", _session.Conventions.CreateBsonValue(documentId))
         );
 
         var cursor = _session.ClientSession != null
@@ -124,7 +136,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
 
         var filter = Builders<BsonDocument>.Filter.And(
             Builders<BsonDocument>.Filter.Eq("filename", name),
-            Builders<BsonDocument>.Filter.Eq("metadata.documentId", BsonValue.Create(documentId))
+            Builders<BsonDocument>.Filter.Eq("metadata.documentId", _session.Conventions.CreateBsonValue(documentId))
         );
 
         var fileDoc = _session.ClientSession != null
@@ -151,12 +163,15 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
     {
         await _session.EnsureTransactionStartedAsync(cancellationToken);
 
-        var filter = Builders<BsonDocument>.Filter.Eq("metadata.documentId", BsonValue.Create(documentId));
+        var filter = Builders<BsonDocument>.Filter.Eq("metadata.documentId", _session.Conventions.CreateBsonValue(documentId));
         var files = _session.ClientSession != null
             ? await FilesCollection.Find(_session.ClientSession, filter).ToListAsync(cancellationToken)
             : await FilesCollection.Find(filter).ToListAsync(cancellationToken);
         
-        if (files.Count == 0) return;
+        if (files.Count == 0)
+        {
+            return;
+        }
 
         var fileIds = files.Select(f => f["_id"]).ToList();
         
@@ -177,7 +192,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
     {
         await _session.EnsureTransactionStartedAsync(cancellationToken);
 
-        var filter = Builders<BsonDocument>.Filter.Eq("metadata.documentId", BsonValue.Create(documentId));
+        var filter = Builders<BsonDocument>.Filter.Eq("metadata.documentId", _session.Conventions.CreateBsonValue(documentId));
         var cursor = _session.ClientSession != null
             ? await FilesCollection.Find(_session.ClientSession, filter).ToListAsync(cancellationToken)
             : await FilesCollection.Find(filter).ToListAsync(cancellationToken);

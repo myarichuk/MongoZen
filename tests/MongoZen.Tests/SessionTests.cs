@@ -16,14 +16,14 @@ public class SessionTests : IntegrationTestBase
     public async Task Session_Should_Track_Changes_And_Save()
     {
         var db = Database;
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(SimpleEntity));
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
         var collection = db.GetCollection<SimpleEntity>(collectionName);
         
         var entity = new SimpleEntity { Id = 1, Name = "Initial" };
         await collection.InsertOneAsync(entity);
 
         using var arena = new ArenaAllocator(1024 * 1024);
-        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
         
         using var session = store.OpenSession();
         var loaded = await session.LoadAsync<SimpleEntity>(1);
@@ -56,13 +56,13 @@ public class SessionTests : IntegrationTestBase
     public async Task Session_Should_Handle_Deletes()
     {
         var db = Database;
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(SimpleEntity));
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
         var collection = db.GetCollection<SimpleEntity>(collectionName);
         
         var entity = new SimpleEntity { Id = 2, Name = "To Delete" };
         await collection.InsertOneAsync(entity);
 
-        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
         using var session = store.OpenSession();
         
         var loaded = await session.LoadAsync<SimpleEntity>(2);
@@ -79,13 +79,13 @@ public class SessionTests : IntegrationTestBase
     public async Task Session_Should_Support_Identity_Map()
     {
         var db = Database;
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(SimpleEntity));
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
         var collection = db.GetCollection<SimpleEntity>(collectionName);
         
         var entity = new SimpleEntity { Id = 3, Name = "Identical" };
         await collection.InsertOneAsync(entity);
 
-        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
         using var session = store.OpenSession();
         
         var a = await session.LoadAsync<SimpleEntity>(3);
@@ -98,13 +98,13 @@ public class SessionTests : IntegrationTestBase
     public async Task Session_Should_Detect_Dirty_Fields_Only()
     {
         var db = Database;
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(SimpleEntity));
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
         var collection = db.GetCollection<SimpleEntity>(collectionName);
         
         var entity = new SimpleEntity { Id = 4, Name = "Initial", Age = 30 };
         await collection.InsertOneAsync(entity);
 
-        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
         using var session = store.OpenSession();
         
         var loaded = await session.LoadAsync<SimpleEntity>(4);

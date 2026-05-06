@@ -1,23 +1,60 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using MongoDB.Bson;
 
 namespace MongoZen;
 
 /// <summary>
-/// Global conventions for MongoZen.
+/// Conventions for a specific DocumentStore instance.
 /// </summary>
-public static class Conventions
+public sealed class DocumentConventions
 {
-    private static readonly ConcurrentDictionary<Type, string> CachedCollectionNames = new();
+    private readonly ConcurrentDictionary<Type, string> _cachedCollectionNames = new();
 
     /// <summary>
     /// Delegate to find the collection name for a given type.
     /// The default implementation pluralizes the type name.
     /// </summary>
-    public static Func<Type, string> FindCollectionName { get; set; } = 
-        type => CachedCollectionNames.GetOrAdd(type, t => Inflector.Pluralize(t.Name));
-    
-    public static GuidRepresentation GuidRepresentation { get; set; } = GuidRepresentation.Standard;
+    public Func<Type, string> FindCollectionName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the Guid representation to use.
+    /// NOTE: Changing this will apply globally to the MongoDB Driver's ConventionRegistry
+    /// when the DocumentStore is initialized.
+    /// </summary>
+    public GuidRepresentation GuidRepresentation { get; set; } = GuidRepresentation.Standard;
+
+    public DocumentConventions()
+    {
+        FindCollectionName = type => _cachedCollectionNames.GetOrAdd(type, t => Inflector.Pluralize(t.Name));
+    }
+
+    /// <summary>
+    /// Returns the collection name for a document type, respecting [Document] attribute.
+    /// </summary>
+    public string GetCollectionName(Type type)
+    {
+        var docAttr = type.GetCustomAttribute<DocumentAttribute>();
+        if (docAttr?.CollectionName != null)
+        {
+            return docAttr.CollectionName;
+        }
+
+        return FindCollectionName(type);
+    }
+
+    /// <summary>
+    /// Creates a BsonValue from a .NET object, respecting store-specific conventions (like GuidRepresentation).
+    /// </summary>
+    public BsonValue CreateBsonValue(object? value)
+    {
+        return value switch
+        {
+            null => BsonNull.Value,
+            Guid guid => new BsonBinaryData(guid, GuidRepresentation),
+            _ => BsonValue.Create(value)
+        };
+    }
 }
 
 internal static class Inflector
@@ -33,7 +70,6 @@ internal static class Inflector
             return word;
         }
 
-        // Common irregulars or special cases could go here, but let's keep it pragmatic.
         if (word.Length <= 1)
         {
             return $"{word}s";
@@ -42,7 +78,6 @@ internal static class Inflector
         var last = word[^1];
         var secondLast = word[^2];
 
-        // y -> ies (e.g. Company -> Companies), but not if preceded by vowel (e.g. Day -> Days)
         if (last is 'y' or 'Y')
         {
             if (IsVowel(secondLast))
@@ -53,7 +88,6 @@ internal static class Inflector
             return $"{word[..^1]}{(last == 'y' ? "ies" : "IES")}";
         }
 
-        // s, x, z, ch, sh -> es (e.g. Status -> Statuses, Fox -> Foxes)
         if (last is 's' or 'S' or 'x' or 'X' or 'z' or 'Z')
         {
             return word + (char.IsUpper(last) ? "ES" : "es");
@@ -65,7 +99,6 @@ internal static class Inflector
             return $"{word}{(char.IsUpper(last) ? "ES" : "es")}";
         }
 
-        // f, fe -> ves (e.g. Leaf -> Leaves, Wife -> Wives)
         if (last is 'f' or 'F')
         {
             return word[..^1] + (last == 'f' ? "ves" : "VES");

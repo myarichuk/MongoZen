@@ -65,7 +65,7 @@ public class AttachmentTests : IntegrationTestBase
         var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
         
         var entity = new SimpleEntity { Id = 100, Name = "Parent" };
-        var collectionName = DocumentTypeTracker.GetDefaultCollectionName(typeof(SimpleEntity));
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
         await db.GetCollection<SimpleEntity>(collectionName).InsertOneAsync(entity);
 
         using var session = store.OpenSession();

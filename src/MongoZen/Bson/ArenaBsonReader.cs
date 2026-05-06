@@ -19,8 +19,11 @@ public static unsafe class ArenaBsonReader
 
     public static BlittableBsonDocument ReadInPlace(byte* pBuffer, int len, ArenaAllocator arena)
     {
-        if (len < 5) throw new ArgumentException("Invalid BSON length", nameof(len));
-        
+        if (len < 5)
+        {
+            throw new ArgumentException("Invalid BSON length", nameof(len));
+        }
+
         var index = new ArenaDictionary<ArenaUtf8String, int>(arena);
         var keyCache = new ArenaDictionary<ArenaUtf8String, ArenaUtf8String>(arena);
 
@@ -32,7 +35,10 @@ public static unsafe class ArenaBsonReader
             int nameEnd = nameStart;
             while (nameEnd < len && pBuffer[nameEnd] != 0) nameEnd++;
             
-            if (nameEnd >= len) throw new IndexOutOfRangeException("BSON element name terminator not found");
+            if (nameEnd >= len)
+            {
+                throw new IndexOutOfRangeException("BSON element name terminator not found");
+            }
 
             var nameSpan = new ReadOnlySpan<byte>(pBuffer + nameStart, nameEnd - nameStart);
             var clonedNameSpan = ArenaUtf8String.Clone(nameSpan, arena);
@@ -46,7 +52,10 @@ public static unsafe class ArenaBsonReader
             index.Add(name, pos); // offset of the element (including type)
             pos = SkipElement(pBuffer, nameEnd + 1, type);
             
-            if (pos > len) throw new IndexOutOfRangeException("BSON element exceeds document length");
+            if (pos > len)
+            {
+                throw new IndexOutOfRangeException("BSON element exceeds document length");
+            }
         }
 
         return new BlittableBsonDocument(pBuffer, len, index);

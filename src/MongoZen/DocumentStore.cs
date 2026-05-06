@@ -19,22 +19,32 @@ public sealed class DocumentStore : IDisposable
     private static readonly ConcurrentDictionary<string, ClusterFeatures> TopologyCache = new();
 
     /// <summary>
+    /// Gets the conventions used by this DocumentStore instance.
+    /// </summary>
+    public DocumentConventions Conventions { get; }
+
+    /// <summary>
     /// Initializes a new instance of the DocumentStore with an existing IMongoClient.
     /// </summary>
-    public DocumentStore(IMongoClient client, string databaseName)
+    public DocumentStore(IMongoClient client, string databaseName, DocumentConventions? conventions = null)
     {
         _client = client;
         _databaseName = databaseName;
         _database = _client.GetDatabase(databaseName);
+        Conventions = conventions ?? new DocumentConventions();
         
         // For shared clients, we use the servers list as the key
         var servers = string.Join(",", client.Settings.Servers);
         _features = GetOrDiscoverFeatures(servers);
-        
+
+        // NOTE: The MongoDB Driver's ConventionRegistry is global. 
+        // We register it here for convenience, but be aware that if multiple DocumentStore 
+        // instances are created with different GuidRepresentations, the last one registered 
+        // will apply to the entire AppDomain.
         var guidConvention = new ConventionPack { 
-            new GuidSerializerConvention() 
+            new GuidSerializerConvention(Conventions.GuidRepresentation) 
         };
-        ConventionRegistry.Register("GuidStandard", guidConvention, _ => true);        
+        ConventionRegistry.Register("GuidStandard", guidConvention, _ => true);
     }
 
     private ClusterFeatures GetOrDiscoverFeatures(string key) => new();
@@ -62,6 +72,18 @@ public sealed class DocumentStore : IDisposable
     /// <param name="initialArenaSize">The initial size of the arena allocator in bytes. Defaults to 1MB.</param>
     public DocumentSession OpenSession(int initialArenaSize = 1024 * 1024) => 
         new(this, initialArenaSize);
+
+    /// <summary>
+    /// Scans the specified assembly for all index creation tasks and executes them.
+    /// </summary>
+    public Task ExecuteIndexesAsync(System.Reflection.Assembly assembly, CancellationToken cancellationToken = default)
+        => IndexCreation.CreateIndexesAsync(assembly, this, cancellationToken);
+
+    /// <summary>
+    /// Scans the assembly containing the DocumentStore instance for all index creation tasks and executes them.
+    /// </summary>
+    public Task ExecuteIndexesAsync(CancellationToken cancellationToken = default)
+        => IndexCreation.CreateIndexesAsync(System.Reflection.Assembly.GetCallingAssembly(), this, cancellationToken);
 
     public void Dispose()
     {

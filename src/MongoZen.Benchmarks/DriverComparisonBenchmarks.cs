@@ -152,43 +152,9 @@ public class DriverComparisonBenchmarks
         }
         return result;
     }
+    
 
-    [Benchmark(Baseline = true, Description = "Driver Update (Individual, No Tx)")]
-    [BenchmarkCategory("Update")]
-    public async Task Driver_UpdateAll()
-    {
-        foreach (var id in _ids)
-        {
-            var doc = await _collection.Find(x => x.Id == id).FirstOrDefaultAsync();
-            if (doc != null)
-            {
-                var filter = Builders<LargePoco>.Filter.Eq(x => x.Id, id);
-                var update = Builders<LargePoco>.Update.Set(x => x.Name, "Updated Name");
-                await _collection.UpdateOneAsync(filter, update);
-            }
-        }
-    }
-
-    [Benchmark(Description = "Driver Update (Individual, In Tx)")]
-    [BenchmarkCategory("Update")]
-    public async Task Driver_UpdateAll_Tx()
-    {
-        using var session = await _client.StartSessionAsync();
-        session.StartTransaction();
-        foreach (var id in _ids)
-        {
-            var doc = await _collection.Find(session, x => x.Id == id).FirstOrDefaultAsync();
-            if (doc != null)
-            {
-                var filter = Builders<LargePoco>.Filter.Eq(x => x.Id, id);
-                var update = Builders<LargePoco>.Update.Set(x => x.Name, "Updated Name");
-                await _collection.UpdateOneAsync(session, filter, update);
-            }
-        }
-        await session.CommitTransactionAsync();
-    }
-
-    [Benchmark(Description = "Driver Update (BulkWrite, In Tx)")]
+    [Benchmark(Description = "Driver Update (BulkWrite, In Tx)", Baseline = true)]
     [BenchmarkCategory("Update")]
     public async Task Driver_BulkUpdate_Tx()
     {
