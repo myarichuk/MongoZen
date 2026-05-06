@@ -12,7 +12,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
     private IMongoCollection<BsonDocument> ChunksCollection => _session.Database.GetCollection<BsonDocument>("fs.chunks");
     private const int ChunkSize = 261120; // 255KB
 
-    public async Task StoreAsync(object documentId, string name, Stream stream, string? contentType = null, CancellationToken cancellationToken = default)
+    public async ValueTask StoreAsync(object documentId, string name, Stream stream, string? contentType = null, CancellationToken cancellationToken = default)
     {
         await _session.EnsureTransactionStartedAsync(cancellationToken);
         var filesId = ObjectId.GenerateNewId();
@@ -102,7 +102,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
         }
     }
 
-    public async Task<AttachmentResult> GetAsync(object documentId, string name, CancellationToken cancellationToken = default)
+    public async ValueTask<AttachmentResult> GetAsync(object documentId, string name, CancellationToken cancellationToken = default)
     {
         await _session.EnsureTransactionStartedAsync(cancellationToken);
 
@@ -130,7 +130,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
         return new AttachmentResult(name, stream, cType);
     }
 
-    public async Task DeleteAsync(object documentId, string name, CancellationToken cancellationToken = default)
+    public async ValueTask DeleteAsync(object documentId, string name, CancellationToken cancellationToken = default)
     {
         await _session.EnsureTransactionStartedAsync(cancellationToken);
 
@@ -159,7 +159,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
         }
     }
 
-    public async Task DeleteAllAsync(object documentId, CancellationToken cancellationToken = default)
+    public async ValueTask DeleteAllAsync(object documentId, CancellationToken cancellationToken = default)
     {
         await _session.EnsureTransactionStartedAsync(cancellationToken);
 
@@ -188,7 +188,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
         }
     }
 
-    public async Task<IEnumerable<string>> GetNamesAsync(object documentId, CancellationToken cancellationToken = default)
+    public async ValueTask<IEnumerable<string>> GetNamesAsync(object documentId, CancellationToken cancellationToken = default)
     {
         await _session.EnsureTransactionStartedAsync(cancellationToken);
 

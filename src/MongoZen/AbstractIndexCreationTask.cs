@@ -4,7 +4,7 @@ namespace MongoZen;
 
 internal interface IAbstractIndexCreationTask
 {
-    Task ExecuteAsync(DocumentStore store, CancellationToken cancellationToken);
+    ValueTask ExecuteAsync(DocumentStore store, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -49,7 +49,7 @@ public abstract class AbstractIndexCreationTask<T> : IAbstractIndexCreationTask 
         if (single != null) yield return single;
     }
 
-    async Task IAbstractIndexCreationTask.ExecuteAsync(DocumentStore store, CancellationToken cancellationToken)
+    async ValueTask IAbstractIndexCreationTask.ExecuteAsync(DocumentStore store, CancellationToken cancellationToken)
     {
         var collectionName = CollectionName ?? store.Conventions.GetCollectionName(typeof(T));
         var collection = store.Database.GetCollection<T>(collectionName);

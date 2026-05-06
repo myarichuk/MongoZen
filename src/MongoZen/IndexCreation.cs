@@ -13,7 +13,7 @@ public static class IndexCreation
     /// <param name="assembly">The assembly to scan.</param>
     /// <param name="store">The DocumentStore instance.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    public static async Task CreateIndexesAsync(Assembly assembly, DocumentStore store, CancellationToken cancellationToken = default)
+    public static async ValueTask CreateIndexesAsync(Assembly assembly, DocumentStore store, CancellationToken cancellationToken = default)
     {
         var taskTypes = assembly.GetTypes()
             .Where(t => t is { IsAbstract: false, IsClass: true } && typeof(IAbstractIndexCreationTask).IsAssignableFrom(t));
@@ -27,12 +27,12 @@ public static class IndexCreation
             }
         }
 
-        await Task.WhenAll(tasks.Select(t => t.ExecuteAsync(store, cancellationToken))).ConfigureAwait(false);
+        await Task.WhenAll(tasks.Select(t => t.ExecuteAsync(store, cancellationToken).AsTask())).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Scans the assembly containing the specified type for all index creation tasks and executes them.
     /// </summary>
-    public static Task CreateIndexesAsync<T>(DocumentStore store, CancellationToken cancellationToken = default)
+    public static ValueTask CreateIndexesAsync<T>(DocumentStore store, CancellationToken cancellationToken = default)
         => CreateIndexesAsync(typeof(T).Assembly, store, cancellationToken);
 }

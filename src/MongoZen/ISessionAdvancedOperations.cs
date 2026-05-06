@@ -27,5 +27,5 @@ public interface ISessionAdvancedOperations
     /// <summary>
     /// Refreshes the entity from the database, updating its properties and resetting its change tracking state.
     /// </summary>
-    Task RefreshAsync<T>(T entity, CancellationToken ct = default);
+    ValueTask RefreshAsync<T>(T entity, CancellationToken ct = default);
 }

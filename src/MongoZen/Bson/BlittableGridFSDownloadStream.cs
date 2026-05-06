@@ -73,7 +73,7 @@ internal sealed class BlittableGridFSDownloadStream : Stream
         return toCopy;
     }
 
-    public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
         if (_position >= _length)
         {
@@ -94,12 +94,17 @@ internal sealed class BlittableGridFSDownloadStream : Stream
         }
 
         int available = _currentChunkData.Length - chunkOffset;
-        int toCopy = Math.Min(count, available);
+        int toCopy = Math.Min(buffer.Length, available);
         
-        Buffer.BlockCopy(_currentChunkData, chunkOffset, buffer, offset, toCopy);
+        _currentChunkData.AsMemory(chunkOffset, toCopy).CopyTo(buffer);
         
         _position += toCopy;
         return toCopy;
+    }
+
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    {
+        return ReadAsync(new Memory<byte>(buffer, offset, count), cancellationToken).AsTask();
     }
 
     private void LoadChunk(int chunkIndex)
@@ -128,7 +133,7 @@ internal sealed class BlittableGridFSDownloadStream : Stream
         _currentChunkIndex = chunkIndex;
     }
 
-    private async Task LoadChunkAsync(int chunkIndex, CancellationToken cancellationToken)
+    private async ValueTask LoadChunkAsync(int chunkIndex, CancellationToken cancellationToken)
     {
         var filter = Builders<BsonDocument>.Filter.And(
             Builders<BsonDocument>.Filter.Eq("files_id", _filesId),

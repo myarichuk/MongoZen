@@ -40,7 +40,7 @@ public sealed class DocumentSession : IDisposable
         Attachments = new AttachmentsSessionOperations(this);
     }
 
-    public async Task<T?> LoadAsync<T>(object id, CancellationToken ct = default)
+    public async ValueTask<T?> LoadAsync<T>(object id, CancellationToken ct = default)
     {
         if (_identityMap.TryGetValue(id, out var existing))
         {
@@ -327,7 +327,7 @@ public sealed class DocumentSession : IDisposable
             session._changeTracker.Evict(entity);
         }
 
-        public async Task RefreshAsync<T>(T entity, CancellationToken ct = default)
+        public async ValueTask RefreshAsync<T>(T entity, CancellationToken ct = default)
         {
             if (entity == null)
             {

@@ -76,13 +76,13 @@ public sealed class DocumentStore : IDisposable
     /// <summary>
     /// Scans the specified assembly for all index creation tasks and executes them.
     /// </summary>
-    public Task ExecuteIndexesAsync(System.Reflection.Assembly assembly, CancellationToken cancellationToken = default)
+    public ValueTask ExecuteIndexesAsync(System.Reflection.Assembly assembly, CancellationToken cancellationToken = default)
         => IndexCreation.CreateIndexesAsync(assembly, this, cancellationToken);
 
     /// <summary>
     /// Scans the assembly containing the DocumentStore instance for all index creation tasks and executes them.
     /// </summary>
-    public Task ExecuteIndexesAsync(CancellationToken cancellationToken = default)
+    public ValueTask ExecuteIndexesAsync(CancellationToken cancellationToken = default)
         => IndexCreation.CreateIndexesAsync(System.Reflection.Assembly.GetCallingAssembly(), this, cancellationToken);
 
     public void Dispose()
