@@ -305,7 +305,7 @@ public enum OperationType : byte
     Delete
 }
 
-public readonly struct PendingOperation
+public struct PendingOperation
 {
     public OperationType Type { get; init; }
     public string CollectionName { get; init; }
@@ -313,14 +313,19 @@ public readonly struct PendingOperation
     public Guid ExpectedEtag { get; init; }
     public BlittableBsonDocument? Document { get; init; }
     public object Entity { get; init; }
+    public IDisposable? BufferToDispose { get; private set; }
 
     public WriteModel<BsonDocument> ToWriteModel(DocumentConventions conventions)
     {
         switch (Type)
         {
             case OperationType.Insert:
-                var rawInsert = new RawBsonDocument(Document!.Value.AsReadOnlySpan().ToArray());
-                return new InsertOneModel<BsonDocument>(new BsonDocument(rawInsert));
+                unsafe
+                {
+                    var buffer = PooledByteBuffer.Rent(Document!.Value.Pointer, Document.Value.Length);
+                    BufferToDispose = buffer;
+                    return new InsertOneModel<BsonDocument>(new RawBsonDocument(buffer));
+                }
 
             case OperationType.Update:
                 var filterUpdate = Builders<BsonDocument>.Filter.Eq("_id", conventions.CreateBsonValue(Id));
@@ -328,8 +333,12 @@ public readonly struct PendingOperation
                 {
                     filterUpdate = Builders<BsonDocument>.Filter.And(filterUpdate, Builders<BsonDocument>.Filter.Eq("_etag", conventions.CreateBsonValue(ExpectedEtag)));
                 }
-                var rawUpdate = new RawBsonDocument(Document!.Value.AsReadOnlySpan().ToArray());
-                return new UpdateOneModel<BsonDocument>(filterUpdate, rawUpdate);
+                unsafe
+                {
+                    var buffer = PooledByteBuffer.Rent(Document!.Value.Pointer, Document.Value.Length);
+                    BufferToDispose = buffer;
+                    return new UpdateOneModel<BsonDocument>(filterUpdate, new RawBsonDocument(buffer));
+                }
 
             case OperationType.Delete:
                 var filterDelete = Builders<BsonDocument>.Filter.Eq("_id", conventions.CreateBsonValue(Id));

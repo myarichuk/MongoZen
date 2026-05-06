@@ -56,10 +56,8 @@ public sealed class DocumentStore : IDisposable
 
     private readonly ConcurrentDictionary<string, IMongoCollection<RawBsonDocument>> _rawCollectionCache = new();
 
-    public IMongoCollection<RawBsonDocument> GetRawCollection(string name)
-    {
-        return _rawCollectionCache.GetOrAdd(name, n => Database.GetCollection<RawBsonDocument>(n));
-    }
+    public IMongoCollection<RawBsonDocument> GetRawCollection(string name) => 
+        _rawCollectionCache.GetOrAdd(name, n=> Database.GetCollection<RawBsonDocument>(n));
 
     /// <summary>
     /// Gets the discovered features of the cluster.

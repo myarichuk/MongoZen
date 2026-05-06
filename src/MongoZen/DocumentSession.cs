@@ -115,66 +115,84 @@ public sealed class DocumentSession : IDisposable
 
             await EnsureTransactionStartedAsync(cancellationToken);
 
-            var groupedOps = new Dictionary<string, List<PendingOperation>>();
-            for (int i = 0; i < count; i++)
+            // Sort buffer by CollectionName to group operations
+            Array.Sort(buffer, 0, count, Comparer<PendingOperation>.Create((a, b) => string.CompareOrdinal(a.CollectionName, b.CollectionName)));
+
+            int start = 0;
+            while (start < count)
             {
-                var op = buffer[i];
-                if (!groupedOps.TryGetValue(op.CollectionName, out var ops))
+                int end = start;
+                string currentCollection = buffer[start].CollectionName;
+                while (end < count && buffer[end].CollectionName == currentCollection)
                 {
-                    ops = new List<PendingOperation>();
-                    groupedOps[op.CollectionName] = ops;
+                    end++;
                 }
-                ops.Add(op);
-            }
 
-            foreach (var group in groupedOps)
-            {
-                var collectionName = group.Key;
-                var updates = group.Value;
-                var collection = _database.GetCollection<BsonDocument>(collectionName);
+                var collection = _database.GetCollection<BsonDocument>(currentCollection);
+                var models = new List<WriteModel<BsonDocument>>(end - start);
 
-                var models = updates.Select(u => u.ToWriteModel(_store.Conventions)).ToList();
-                if (models.Count == 0) continue;
-
-                BulkWriteResult<BsonDocument> result;
-                try
+                for (int i = start; i < end; i++)
                 {
-                    if (_clientSession != null)
+                    models.Add(buffer[i].ToWriteModel(_store.Conventions));
+                }
+
+                if (models.Count > 0)
+                {
+                    BulkWriteResult<BsonDocument> result;
+                    try
                     {
-                        result = await collection.BulkWriteAsync(_clientSession, models, cancellationToken: cancellationToken);
+                        if (_clientSession != null)
+                        {
+                            result = await collection.BulkWriteAsync(_clientSession, models, cancellationToken: cancellationToken);
+                        }
+                        else
+                        {
+                            result = await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
+                        }
                     }
-                    else
+                    catch (MongoCommandException ex) when (ex.Code == 112) // WriteConflict
                     {
-                        result = await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
+                        await IdentifyConcurrencyConflictAsync(buffer, start, end, cancellationToken);
+                        throw;
                     }
-                }
-                catch (MongoCommandException ex) when (ex.Code == 112) // WriteConflict
-                {
-                    await IdentifyConcurrencyConflictAsync(updates, cancellationToken);
-                    throw;
-                }
-                catch (MongoBulkWriteException<BsonDocument> ex) when (ex.WriteErrors.Any(e => e.Code == 112))
-                {
-                    await IdentifyConcurrencyConflictAsync(updates, cancellationToken);
-                    throw;
-                }
-
-                var expectedMatched = updates.Count(u => u.Type == OperationType.Update);
-                var expectedDeleted = updates.Count(u => u.Type == OperationType.Delete);
-
-                if (result.MatchedCount < expectedMatched || result.DeletedCount < expectedDeleted)
-                {
-                    await IdentifyConcurrencyConflictAsync(updates, cancellationToken);
-                }
-
-                // Cascading delete for attachments
-                foreach (var update in updates)
-                {
-                    if (update.Type == OperationType.Delete)
+                    catch (MongoBulkWriteException<BsonDocument> ex) when (ex.WriteErrors.Any(e => e.Code == 112))
                     {
-                        await Attachments.DeleteAllAsync(update.Id, cancellationToken);
+                        await IdentifyConcurrencyConflictAsync(buffer, start, end, cancellationToken);
+                        throw;
+                    }
+                    finally
+                    {
+                        // Always dispose buffers after the write operation, whether it succeeded or failed.
+                        for (int i = start; i < end; i++)
+                        {
+                            buffer[i].BufferToDispose?.Dispose();
+                        }
+                    }
+
+                    int expectedMatched = 0;
+                    int expectedDeleted = 0;
+                    for (int i = start; i < end; i++)
+                    {
+                        if (buffer[i].Type == OperationType.Update) expectedMatched++;
+                        else if (buffer[i].Type == OperationType.Delete) expectedDeleted++;
+                    }
+
+                    if (result.MatchedCount < expectedMatched || result.DeletedCount < expectedDeleted)
+                    {
+                        await IdentifyConcurrencyConflictAsync(buffer, start, end, cancellationToken);
+                    }
+
+                    // Cascading delete for attachments
+                    for (int i = start; i < end; i++)
+                    {
+                        if (buffer[i].Type == OperationType.Delete)
+                        {
+                            await Attachments.DeleteAllAsync(buffer[i].Id, cancellationToken);
+                        }
                     }
                 }
+
+                start = end;
             }
 
             if (_clientSession != null && _clientSession.IsInTransaction)
@@ -235,10 +253,18 @@ public sealed class DocumentSession : IDisposable
         }
     }
 
-    private async Task IdentifyConcurrencyConflictAsync(List<PendingOperation> updates, CancellationToken ct)
+    private async Task IdentifyConcurrencyConflictAsync(PendingOperation[] buffer, int start, int end, CancellationToken ct)
     {
         // Only check updates and deletes
-        var checkOps = updates.Where(u => u.Type == OperationType.Update || u.Type == OperationType.Delete).ToList();
+        var checkOps = new List<PendingOperation>();
+        for (int i = start; i < end; i++)
+        {
+            if (buffer[i].Type == OperationType.Update || buffer[i].Type == OperationType.Delete)
+            {
+                checkOps.Add(buffer[i]);
+            }
+        }
+        
         if (checkOps.Count == 0)
         {
             return;
@@ -247,8 +273,7 @@ public sealed class DocumentSession : IDisposable
         var collectionName = checkOps[0].CollectionName;
         var collection = _database.GetCollection<BsonDocument>(collectionName);
         
-        var ids = checkOps.Select(op => op.Id).ToList();
-        var bsonIds = ids.Select(id => _store.Conventions.CreateBsonValue(id)).ToList();
+        var bsonIds = checkOps.Select(op => _store.Conventions.CreateBsonValue(op.Id)).ToList();
         var filter = Builders<BsonDocument>.Filter.In("_id", bsonIds);
         
         var docs = await collection.Find(filter).ToListAsync(ct);
