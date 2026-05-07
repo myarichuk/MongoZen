@@ -28,7 +28,7 @@ public class ConcurrencyTrackingTests
     private readonly ArenaAllocator _allocator = new(1024 * 1024);
 
     [Fact]
-    public void Should_Inject_Initial_ETag_On_Insert()
+    public unsafe void Should_Inject_Initial_ETag_On_Insert()
     {
         var tracker = new ChangeTracker(new DocumentConventions(), _allocator);
         var entity = new ConcurrencyEntity { Id = 1, Name = "New" };
@@ -37,7 +37,8 @@ public class ConcurrencyTrackingTests
         
         using var tempArena = new ArenaAllocator(1024);
         var buffer = new PendingOperation[tracker.TrackedCount];
-        var count = tracker.GetPendingUpdates(buffer, tempArena);
+        var entities = new object[tracker.TrackedCount];
+        var count = tracker.GetPendingUpdates(buffer, entities, tempArena);
         
         var insertOp = buffer[0];
         Assert.Equal(OperationType.Insert, insertOp.Type);
@@ -45,14 +46,13 @@ public class ConcurrencyTrackingTests
         // ETag should have been set on the entity
         Assert.NotEqual(Guid.Empty, entity.Version);
         
-        var writeModel = insertOp.ToWriteModel(new DocumentConventions());
-        var insertModel = Assert.IsType<InsertOneModel<BsonDocument>>(writeModel);
-        Assert.True(insertModel.Document.Contains("_etag"));
-        Assert.Equal(entity.Version, insertModel.Document["_etag"].AsGuid);
+        var doc = ArenaBsonReader.Read(new ReadOnlySpan<byte>(insertOp.PayloadPtr, insertOp.PayloadLength), _allocator);
+        Assert.True(doc.TryGetElementOffset("_etag", out _));
+        Assert.Equal(entity.Version, doc.GetGuid("_etag"));
     }
 
     [Fact]
-    public void Should_Include_ETag_In_Update_Filter()
+    public unsafe void Should_Include_ETag_In_Update_Filter()
     {
         var tracker = new ChangeTracker(new DocumentConventions(), _allocator);
         var initialETag = Guid.NewGuid();
@@ -63,7 +63,7 @@ public class ConcurrencyTrackingTests
         var writer = new ArenaBsonWriter(tempArena);
         writer.WriteStartDocument();
         writer.WriteInt32("_id", 1);
-        writer.WriteString("Name", "Original".AsSpan());
+        writer.WriteString("Name", "Original");
         writer.WriteGuid("_etag", initialETag);
         writer.WriteEndDocument();
         var snapshot = writer.Commit(tempArena);
@@ -73,7 +73,8 @@ public class ConcurrencyTrackingTests
         entity.Name = "Updated";
         using var tempArena2 = new ArenaAllocator(1024);
         var buffer = new PendingOperation[tracker.TrackedCount];
-        var count = tracker.GetPendingUpdates(buffer, tempArena2);
+        var entities = new object[tracker.TrackedCount];
+        var count = tracker.GetPendingUpdates(buffer, entities, tempArena2);
         
         var updateOp = buffer[0];
         Assert.Equal(OperationType.Update, updateOp.Type);
@@ -81,22 +82,21 @@ public class ConcurrencyTrackingTests
         // ETag should have been updated on the entity
         Assert.NotEqual(initialETag, entity.Version);
         
-        var writeModel = updateOp.ToWriteModel(new DocumentConventions());
-        var updateModel = Assert.IsType<UpdateOneModel<BsonDocument>>(writeModel);
-        
-        // Verify filter includes _id AND _etag
-        var filter = updateModel.Filter.Render(new RenderArgs<BsonDocument>(BsonSerializer.LookupSerializer<BsonDocument>(), BsonSerializer.SerializerRegistry));
-        Assert.Equal(1, filter["_id"].AsInt32);
-        Assert.Equal(initialETag, filter["_etag"].AsGuid);
+        // Verify filter data in operation
+        Assert.Equal(DocId.From(1), updateOp.Id);
+        Assert.Equal(initialETag, updateOp.ExpectedEtag);
         
         // Verify update document includes new _etag
-        var updateDoc = updateModel.Update.Render(new RenderArgs<BsonDocument>(BsonSerializer.LookupSerializer<BsonDocument>(), BsonSerializer.SerializerRegistry)).AsBsonDocument;
-        Assert.Equal("Updated", updateDoc["$set"]["Name"].AsString);
-        Assert.Equal(entity.Version, updateDoc["$set"]["_etag"].AsGuid);
+        var updateDoc = ArenaBsonReader.Read(new ReadOnlySpan<byte>(updateOp.PayloadPtr, updateOp.PayloadLength), _allocator);
+        
+        // Updates are encoded as $set: { ... }
+        var setDoc = updateDoc.GetDocument("$set", _allocator);
+        Assert.Equal("Updated", setDoc.GetString("Name"));
+        Assert.Equal(entity.Version, setDoc.GetGuid("_etag"));
     }
 
     [Fact]
-    public void Should_Handle_Hidden_ETag_Update()
+    public unsafe void Should_Handle_Hidden_ETag_Update()
     {
         var tracker = new ChangeTracker(new DocumentConventions(), _allocator);
         var initialETag = Guid.NewGuid();
@@ -107,7 +107,7 @@ public class ConcurrencyTrackingTests
         var writer = new ArenaBsonWriter(tempArena);
         writer.WriteStartDocument();
         writer.WriteInt32("_id", 1);
-        writer.WriteString("Name", "Original".AsSpan());
+        writer.WriteString("Name", "Original");
         writer.WriteGuid("_etag", initialETag);
         writer.WriteEndDocument();
         var snapshot = writer.Commit(tempArena);
@@ -117,24 +117,22 @@ public class ConcurrencyTrackingTests
         entity.Name = "Updated";
         using var tempArena2 = new ArenaAllocator(1024);
         var buffer = new PendingOperation[tracker.TrackedCount];
-        var count = tracker.GetPendingUpdates(buffer, tempArena2);
+        var entities = new object[tracker.TrackedCount];
+        var count = tracker.GetPendingUpdates(buffer, entities, tempArena2);
         
         var updateOp = buffer[0];
         Assert.Equal(OperationType.Update, updateOp.Type);
         
-        var writeModel = updateOp.ToWriteModel(new DocumentConventions());
-        var updateModel = Assert.IsType<UpdateOneModel<BsonDocument>>(writeModel);
-        
         // Verify filter includes _id AND expected _etag
-        var filter = updateModel.Filter.Render(new RenderArgs<BsonDocument>(BsonSerializer.LookupSerializer<BsonDocument>(), BsonSerializer.SerializerRegistry));
-        Assert.Equal(1, filter["_id"].AsInt32);
-        Assert.Equal(initialETag, filter["_etag"].AsGuid);
+        Assert.Equal(DocId.From(1), updateOp.Id);
+        Assert.Equal(initialETag, updateOp.ExpectedEtag);
         
         // Verify update document includes a NEW _etag
-        var updateDoc = updateModel.Update.Render(new RenderArgs<BsonDocument>(BsonSerializer.LookupSerializer<BsonDocument>(), BsonSerializer.SerializerRegistry)).AsBsonDocument;
-        Assert.Equal("Updated", updateDoc["$set"]["Name"].AsString);
-        Assert.True(updateDoc["$set"].AsBsonDocument.Contains("_etag"));
-        Assert.NotEqual(initialETag, updateDoc["$set"]["_etag"].AsGuid);
+        var updateDoc = ArenaBsonReader.Read(new ReadOnlySpan<byte>(updateOp.PayloadPtr, updateOp.PayloadLength), _allocator);
+        var setDoc = updateDoc.GetDocument("$set", _allocator);
+        Assert.Equal("Updated", setDoc.GetString("Name"));
+        Assert.True(setDoc.TryGetElementOffset("_etag", out _));
+        Assert.NotEqual(initialETag, setDoc.GetGuid("_etag"));
     }
 
     [Fact]
@@ -155,7 +153,7 @@ public class ConcurrencyTrackingTests
     }
 
     [Fact]
-    public void Should_Not_Update_If_No_Changes_Detected()
+    public unsafe void Should_Not_Update_If_No_Changes_Detected()
     {
         var tracker = new ChangeTracker(new DocumentConventions(), _allocator);
         var initialETag = Guid.NewGuid();
@@ -166,7 +164,7 @@ public class ConcurrencyTrackingTests
         var writer = new ArenaBsonWriter(tempArena);
         writer.WriteStartDocument();
         writer.WriteInt32("_id", 1);
-        writer.WriteString("Name", "Original".AsSpan());
+        writer.WriteString("Name", "Original");
         writer.WriteGuid("_etag", initialETag);
         writer.WriteEndDocument();
         var snapshot = writer.Commit(tempArena);
@@ -176,7 +174,8 @@ public class ConcurrencyTrackingTests
         // No changes to entity
         using var tempArena2 = new ArenaAllocator(1024);
         var buffer = new PendingOperation[tracker.TrackedCount];
-        var count = tracker.GetPendingUpdates(buffer, tempArena2);
+        var entities = new object[tracker.TrackedCount];
+        var count = tracker.GetPendingUpdates(buffer, entities, tempArena2);
         
         // No updates should be generated
         Assert.Equal(0, count);

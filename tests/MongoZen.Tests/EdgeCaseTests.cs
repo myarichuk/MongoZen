@@ -214,7 +214,7 @@ public class EdgeCaseTests : IntegrationTestBase
     }
 
     [Fact]
-    public void ChangeTracker_Skips_Delete_For_Unsaved_New_Entities()
+    public unsafe void ChangeTracker_Skips_Delete_For_Unsaved_New_Entities()
     {
         var arena = new SharpArena.Allocators.ArenaAllocator(1024);
         var tracker = new MongoZen.ChangeTracking.ChangeTracker(new DocumentConventions(), arena);
@@ -226,7 +226,8 @@ public class EdgeCaseTests : IntegrationTestBase
 
         using var tempArena = new SharpArena.Allocators.ArenaAllocator(1024);
         var buffer = new PendingOperation[tracker.TrackedCount];
-        var count = tracker.GetPendingUpdates(buffer, tempArena);
+        var entities = new object[tracker.TrackedCount];
+        var count = tracker.GetPendingUpdates(buffer, entities, tempArena);
         Assert.Equal(0, count); // Should be empty because it was never persisted
     }
 }

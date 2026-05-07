@@ -66,9 +66,8 @@ public static unsafe class ArenaBsonReader
         return (BlittableBsonConstants.BsonType)doc.Pointer[offset];
     }
 
-    public static int SkipElement(byte* ptr, int dataPos, BlittableBsonConstants.BsonType type)
-    {
-        return type switch
+    public static int SkipElement(byte* ptr, int dataPos, BlittableBsonConstants.BsonType type) =>
+        type switch
         {
             BlittableBsonConstants.BsonType.Double => dataPos + 8,
             BlittableBsonConstants.BsonType.String => dataPos + 4 + *(int*)(ptr + dataPos),
@@ -89,5 +88,4 @@ public static unsafe class ArenaBsonReader
             (BlittableBsonConstants.BsonType)127 => dataPos, // MaxKey
             _ => throw new NotSupportedException($"BSON type {type} ({(int)type}) not yet supported in scanner")
         };
-    }
 }

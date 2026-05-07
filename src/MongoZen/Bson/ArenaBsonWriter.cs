@@ -172,10 +172,38 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         WriteStartDocument();
     }
 
+    public void WriteStartDocument(int index)
+    {
+        if ((uint)index < (uint)IndexStrings.Length)
+        {
+            WriteStartDocument(IndexStrings[index]);
+        }
+        else
+        {
+            Span<char> name = stackalloc char[11];
+            index.TryFormat(name, out int charsWritten);
+            WriteStartDocument(name[..charsWritten]);
+        }
+    }
+
     public void WriteStartArray(ReadOnlySpan<char> name)
     {
         WriteName(name, BlittableBsonConstants.BsonType.Array);
         WriteStartArray();
+    }
+
+    public void WriteName(int index, BlittableBsonConstants.BsonType type)
+    {
+        if ((uint)index < (uint)IndexStrings.Length)
+        {
+            WriteName(IndexStrings[index], type);
+        }
+        else
+        {
+            Span<char> name = stackalloc char[11];
+            index.TryFormat(name, out int charsWritten);
+            WriteName(name[..charsWritten], type);
+        }
     }
 
     // Value-only versions for converters
@@ -290,6 +318,60 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         var d128 = new Decimal128(value);
         WriteInt64Value((long)d128.GetIEEELowBits());
         WriteInt64Value((long)d128.GetIEEEHighBits());
+    }
+
+    public void WriteBsonValue(ReadOnlySpan<char> name, BsonValue value)
+    {
+        if (value.IsInt32)
+        {
+            WriteInt32(name, value.AsInt32);
+        }
+        else if (value.IsInt64)
+        {
+            WriteInt64(name, value.AsInt64);
+        }
+        else if (value.IsDouble)
+        {
+            WriteDouble(name, value.AsDouble);
+        }
+        else if (value.IsBoolean)
+        {
+            WriteBoolean(name, value.AsBoolean);
+        }
+        else if (value.IsString)
+        {
+            WriteString(name, value.AsString.AsSpan());
+        }
+        else if (value.IsObjectId)
+        {
+            WriteObjectId(name, value.AsObjectId);
+        }
+        else if (value.BsonType == BsonType.DateTime)
+        {
+            WriteDateTime(name, value.ToUniversalTime());
+        }
+        else if (value.IsGuid)
+        {
+            WriteGuid(name, value.AsGuid);
+        }
+        else if (value.IsBsonNull)
+        {
+            WriteNull(name);
+        }
+        else
+        {
+            WriteName(name, (BlittableBsonConstants.BsonType)value.BsonType);
+            using var ms = new System.IO.MemoryStream();
+            using (var bsonWriter = new MongoDB.Bson.IO.BsonBinaryWriter(ms))
+            {
+                bsonWriter.WriteStartDocument();
+                bsonWriter.WriteName("v");
+                MongoDB.Bson.Serialization.BsonSerializer.Serialize(bsonWriter, value);
+                bsonWriter.WriteEndDocument();
+            }
+            var bytes = ms.ToArray();
+            WriteRaw(new ReadOnlySpan<byte>(bytes, 7, bytes.Length - 8));
+        }
     }
 
     public void WriteRaw(ReadOnlySpan<byte> bytes)

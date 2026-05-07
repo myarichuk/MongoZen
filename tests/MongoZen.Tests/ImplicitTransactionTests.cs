@@ -113,7 +113,7 @@ public class ImplicitTransactionTests : IntegrationTestBase
                 session2.Store(new SimpleDoc { Id = 12, Value = "NewValue" });
                 session2.Store(new SimpleDoc { Id = 13, Value = "DuplicateValue" }); // Collision with Id=11
                 
-                await Assert.ThrowsAsync<MongoBulkWriteException<BsonDocument>>(() => session2.SaveChangesAsync());
+                await Assert.ThrowsAnyAsync<MongoException>(() => session2.SaveChangesAsync());
             }
 
             // Verify Id=12 was NOT persisted due to rollback

@@ -108,86 +108,132 @@ public sealed class DocumentSession : IDisposable
         if (trackedCount == 0) return;
 
         var buffer = ArrayPool<PendingOperation>.Shared.Rent(trackedCount);
+        var entities = ArrayPool<object>.Shared.Rent(trackedCount);
         try
         {
-            var count = _changeTracker.GetPendingUpdates(buffer, _arena);
+            var count = _changeTracker.GetPendingUpdates(buffer, entities, _arena);
             if (count == 0) return;
 
             await EnsureTransactionStartedAsync(cancellationToken);
 
-            // Sort buffer by CollectionName to group operations
-            Array.Sort(buffer, 0, count, Comparer<PendingOperation>.Create((a, b) => string.CompareOrdinal(a.CollectionName, b.CollectionName)));
+            // Sort buffer by CollectionId then Type to group operations
+            Array.Sort(buffer, 0, count, Comparer<PendingOperation>.Create((a, b) => 
+                a.CollectionId != b.CollectionId ? a.CollectionId.CompareTo(b.CollectionId) : a.Type.CompareTo(b.Type)));
 
             int start = 0;
             while (start < count)
             {
                 int end = start;
-                string currentCollection = buffer[start].CollectionName;
-                while (end < count && buffer[end].CollectionName == currentCollection)
+                int currentCollectionId = buffer[start].CollectionId;
+                var currentType = buffer[start].Type;
+                while (end < count && buffer[end].CollectionId == currentCollectionId && buffer[end].Type == currentType)
                 {
                     end++;
                 }
 
-                var collection = _database.GetCollection<BsonDocument>(currentCollection);
-                var models = new List<WriteModel<BsonDocument>>(end - start);
-
-                for (int i = start; i < end; i++)
+                var collectionName = _changeTracker.GetCollectionName(currentCollectionId);
+                
+                // Build raw BSON command
+                var cmdWriter = new ArenaBsonWriter(_arena);
+                cmdWriter.WriteStartDocument();
+                
+                switch (currentType)
                 {
-                    models.Add(buffer[i].ToWriteModel(_store.Conventions));
-                }
-
-                if (models.Count > 0)
-                {
-                    BulkWriteResult<BsonDocument> result;
-                    try
-                    {
-                        if (_clientSession != null)
-                        {
-                            result = await collection.BulkWriteAsync(_clientSession, models, cancellationToken: cancellationToken);
-                        }
-                        else
-                        {
-                            result = await collection.BulkWriteAsync(models, cancellationToken: cancellationToken);
-                        }
-                    }
-                    catch (MongoCommandException ex) when (ex.Code == 112) // WriteConflict
-                    {
-                        await IdentifyConcurrencyConflictAsync(buffer, start, end, cancellationToken);
-                        throw;
-                    }
-                    catch (MongoBulkWriteException<BsonDocument> ex) when (ex.WriteErrors.Any(e => e.Code == 112))
-                    {
-                        await IdentifyConcurrencyConflictAsync(buffer, start, end, cancellationToken);
-                        throw;
-                    }
-                    finally
-                    {
-                        // Always dispose buffers after the write operation, whether it succeeded or failed.
+                    case OperationType.Insert:
+                        cmdWriter.WriteString("insert", collectionName);
+                        cmdWriter.WriteStartArray("documents");
                         for (int i = start; i < end; i++)
                         {
-                            buffer[i].BufferToDispose?.Dispose();
+                            cmdWriter.WriteName(i - start, BlittableBsonConstants.BsonType.Document);
+                            unsafe { cmdWriter.WriteRaw(new ReadOnlySpan<byte>(buffer[i].PayloadPtr, buffer[i].PayloadLength)); }
                         }
+                        cmdWriter.WriteEndArray();
+                        break;
+
+                    case OperationType.Update:
+                        cmdWriter.WriteString("update", collectionName);
+                        cmdWriter.WriteStartArray("updates");
+                        for (int i = start; i < end; i++)
+                        {
+                            cmdWriter.WriteStartDocument(i - start);
+                            
+                            // q: { _id: ..., _etag: ... }
+                            cmdWriter.WriteStartDocument("q");
+                            var bsonId = buffer[i].Id.ToBsonValue() ?? _store.Conventions.CreateBsonValue(EntityIdAccessor.GetId(entities[i]));
+                            cmdWriter.WriteBsonValue("_id", bsonId);
+                            if (buffer[i].ExpectedEtag != Guid.Empty)
+                            {
+                                cmdWriter.WriteGuid("_etag", buffer[i].ExpectedEtag);
+                            }
+                            cmdWriter.WriteEndDocument();
+
+                            // u: { ... }
+                            cmdWriter.WriteName("u", BlittableBsonConstants.BsonType.Document);
+                            unsafe { cmdWriter.WriteRaw(new ReadOnlySpan<byte>(buffer[i].PayloadPtr, buffer[i].PayloadLength)); }
+                            
+                            cmdWriter.WriteEndDocument();
+                        }
+                        cmdWriter.WriteEndArray();
+                        break;
+
+                    case OperationType.Delete:
+                        cmdWriter.WriteString("delete", collectionName);
+                        cmdWriter.WriteStartArray("deletes");
+                        for (int i = start; i < end; i++)
+                        {
+                            cmdWriter.WriteStartDocument(i - start);
+                            
+                            // q: { _id: ..., _etag: ... }
+                            cmdWriter.WriteStartDocument("q");
+                            var bsonId = buffer[i].Id.ToBsonValue() ?? _store.Conventions.CreateBsonValue(EntityIdAccessor.GetId(entities[i]));
+                            cmdWriter.WriteBsonValue("_id", bsonId);
+                            if (buffer[i].ExpectedEtag != Guid.Empty)
+                            {
+                                cmdWriter.WriteGuid("_etag", buffer[i].ExpectedEtag);
+                            }
+                            cmdWriter.WriteEndDocument();
+
+                            cmdWriter.WriteInt32("limit", 1);
+                            cmdWriter.WriteEndDocument();
+                        }
+                        cmdWriter.WriteEndArray();
+                        break;
+                }
+
+                cmdWriter.WriteBoolean("ordered", true);
+                cmdWriter.WriteEndDocument();
+
+                var cmdDoc = cmdWriter.Commit(_arena);
+                
+                using (var cmdBuffer = PooledByteBuffer.Rent(cmdDoc.AsReadOnlySpan()))
+                {
+                    var rawCmd = new RawBsonDocument(cmdBuffer);
+                    
+                    BsonDocument result;
+                    if (_clientSession != null)
+                    {
+                        result = await _database.RunCommandAsync<BsonDocument>(_clientSession, rawCmd, cancellationToken: cancellationToken);
+                    }
+                    else
+                    {
+                        result = await _database.RunCommandAsync<BsonDocument>(rawCmd, cancellationToken: cancellationToken);
                     }
 
-                    int expectedMatched = 0;
-                    int expectedDeleted = 0;
-                    for (int i = start; i < end; i++)
-                    {
-                        if (buffer[i].Type == OperationType.Update) expectedMatched++;
-                        else if (buffer[i].Type == OperationType.Delete) expectedDeleted++;
-                    }
+                    // Check for concurrency issues
+                    int expectedCount = end - start;
+                    int actualCount = result.GetValue("n", 0).AsInt32;
 
-                    if (result.MatchedCount < expectedMatched || result.DeletedCount < expectedDeleted)
+                    if (actualCount < expectedCount && currentType != OperationType.Insert)
                     {
-                        await IdentifyConcurrencyConflictAsync(buffer, start, end, cancellationToken);
+                        await IdentifyConcurrencyConflictAsync(buffer, entities, start, end, cancellationToken);
                     }
 
                     // Cascading delete for attachments
-                    for (int i = start; i < end; i++)
+                    if (currentType == OperationType.Delete)
                     {
-                        if (buffer[i].Type == OperationType.Delete)
+                        for (int i = start; i < end; i++)
                         {
-                            await Attachments.DeleteAllAsync(buffer[i].Id, cancellationToken);
+                            await Attachments.DeleteAllAsync(EntityIdAccessor.GetId(entities[i])!, cancellationToken);
                         }
                     }
                 }
@@ -195,7 +241,7 @@ public sealed class DocumentSession : IDisposable
                 start = end;
             }
 
-            if (_clientSession != null && _clientSession.IsInTransaction)
+            if (_clientSession is { IsInTransaction: true })
             {
                 await _clientSession.CommitTransactionAsync(cancellationToken);
             }
@@ -203,13 +249,10 @@ public sealed class DocumentSession : IDisposable
             // Successfully saved, refresh snapshots for next call to SaveChangesAsync
             var newArena = new ArenaAllocator((nuint)_initialArenaSize);
             _changeTracker.RefreshSnapshots(newArena);
-            
-            // Note: In a real implementation we'd need to swap the arena and update entity references
-            // or just dispose the old arena and accept that entities now point to nothing until re-loaded.
         }
         catch
         {
-            if (_clientSession != null && _clientSession.IsInTransaction)
+            if (_clientSession is { IsInTransaction: true })
             {
                 await _clientSession.AbortTransactionAsync(cancellationToken);
             }
@@ -218,6 +261,7 @@ public sealed class DocumentSession : IDisposable
         finally
         {
             ArrayPool<PendingOperation>.Shared.Return(buffer);
+            ArrayPool<object>.Shared.Return(entities);
         }
     }
 
@@ -253,38 +297,39 @@ public sealed class DocumentSession : IDisposable
         }
     }
 
-    private async Task IdentifyConcurrencyConflictAsync(PendingOperation[] buffer, int start, int end, CancellationToken ct)
+    private async Task IdentifyConcurrencyConflictAsync(PendingOperation[] buffer, object[] entities, int start, int end, CancellationToken ct)
     {
         // Only check updates and deletes
-        var checkOps = new List<PendingOperation>();
+        var checkIndices = new List<int>();
         for (int i = start; i < end; i++)
         {
             if (buffer[i].Type == OperationType.Update || buffer[i].Type == OperationType.Delete)
             {
-                checkOps.Add(buffer[i]);
+                checkIndices.Add(i);
             }
         }
         
-        if (checkOps.Count == 0)
+        if (checkIndices.Count == 0)
         {
             return;
         }
 
-        var collectionName = checkOps[0].CollectionName;
+        var collectionName = _changeTracker.GetCollectionName(buffer[start].CollectionId);
         var collection = _database.GetCollection<BsonDocument>(collectionName);
         
-        var bsonIds = checkOps.Select(op => _store.Conventions.CreateBsonValue(op.Id)).ToList();
+        var bsonIds = checkIndices.Select(idx => buffer[idx].Id.ToBsonValue() ?? _store.Conventions.CreateBsonValue(EntityIdAccessor.GetId(entities[idx]))).ToList();
         var filter = Builders<BsonDocument>.Filter.In("_id", bsonIds);
         
         var docs = await collection.Find(filter).ToListAsync(ct);
         var docMap = docs.ToDictionary(d => d["_id"], d => d);
 
-        foreach (var op in checkOps)
+        foreach (var idx in checkIndices)
         {
-            object id = op.Id;
-            var bsonId = _store.Conventions.CreateBsonValue(id);
+            var op = buffer[idx];
+            object entity = entities[idx];
+            object id = EntityIdAccessor.GetId(entity)!;
+            var bsonId = op.Id.ToBsonValue() ?? _store.Conventions.CreateBsonValue(id);
             Guid expectedEtag = op.ExpectedEtag;
-            object entity = op.Entity;
 
             if (!docMap.TryGetValue(bsonId, out var doc))
             {
@@ -309,7 +354,6 @@ public sealed class DocumentSession : IDisposable
         }
 
         // If we reach here, we couldn't identify a specific mismatching ETag.
-        // This could happen if some other filter condition failed, or if it was a WriteConflict that didn't change ETags.
         throw new ConcurrencyException("A concurrency conflict occurred, but it could not be identified specifically.");
     }
 

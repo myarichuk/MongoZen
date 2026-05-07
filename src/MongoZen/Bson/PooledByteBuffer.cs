@@ -39,6 +39,23 @@ internal sealed unsafe class PooledByteBuffer : IByteBuffer
         return buffer;
     }
 
+    public static PooledByteBuffer Rent(ReadOnlySpan<byte> span)
+    {
+        if (!Pool.TryPop(out var buffer))
+        {
+            buffer = new PooledByteBuffer();
+        }
+        
+        buffer._rentedArray = ArrayPool<byte>.Shared.Rent(span.Length);
+        buffer._length = span.Length;
+        buffer._isReadOnly = true;
+
+        span.CopyTo(buffer._rentedArray);
+
+        GC.ReRegisterForFinalize(buffer);
+        return buffer;
+    }
+
     ~PooledByteBuffer() => DisposeInternal();
 
     public int Capacity => _rentedArray?.Length ?? 0;

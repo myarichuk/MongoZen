@@ -9,24 +9,14 @@ namespace MongoZen.ChangeTracking;
 /// It maintains state for various MongoDB operators ($set, $unset, etc.) and
 /// renders them into a single update document.
 /// </summary>
-public struct ArenaUpdateDefinitionBuilder
+public struct ArenaUpdateDefinitionBuilder(ArenaAllocator arena, char[] pathBuffer)
 {
-    private ArenaBsonWriter _writer;
-    private readonly ArenaAllocator _arena;
-    private readonly char[] _pathBuffer;
-    private bool _hasSet;
-    private bool _hasUnset;
+    private ArenaBsonWriter _writer = new(arena);
+    private readonly char[] _pathBuffer = pathBuffer ?? new char[256];
+    private bool _hasSet = false;
+    private bool _hasUnset = false;
 
     public ArenaUpdateDefinitionBuilder(ArenaAllocator arena) : this(arena, new char[256]) { }
-
-    public ArenaUpdateDefinitionBuilder(ArenaAllocator arena, char[] pathBuffer)
-    {
-        _writer = new ArenaBsonWriter(arena);
-        _arena = arena;
-        _pathBuffer = pathBuffer ?? new char[256];
-        _hasSet = false;
-        _hasUnset = false;
-    }
 
     public readonly bool HasChanges => _hasSet || _hasUnset;
 
@@ -338,6 +328,6 @@ public struct ArenaUpdateDefinitionBuilder
         _writer.WriteEndDocument(); // Close the last open operator document ($set or $unset)
         _writer.WriteEndDocument(); // Close root document
         
-        return _writer.Commit(_arena);
+        return _writer.Commit(arena);
     }
 }

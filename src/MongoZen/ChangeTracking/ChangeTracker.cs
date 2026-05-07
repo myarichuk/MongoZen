@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoZen.Bson;
@@ -10,15 +11,45 @@ using SharpArena.Collections;
 
 namespace MongoZen.ChangeTracking;
 
-public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocator arena)
+public enum OperationType : byte
+{
+    Insert,
+    Update,
+    Delete
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct PendingOperation
+{
+    public OperationType Type;
+    public int CollectionId;
+    public DocId Id;
+    public Guid ExpectedEtag;
+    public byte* PayloadPtr;
+    public int PayloadLength;
+}
+
+public struct ChangeTracker(DocumentConventions conventions, ArenaAllocator arena)
 {
     private ArenaAllocator _arena = arena;
     private readonly ConcurrentDictionary<object, EntityEntry> _trackedEntities = new();
+    private readonly List<string> _collectionNames = new();
 
     public int TrackedCount => _trackedEntities.Count;
 
+    public string GetCollectionName(int collectionId) => _collectionNames[collectionId];
+
+    private int GetCollectionId(string name)
+    {
+        for (int i = 0; i < _collectionNames.Count; i++)
+        {
+            if (_collectionNames[i] == name) return i;
+        }
+        _collectionNames.Add(name);
+        return _collectionNames.Count - 1;
+    }
+
     public void Track<T>(T entity, BlittableBsonDocument? snapshot = null)
-    // ... rest of Track method ...
     {
         if (entity == null)
         {
@@ -127,7 +158,7 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
         return _trackedEntities.TryGetValue(entity, out var entry) ? entry.Snapshot : null;
     }
 
-    public int GetPendingUpdates(PendingOperation[] buffer, ArenaAllocator tempArena)
+    public unsafe int GetPendingUpdates(PendingOperation[] buffer, object[] entities, ArenaAllocator tempArena)
     {
         var count = 0;
         var pathBuffer = ArrayPool<char>.Shared.Rent(256);
@@ -142,18 +173,18 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
                 }
 
                 var collectionName = conventions.GetCollectionName(entry.Type);
+                var collectionId = GetCollectionId(collectionName);
 
                 if (entry.IsDeleted)
                 {
-                    var id = EntityIdAccessor.GetId(entry.Entity);
-                    buffer[count++] = new PendingOperation
+                    buffer[count] = new PendingOperation
                     {
                         Type = OperationType.Delete,
-                        CollectionName = collectionName,
-                        Id = id!,
+                        CollectionId = collectionId,
+                        Id = EntityIdAccessor.GetDocId(entry.Entity),
                         ExpectedEtag = entry.ExpectedETag ?? Guid.Empty,
-                        Entity = entry.Entity
                     };
+                    entities[count++] = entry.Entity;
                 }
                 else if (entry.IsNew)
                 {
@@ -166,13 +197,14 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
                     var writer = new ArenaBsonWriter(_arena);
                     entry.UpdateSnapshot(ref writer, _arena);
 
-                    buffer[count++] = new PendingOperation
+                    buffer[count] = new PendingOperation
                     {
                         Type = OperationType.Insert,
-                        CollectionName = collectionName,
-                        Document = entry.Snapshot!.Value,
-                        Entity = entry.Entity
+                        CollectionId = collectionId,
+                        PayloadPtr = entry.Snapshot!.Value.Pointer,
+                        PayloadLength = entry.Snapshot.Value.Length,
                     };
+                    entities[count++] = entry.Entity;
                 }
                 else
                 {
@@ -189,15 +221,18 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
 
                         builder.Set("_etag", nextEtag);
 
-                        buffer[count++] = new PendingOperation
+                        var updateDoc = builder.Build();
+
+                        buffer[count] = new PendingOperation
                         {
                             Type = OperationType.Update,
-                            CollectionName = collectionName,
-                            Id = EntityIdAccessor.GetId(entry.Entity)!,
+                            CollectionId = collectionId,
+                            Id = EntityIdAccessor.GetDocId(entry.Entity),
                             ExpectedEtag = entry.ExpectedETag ?? Guid.Empty,
-                            Document = builder.Build(),
-                            Entity = entry.Entity
+                            PayloadPtr = updateDoc.Pointer,
+                            PayloadLength = updateDoc.Length
                         };
+                        entities[count++] = entry.Entity;
                     }
                 }
             }
@@ -294,62 +329,6 @@ public sealed class ChangeTracker(DocumentConventions conventions, ArenaAllocato
             private static readonly ConcurrentDictionary<Type, IEntityDispatcher> Cache = new();
             public static IEntityDispatcher Get(Type type) => Cache.GetOrAdd(type, t => 
                 (IEntityDispatcher)Activator.CreateInstance(typeof(EntityDispatcher<>).MakeGenericType(t))!);
-        }
-    }
-}
-
-public enum OperationType : byte
-{
-    Insert,
-    Update,
-    Delete
-}
-
-public struct PendingOperation
-{
-    public OperationType Type { get; init; }
-    public string CollectionName { get; init; }
-    public object Id { get; init; }
-    public Guid ExpectedEtag { get; init; }
-    public BlittableBsonDocument? Document { get; init; }
-    public object Entity { get; init; }
-    public IDisposable? BufferToDispose { get; private set; }
-
-    public WriteModel<BsonDocument> ToWriteModel(DocumentConventions conventions)
-    {
-        switch (Type)
-        {
-            case OperationType.Insert:
-                unsafe
-                {
-                    var buffer = PooledByteBuffer.Rent(Document!.Value.Pointer, Document.Value.Length);
-                    BufferToDispose = buffer;
-                    return new InsertOneModel<BsonDocument>(new RawBsonDocument(buffer));
-                }
-
-            case OperationType.Update:
-                var filterUpdate = Builders<BsonDocument>.Filter.Eq("_id", conventions.CreateBsonValue(Id));
-                if (ExpectedEtag != Guid.Empty)
-                {
-                    filterUpdate = Builders<BsonDocument>.Filter.And(filterUpdate, Builders<BsonDocument>.Filter.Eq("_etag", conventions.CreateBsonValue(ExpectedEtag)));
-                }
-                unsafe
-                {
-                    var buffer = PooledByteBuffer.Rent(Document!.Value.Pointer, Document.Value.Length);
-                    BufferToDispose = buffer;
-                    return new UpdateOneModel<BsonDocument>(filterUpdate, new RawBsonDocument(buffer));
-                }
-
-            case OperationType.Delete:
-                var filterDelete = Builders<BsonDocument>.Filter.Eq("_id", conventions.CreateBsonValue(Id));
-                if (ExpectedEtag != Guid.Empty)
-                {
-                    filterDelete = Builders<BsonDocument>.Filter.And(filterDelete, Builders<BsonDocument>.Filter.Eq("_etag", conventions.CreateBsonValue(ExpectedEtag)));
-                }
-                return new DeleteOneModel<BsonDocument>(filterDelete);
-
-            default:
-                throw new InvalidOperationException("Unknown operation type.");
         }
     }
 }
