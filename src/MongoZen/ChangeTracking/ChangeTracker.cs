@@ -244,7 +244,7 @@ public struct ChangeTracker(DocumentConventions conventions, ArenaAllocator aren
         return count;
     }
 
-    private class EntityEntry
+    internal class EntityEntry
     {
         public object Entity { get; init; } = null!;
         public Type Type { get; init; } = null!;
@@ -260,7 +260,7 @@ public struct ChangeTracker(DocumentConventions conventions, ArenaAllocator aren
         public void SetNewETag(Guid etag) => GetDispatcher().SetETag(Entity, etag);
 
         public void UpdateSnapshot(ref ArenaBsonWriter writer, ArenaAllocator arena) => 
-            GetDispatcher().UpdateSnapshot(this, ref writer, arena);
+            GetDispatcher().UpdateSnapshot(Entity, this, ref writer, arena);
 
         public void BuildUpdate(ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
         {
@@ -269,66 +269,85 @@ public struct ChangeTracker(DocumentConventions conventions, ArenaAllocator aren
                 return;
             }
 
-            GetDispatcher().BuildUpdate(this, ref builder, arena, pathPrefix);
+            GetDispatcher().BuildUpdate(Entity, this, ref builder, arena, pathPrefix);
         }
 
         private IEntityDispatcher GetDispatcher()
         {
-            return _dispatcher ??= EntityDispatcherCache.Get(Type);
-        }
-
-        private interface IEntityDispatcher
-        {
-            bool HasConcurrencyCheck { get; }
-            void SetETag(object entity, Guid etag);
-            void UpdateSnapshot(EntityEntry entry, ref ArenaBsonWriter writer, ArenaAllocator arena);
-            void BuildUpdate(EntityEntry entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix);
-        }
-
-        private class EntityDispatcher<T> : IEntityDispatcher
-        {
-            private static readonly Action<T, Guid>? ETagSetter = CompileETagSetter();
-            
-            private static Action<T, Guid>? CompileETagSetter()
-            {
-                var prop = typeof(T).GetProperties()
-                    .FirstOrDefault(p => p.GetCustomAttribute<ConcurrencyCheckAttribute>() != null);
-                
-                if (prop == null || prop.PropertyType != typeof(Guid) || !prop.CanWrite)
-                {
-                    return null;
-                }
-
-                var entityParam = Expression.Parameter(typeof(T), "entity");
-                var etagParam = Expression.Parameter(typeof(Guid), "etag");
-                var assign = Expression.Assign(Expression.Property(entityParam, prop), etagParam);
-                return Expression.Lambda<Action<T, Guid>>(assign, entityParam, etagParam).Compile();
-            }
-
-            public bool HasConcurrencyCheck => ETagSetter != null;
-
-            public void SetETag(object entity, Guid etag) => 
-                ETagSetter?.Invoke((T)entity, etag);
-
-            public void UpdateSnapshot(EntityEntry entry, ref ArenaBsonWriter writer, ArenaAllocator arena)
-            {
-                var entity = (T)entry.Entity;
-                DynamicBlittableSerializer<T>.SerializeDelegate(ref writer, entity);
-                entry.Snapshot = writer.Commit(arena);
-            }
-
-            public void BuildUpdate(EntityEntry entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
-            {
-                var entity = (T)entry.Entity;
-                DynamicBlittableSerializer<T>.BuildUpdateDelegate(entity, entry.Snapshot!.Value, ref builder, arena, pathPrefix);
-            }
-        }
-
-        private static class EntityDispatcherCache
-        {
-            private static readonly ConcurrentDictionary<Type, IEntityDispatcher> Cache = new();
-            public static IEntityDispatcher Get(Type type) => Cache.GetOrAdd(type, t => 
-                (IEntityDispatcher)Activator.CreateInstance(typeof(EntityDispatcher<>).MakeGenericType(t))!);
+            return _dispatcher ??= EntityDispatcherCache.GetDispatcher(EntityDispatcherCache.GetId(Type));
         }
     }
+}
+
+internal interface IEntityDispatcher
+{
+    bool HasConcurrencyCheck { get; }
+    void SetETag(object entity, Guid etag);
+    void UpdateSnapshot(object entity, object entry, ref ArenaBsonWriter writer, ArenaAllocator arena);
+    void BuildUpdate(object entity, object entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix);
+}
+
+internal class EntityDispatcher<T> : IEntityDispatcher
+{
+    private static readonly Action<T, Guid>? ETagSetter = CompileETagSetter();
+    
+    private static Action<T, Guid>? CompileETagSetter()
+    {
+        var prop = typeof(T).GetProperties()
+            .FirstOrDefault(p => p.GetCustomAttribute<ConcurrencyCheckAttribute>() != null);
+        
+        if (prop == null || prop.PropertyType != typeof(Guid) || !prop.CanWrite)
+        {
+            return null;
+        }
+
+        var entityParam = Expression.Parameter(typeof(T), "entity");
+        var etagParam = Expression.Parameter(typeof(Guid), "etag");
+        var assign = Expression.Assign(Expression.Property(entityParam, prop), etagParam);
+        return Expression.Lambda<Action<T, Guid>>(assign, entityParam, etagParam).Compile();
+    }
+
+    public bool HasConcurrencyCheck => ETagSetter != null;
+
+    public void SetETag(object entity, Guid etag) => 
+        ETagSetter?.Invoke((T)entity, etag);
+
+    public void UpdateSnapshot(object entity, object entry, ref ArenaBsonWriter writer, ArenaAllocator arena)
+    {
+        var tEntity = (T)entity;
+        DynamicBlittableSerializer<T>.SerializeDelegate(ref writer, tEntity);
+        var entryObj = (ChangeTracker.EntityEntry)entry; 
+        entryObj.Snapshot = writer.Commit(arena);
+    }
+
+    public void BuildUpdate(object entity, object entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
+    {
+        var tEntity = (T)entity;
+        var entryObj = (ChangeTracker.EntityEntry)entry;
+        DynamicBlittableSerializer<T>.BuildUpdateDelegate(tEntity, entryObj.Snapshot!.Value, ref builder, arena, pathPrefix);
+    }
+}
+
+internal static class EntityDispatcherCache
+{
+    private static readonly ConcurrentDictionary<Type, int> TypeToId = new();
+    private static IEntityDispatcher[] _dispatchers = new IEntityDispatcher[16];
+    private static int _count = 0;
+
+    public static int GetId(Type type)
+    {
+        if (TypeToId.TryGetValue(type, out var id)) return id;
+        
+        lock (TypeToId)
+        {
+            if (TypeToId.TryGetValue(type, out id)) return id;
+            id = _count++;
+            if (id >= _dispatchers.Length) Array.Resize(ref _dispatchers, _dispatchers.Length * 2);
+            _dispatchers[id] = (IEntityDispatcher)Activator.CreateInstance(typeof(EntityDispatcher<>).MakeGenericType(type))!;
+            TypeToId[type] = id;
+            return id;
+        }
+    }
+
+    public static IEntityDispatcher GetDispatcher(int id) => _dispatchers[id];
 }
