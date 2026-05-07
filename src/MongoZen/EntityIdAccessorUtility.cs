@@ -66,3 +66,33 @@ public static class EntityIdAccessor
         public DocId GetDocId(object entity) => _docIdGetter((T)entity);
     }
 }
+
+public static class EntityIdAccessorUtility<T>
+{
+    public static readonly bool HasETag;
+    private static readonly Action<T, Guid> _etagSetter;
+
+    static EntityIdAccessorUtility()
+    {
+        var props = typeof(T).GetProperties();
+        var prop = props.FirstOrDefault(p => p.GetCustomAttribute<ConcurrencyCheckAttribute>() != null)
+                   ?? typeof(T).GetProperty("ETag") 
+                   ?? typeof(T).GetProperty("_etag")
+                   ?? typeof(T).GetProperty("Version");
+
+        HasETag = prop != null && prop.PropertyType == typeof(Guid);
+        if (HasETag)
+        {
+            var entityParam = System.Linq.Expressions.Expression.Parameter(typeof(T), "entity");
+            var etagParam = System.Linq.Expressions.Expression.Parameter(typeof(Guid), "etag");
+            var assign = System.Linq.Expressions.Expression.Assign(System.Linq.Expressions.Expression.Property(entityParam, prop!), etagParam);
+            _etagSetter = System.Linq.Expressions.Expression.Lambda<Action<T, Guid>>(assign, entityParam, etagParam).Compile();
+        }
+        else
+        {
+            _etagSetter = (_, _) => { };
+        }
+    }
+
+    public static void SetETag(T entity, Guid etag) => _etagSetter(entity, etag);
+}

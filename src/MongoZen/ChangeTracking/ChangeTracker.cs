@@ -1,10 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
-using System.Linq.Expressions;
-using System.Reflection;
 using System.Runtime.InteropServices;
-using MongoDB.Bson;
-using MongoDB.Driver;
 using MongoZen.Bson;
 using SharpArena.Allocators;
 using SharpArena.Collections;
@@ -29,325 +25,468 @@ public unsafe struct PendingOperation
     public int PayloadLength;
 }
 
-public struct ChangeTracker(DocumentConventions conventions, ArenaAllocator arena)
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct EntityEntry
 {
-    private ArenaAllocator _arena = arena;
-    private readonly ConcurrentDictionary<object, EntityEntry> _trackedEntities = new();
-    private readonly List<string> _collectionNames = new();
+    public DocId Id;
+    public byte* BsonPtr;
+    public int BsonLen;
+    public Guid ExpectedETag;
+    public int DispatcherId;
+    public byte Flags; // 1 = IsNew, 2 = IsDeleted
 
-    public int TrackedCount => _trackedEntities.Count;
+    public bool IsNew
+    {
+        get => (Flags & 1) != 0;
+        set => Flags = (byte)(value ? (Flags | 1) : (Flags & ~1));
+    }
+
+    public bool IsDeleted
+    {
+        get => (Flags & 2) != 0;
+        set => Flags = (byte)(value ? (Flags | 2) : (Flags & ~2));
+    }
+
+    public BlittableBsonDocument GetSnapshot(ArenaAllocator arena)
+    {
+        if (BsonPtr == null) return default;
+        return ArenaBsonReader.ReadInPlace(BsonPtr, BsonLen, arena);
+    }
+
+    public void SetSnapshot(BlittableBsonDocument doc)
+    {
+        BsonPtr = doc.Pointer;
+        BsonLen = doc.Length;
+    }
+}
+
+public unsafe struct ChangeTracker
+{
+    private ArenaAllocator _arena;
+    private readonly DocumentConventions _conventions;
+    private ArenaList<EntityEntry> _entries;
+    private object[] _entities;
+    private int _count;
+    private readonly List<string> _collectionNames;
+
+    public ChangeTracker(DocumentConventions conventions, ArenaAllocator arena)
+    {
+        _conventions = conventions;
+        _arena = arena;
+        _entries = new ArenaList<EntityEntry>(arena, 64);
+        _entities = ArrayPool<object>.Shared.Rent(64);
+        _count = 0;
+        _collectionNames = new List<string>();
+    }
+
+    public int TrackedCount => _count;
 
     public string GetCollectionName(int collectionId) => _collectionNames[collectionId];
 
-    private int GetCollectionId(string name)
+    public int GetCollectionId(string name)
     {
         for (int i = 0; i < _collectionNames.Count; i++)
         {
             if (_collectionNames[i] == name) return i;
         }
+
         _collectionNames.Add(name);
         return _collectionNames.Count - 1;
     }
 
+    private void EnsureCapacity()
+    {
+        if (_count >= _entities.Length)
+        {
+            var newEntities = ArrayPool<object>.Shared.Rent(_entities.Length * 2);
+            Array.Copy(_entities, newEntities, _count);
+            ArrayPool<object>.Shared.Return(_entities);
+            _entities = newEntities;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_entities != null)
+        {
+            ArrayPool<object>.Shared.Return(_entities, clearArray: true);
+            _entities = null!;
+        }
+    }
+
+    private int FindIndex(object entity)
+    {
+        for (int i = 0; i < _count; i++)
+        {
+            if (ReferenceEquals(_entities[i], entity)) return i;
+        }
+        return -1;
+    }
+
+    private int FindIndex(DocId id)
+    {
+        for (int i = 0; i < _count; i++)
+        {
+            if (_entries[i].Id == id) return i;
+        }
+        return -1;
+    }
+
     public void Track<T>(T entity, BlittableBsonDocument? snapshot = null)
     {
-        if (entity == null)
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        var index = FindIndex(entity);
+        if (index != -1)
         {
-            throw new ArgumentNullException(nameof(entity));
+            ref var entry = ref _entries[index];
+            if (snapshot.HasValue && !snapshot.Value.IsDefault)
+            {
+                entry.SetSnapshot(snapshot.Value);
+                entry.IsNew = false;
+                if (snapshot.Value.TryGetElementOffset("_etag", out _))
+                {
+                    entry.ExpectedETag = snapshot.Value.GetGuid("_etag");
+                }
+            }
+            else
+            {
+                entry.BsonPtr = null;
+                entry.BsonLen = 0;
+                entry.IsNew = true;
+            }
+            return;
         }
 
-        var entry = new EntityEntry
+        // Check by ID as well just in case, although DocumentSession should prevent this
+        var docId = EntityIdAccessor.GetDocId(entity);
+        index = FindIndex(docId);
+        if (index != -1)
         {
-            Entity = entity,
-            Type = typeof(T),
-            Snapshot = snapshot,
-            IsNew = snapshot == null
+            // Already tracking another object with same ID? DocumentSession prevents this.
+            // But we'll handle it by updating the reference.
+            _entities[index] = entity;
+            ref var entry = ref _entries[index];
+            entry.DispatcherId = EntityDispatcherCache.GetId(typeof(T));
+            // ... update snapshot if provided ...
+            return;
+        }
+
+        EnsureCapacity();
+        index = _count++;
+        _entities[index] = entity;
+
+        var newEntry = new EntityEntry
+        {
+            Id = docId,
+            DispatcherId = EntityDispatcherCache.GetId(typeof(T)),
+            IsNew = !snapshot.HasValue || snapshot.Value.IsDefault
         };
 
-        if (snapshot.HasValue && snapshot.Value.TryGetElementOffset("_etag", out _))
+        if (snapshot.HasValue && !snapshot.Value.IsDefault)
         {
-            entry.ExpectedETag = snapshot.Value.GetGuid("_etag");
+            newEntry.SetSnapshot(snapshot.Value);
+            if (snapshot.Value.TryGetElementOffset("_etag", out _))
+            {
+                newEntry.ExpectedETag = snapshot.Value.GetGuid("_etag");
+            }
         }
 
-        _trackedEntities[entity] = entry;
+        _entries.Add(newEntry);
     }
 
     public void Track(object entity, Guid expectedEtag)
     {
-        if (entity == null)
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        var index = FindIndex(entity);
+        if (index != -1)
         {
-            throw new ArgumentNullException(nameof(entity));
+            ref var entry = ref _entries[index];
+            entry.ExpectedETag = expectedEtag;
+            entry.IsNew = false;
+            return;
         }
 
-        _trackedEntities[entity] = new EntityEntry
+        var docId = EntityIdAccessor.GetDocId(entity);
+        EnsureCapacity();
+        index = _count++;
+        _entities[index] = entity;
+
+        var newEntry = new EntityEntry
         {
-            Entity = entity,
-            Type = entity.GetType(),
+            Id = docId,
+            DispatcherId = EntityDispatcherCache.GetId(entity.GetType()),
             ExpectedETag = expectedEtag,
             IsNew = false
         };
+
+        _entries.Add(newEntry);
     }
 
     public void Evict(object? entity)
     {
-        if (entity == null)
+        if (entity == null) return;
+
+        var index = FindIndex(entity);
+        if (index == -1) return;
+
+        var lastIndex = _count - 1;
+        if (index != lastIndex)
         {
-            return;
+            // Swap with last element
+            _entities[index] = _entities[lastIndex];
+            _entries[index] = _entries[lastIndex];
         }
 
-        _trackedEntities.TryRemove(entity, out _);
+        _entities[lastIndex] = null!;
+        _entries.RemoveAt(lastIndex);
+        _count--;
     }
 
     public Guid? GetExpectedETag(object? entity)
     {
-        if (entity == null)
-        {
-            return null;
-        }
+        if (entity == null) return null;
 
-        return _trackedEntities.TryGetValue(entity, out var entry) ? entry.ExpectedETag : null;
+        var index = FindIndex(entity);
+        return index != -1 ? _entries[index].ExpectedETag : null;
     }
 
     public void TrackDelete<T>(T entity)
     {
-        if (entity == null)
-        {
-            throw new ArgumentNullException(nameof(entity));
-        }
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        if (_trackedEntities.TryGetValue(entity, out var entry))
+        var index = FindIndex(entity);
+        if (index != -1)
         {
+            ref var entry = ref _entries[index];
             entry.IsDeleted = true;
         }
         else
         {
-            _trackedEntities[entity] = new EntityEntry
+            var docId = EntityIdAccessor.GetDocId(entity);
+            // Check by ID too
+            index = FindIndex(docId);
+            if (index != -1)
             {
-                Entity = entity,
-                Type = typeof(T),
+                _entities[index] = entity;
+                ref var entry = ref _entries[index];
+                entry.IsDeleted = true;
+                return;
+            }
+
+            EnsureCapacity();
+            index = _count++;
+            _entities[index] = entity;
+
+            var newEntry = new EntityEntry
+            {
+                Id = docId,
+                DispatcherId = EntityDispatcherCache.GetId(typeof(T)),
                 IsDeleted = true
             };
+
+            _entries.Add(newEntry);
         }
     }
 
     public void RefreshSnapshots(ArenaAllocator newArena)
     {
-        foreach (var entry in _trackedEntities.Values)
+        var newEntries = new ArenaList<EntityEntry>(newArena, Math.Max(64, _count));
+
+        var newCount = 0;
+        for (int i = 0; i < _count; i++)
         {
+            var entry = _entries[i];
+            var entity = _entities[i];
+
             if (entry.IsDeleted)
             {
-                _trackedEntities.TryRemove(entry.Entity, out _);
+                _entities[i] = null!; 
                 continue;
             }
 
             var writer = new ArenaBsonWriter(newArena);
-            entry.UpdateSnapshot(ref writer, newArena);
-            entry.IsNew = false;
+            var dispatcher = EntityDispatcherCache.GetDispatcher(entry.DispatcherId);
+            dispatcher.UpdateSnapshot(entity, entry, ref writer, newArena);
             
-            // Refresh ExpectedETag from the new snapshot
-            if (entry.Snapshot.HasValue && entry.Snapshot.Value.TryGetElementOffset("_etag", out _))
+            var snapshot = writer.Commit(newArena);
+            entry.SetSnapshot(snapshot);
+            entry.IsNew = false;
+
+            if (snapshot.TryGetElementOffset("_etag", out _))
             {
-                entry.ExpectedETag = entry.Snapshot.Value.GetGuid("_etag");
+                entry.ExpectedETag = snapshot.GetGuid("_etag");
             }
+
+            var index = newCount++;
+            _entities[index] = entity;
+            newEntries.Add(entry);
         }
+
+        for (int i = newCount; i < _count; i++)
+        {
+            _entities[i] = null!;
+        }
+
+        _count = newCount;
+        _entries = newEntries;
         _arena = newArena;
     }
 
     public BlittableBsonDocument? GetSnapshot(object entity)
     {
-        return _trackedEntities.TryGetValue(entity, out var entry) ? entry.Snapshot : null;
+        var index = FindIndex(entity);
+        if (index == -1) return null;
+        
+        var entry = _entries[index];
+        if (entry.BsonPtr == null) return null;
+        return entry.GetSnapshot(_arena);
     }
 
     public unsafe int GetPendingUpdates(PendingOperation[] buffer, object[] entities, ArenaAllocator tempArena)
     {
-        var count = 0;
-        var pathBuffer = ArrayPool<char>.Shared.Rent(256);
+        int count = 0;
+        var pathBuffer = stackalloc char[256];
 
-        try
+        for (int i = 0; i < _count; i++)
         {
-            foreach (var entry in _trackedEntities.Values)
+            var entity = _entities[i];
+            ref var entry = ref _entries[i]; // ref so we can update it
+
+            if (entry.IsDeleted && entry.IsNew)
             {
-                if (entry is { IsDeleted: true, IsNew: true })
+                continue;
+            }
+
+            var dispatcher = EntityDispatcherCache.GetDispatcher(entry.DispatcherId);
+            var collectionName = _conventions.GetCollectionName(entity.GetType());
+            var collectionId = GetCollectionId(collectionName);
+
+            if (entry.IsDeleted)
+            {
+                buffer[count] = new PendingOperation
                 {
-                    continue;
+                    Type = OperationType.Delete,
+                    CollectionId = collectionId,
+                    Id = entry.Id,
+                    ExpectedEtag = entry.ExpectedETag,
+                };
+                entities[count++] = entity;
+            }
+            else if (entry.IsNew)
+            {
+                var newEtag = Guid.NewGuid();
+                if (dispatcher.HasConcurrencyCheck)
+                {
+                    dispatcher.SetETag(entity, newEtag);
                 }
 
-                var collectionName = conventions.GetCollectionName(entry.Type);
-                var collectionId = GetCollectionId(collectionName);
+                var writer = new ArenaBsonWriter(_arena);
+                dispatcher.UpdateSnapshot(entity, entry, ref writer, _arena);
+                var snapshot = writer.Commit(_arena);
+                entry.SetSnapshot(snapshot);
 
-                if (entry.IsDeleted)
+                if (snapshot.TryGetElementOffset("_etag", out _))
                 {
-                    buffer[count] = new PendingOperation
-                    {
-                        Type = OperationType.Delete,
-                        CollectionId = collectionId,
-                        Id = EntityIdAccessor.GetDocId(entry.Entity),
-                        ExpectedEtag = entry.ExpectedETag ?? Guid.Empty,
-                    };
-                    entities[count++] = entry.Entity;
+                    entry.ExpectedETag = snapshot.GetGuid("_etag");
                 }
-                else if (entry.IsNew)
+
+                buffer[count] = new PendingOperation
                 {
-                    var newEtag = Guid.NewGuid();
-                    if (entry.HasConcurrencyCheck)
+                    Type = OperationType.Insert,
+                    CollectionId = collectionId,
+                    PayloadPtr = snapshot.Pointer,
+                    PayloadLength = snapshot.Length,
+                };
+                entities[count++] = entity;
+            }
+            else
+            {
+                var builder = new ArenaUpdateDefinitionBuilder(_arena, pathBuffer);
+                dispatcher.BuildUpdate(entity, entry, ref builder, _arena, default);
+
+                if (builder.HasChanges)
+                {
+                    var nextEtag = Guid.NewGuid();
+                    if (dispatcher.HasConcurrencyCheck)
                     {
-                        entry.SetNewETag(newEtag);
+                        dispatcher.SetETag(entity, nextEtag);
                     }
 
-                    var writer = new ArenaBsonWriter(_arena);
-                    entry.UpdateSnapshot(ref writer, _arena);
+                    builder.Set("_etag", nextEtag);
+                    var updateDoc = builder.Build();
 
                     buffer[count] = new PendingOperation
                     {
-                        Type = OperationType.Insert,
+                        Type = OperationType.Update,
                         CollectionId = collectionId,
-                        PayloadPtr = entry.Snapshot!.Value.Pointer,
-                        PayloadLength = entry.Snapshot.Value.Length,
+                        Id = entry.Id,
+                        ExpectedEtag = entry.ExpectedETag,
+                        PayloadPtr = updateDoc.Pointer,
+                        PayloadLength = updateDoc.Length
                     };
-                    entities[count++] = entry.Entity;
-                }
-                else
-                {
-                    var builder = new ArenaUpdateDefinitionBuilder(_arena, pathBuffer);
-                    entry.BuildUpdate(ref builder, _arena, default);
-
-                    if (builder.HasChanges)
-                    {
-                        var nextEtag = Guid.NewGuid();
-                        if (entry.HasConcurrencyCheck)
-                        {
-                            entry.SetNewETag(nextEtag);
-                        }
-
-                        builder.Set("_etag", nextEtag);
-
-                        var updateDoc = builder.Build();
-
-                        buffer[count] = new PendingOperation
-                        {
-                            Type = OperationType.Update,
-                            CollectionId = collectionId,
-                            Id = EntityIdAccessor.GetDocId(entry.Entity),
-                            ExpectedEtag = entry.ExpectedETag ?? Guid.Empty,
-                            PayloadPtr = updateDoc.Pointer,
-                            PayloadLength = updateDoc.Length
-                        };
-                        entities[count++] = entry.Entity;
-                    }
+                    entities[count++] = entity;
                 }
             }
         }
-        finally
-        {
-            ArrayPool<char>.Shared.Return(pathBuffer);
-        }
+
         return count;
-    }
-
-    internal class EntityEntry
-    {
-        public object Entity { get; init; } = null!;
-        public Type Type { get; init; } = null!;
-        public BlittableBsonDocument? Snapshot { get; set; }
-        public bool IsNew { get; set; }
-        public bool IsDeleted { get; set; }
-        public Guid? ExpectedETag { get; set; }
-        
-        private IEntityDispatcher? _dispatcher;
-
-        public bool HasConcurrencyCheck => GetDispatcher().HasConcurrencyCheck;
-
-        public void SetNewETag(Guid etag) => GetDispatcher().SetETag(Entity, etag);
-
-        public void UpdateSnapshot(ref ArenaBsonWriter writer, ArenaAllocator arena) => 
-            GetDispatcher().UpdateSnapshot(Entity, this, ref writer, arena);
-
-        public void BuildUpdate(ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
-        {
-            if (Snapshot == null)
-            {
-                return;
-            }
-
-            GetDispatcher().BuildUpdate(Entity, this, ref builder, arena, pathPrefix);
-        }
-
-        private IEntityDispatcher GetDispatcher()
-        {
-            return _dispatcher ??= EntityDispatcherCache.GetDispatcher(EntityDispatcherCache.GetId(Type));
-        }
     }
 }
 
-internal interface IEntityDispatcher
+public interface IEntityDispatcher
 {
     bool HasConcurrencyCheck { get; }
     void SetETag(object entity, Guid etag);
-    void UpdateSnapshot(object entity, object entry, ref ArenaBsonWriter writer, ArenaAllocator arena);
-    void BuildUpdate(object entity, object entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix);
+    void UpdateSnapshot(object entity, EntityEntry entry, ref ArenaBsonWriter writer, ArenaAllocator arena);
+    void BuildUpdate(object entity, EntityEntry entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix);
 }
 
-internal class EntityDispatcher<T> : IEntityDispatcher
+public static class EntityDispatcherCache
 {
-    private static readonly Action<T, Guid>? ETagSetter = CompileETagSetter();
-    
-    private static Action<T, Guid>? CompileETagSetter()
-    {
-        var prop = typeof(T).GetProperties()
-            .FirstOrDefault(p => p.GetCustomAttribute<ConcurrencyCheckAttribute>() != null);
-        
-        if (prop == null || prop.PropertyType != typeof(Guid) || !prop.CanWrite)
-        {
-            return null;
-        }
-
-        var entityParam = Expression.Parameter(typeof(T), "entity");
-        var etagParam = Expression.Parameter(typeof(Guid), "etag");
-        var assign = Expression.Assign(Expression.Property(entityParam, prop), etagParam);
-        return Expression.Lambda<Action<T, Guid>>(assign, entityParam, etagParam).Compile();
-    }
-
-    public bool HasConcurrencyCheck => ETagSetter != null;
-
-    public void SetETag(object entity, Guid etag) => 
-        ETagSetter?.Invoke((T)entity, etag);
-
-    public void UpdateSnapshot(object entity, object entry, ref ArenaBsonWriter writer, ArenaAllocator arena)
-    {
-        var tEntity = (T)entity;
-        DynamicBlittableSerializer<T>.SerializeDelegate(ref writer, tEntity);
-        var entryObj = (ChangeTracker.EntityEntry)entry; 
-        entryObj.Snapshot = writer.Commit(arena);
-    }
-
-    public void BuildUpdate(object entity, object entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
-    {
-        var tEntity = (T)entity;
-        var entryObj = (ChangeTracker.EntityEntry)entry;
-        DynamicBlittableSerializer<T>.BuildUpdateDelegate(tEntity, entryObj.Snapshot!.Value, ref builder, arena, pathPrefix);
-    }
-}
-
-internal static class EntityDispatcherCache
-{
-    private static readonly ConcurrentDictionary<Type, int> TypeToId = new();
-    private static IEntityDispatcher[] _dispatchers = new IEntityDispatcher[16];
-    private static int _count = 0;
+    private static readonly ConcurrentDictionary<Type, int> _typeToId = new();
+    private static readonly List<IEntityDispatcher> _dispatchers = new();
+    private static readonly object _lock = new();
 
     public static int GetId(Type type)
     {
-        if (TypeToId.TryGetValue(type, out var id)) return id;
-        
-        lock (TypeToId)
+        if (_typeToId.TryGetValue(type, out var id)) return id;
+
+        lock (_lock)
         {
-            if (TypeToId.TryGetValue(type, out id)) return id;
-            id = _count++;
-            if (id >= _dispatchers.Length) Array.Resize(ref _dispatchers, _dispatchers.Length * 2);
-            _dispatchers[id] = (IEntityDispatcher)Activator.CreateInstance(typeof(EntityDispatcher<>).MakeGenericType(type))!;
-            TypeToId[type] = id;
+            if (_typeToId.TryGetValue(type, out id)) return id;
+
+            id = _dispatchers.Count;
+            var dispatcherType = typeof(EntityDispatcher<>).MakeGenericType(type);
+            var dispatcher = (IEntityDispatcher)Activator.CreateInstance(dispatcherType)!;
+            _dispatchers.Add(dispatcher);
+            _typeToId[type] = id;
             return id;
         }
     }
 
     public static IEntityDispatcher GetDispatcher(int id) => _dispatchers[id];
+}
+
+internal class EntityDispatcher<T> : IEntityDispatcher
+{
+    public bool HasConcurrencyCheck => EntityIdAccessorUtility<T>.HasETag;
+
+    public void SetETag(object entity, Guid etag)
+    {
+        EntityIdAccessorUtility<T>.SetETag((T)entity, etag);
+    }
+
+    public void UpdateSnapshot(object entity, EntityEntry entry, ref ArenaBsonWriter writer, ArenaAllocator arena)
+    {
+        DynamicBlittableSerializer<T>.SerializeDelegate(ref writer, (T)entity);
+    }
+
+    public void BuildUpdate(object entity, EntityEntry entry, ref ArenaUpdateDefinitionBuilder builder, ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
+    {
+        var tEntity = (T)entity;
+        var snapshot = entry.GetSnapshot(arena);
+        DynamicBlittableSerializer<T>.BuildUpdateDelegate(tEntity, snapshot, ref builder, arena, pathPrefix);
+    }
 }

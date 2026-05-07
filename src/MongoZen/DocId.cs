@@ -76,15 +76,9 @@ public readonly struct DocId : IEquatable<DocId>
         }
     }
 
-    public static DocId FromInt32(int value)
-    {
-        return new DocId(2, (ulong)(uint)value, 0);
-    }
+    public static DocId FromInt32(int value) => new(2, (ulong)(uint)value, 0);
 
-    public static DocId FromInt64(long value)
-    {
-        return new DocId(3, (ulong)value, 0);
-    }
+    public static DocId FromInt64(long value) => new(3, (ulong)value, 0);
 
     /// <summary>
     /// Creates a DocId from a string by computing a 128-bit hash.

@@ -9,14 +9,25 @@ namespace MongoZen.ChangeTracking;
 /// It maintains state for various MongoDB operators ($set, $unset, etc.) and
 /// renders them into a single update document.
 /// </summary>
-public struct ArenaUpdateDefinitionBuilder(ArenaAllocator arena, char[] pathBuffer)
+public unsafe struct ArenaUpdateDefinitionBuilder
 {
-    private ArenaBsonWriter _writer = new(arena);
-    private readonly char[] _pathBuffer = pathBuffer ?? new char[256];
+    private ArenaBsonWriter _writer;
+    private readonly ArenaAllocator _arena;
+    private readonly char* _pathBuffer;
+    private readonly int _pathBufferLength;
     private bool _hasSet = false;
     private bool _hasUnset = false;
 
-    public ArenaUpdateDefinitionBuilder(ArenaAllocator arena) : this(arena, new char[256]) { }
+    public ArenaUpdateDefinitionBuilder(ArenaAllocator arena, char* pathBuffer, int pathBufferLength = 256)
+    {
+        _writer = new ArenaBsonWriter(arena);
+        _arena = arena;
+        _pathBuffer = pathBuffer;
+        _pathBufferLength = pathBufferLength;
+    }
+
+    public ArenaUpdateDefinitionBuilder(ArenaAllocator arena)
+        : this(arena, (char*)arena.Alloc(256 * sizeof(char)), 256) { }
 
     public readonly bool HasChanges => _hasSet || _hasUnset;
 
@@ -28,16 +39,16 @@ public struct ArenaUpdateDefinitionBuilder(ArenaAllocator arena, char[] pathBuff
         }
 
         int totalLength = prefix.Length + 1 + elementName.Length;
-        if (totalLength > _pathBuffer.Length)
+        if (totalLength > _pathBufferLength)
         {
             // Fallback for extremely deep nesting
             return string.Concat(prefix.ToString(), ".", elementName).AsSpan();
         }
 
-        prefix.CopyTo(_pathBuffer);
+        prefix.CopyTo(new Span<char>(_pathBuffer, _pathBufferLength));
         _pathBuffer[prefix.Length] = '.';
-        elementName.AsSpan().CopyTo(_pathBuffer.AsSpan(prefix.Length + 1));
-        return new ReadOnlySpan<char>(_pathBuffer, 0, totalLength);
+        elementName.AsSpan().CopyTo(new Span<char>(_pathBuffer + prefix.Length + 1, _pathBufferLength - prefix.Length - 1));
+        return new ReadOnlySpan<char>(_pathBuffer, totalLength);
     }
 
     private void EnsureSetStarted()
@@ -328,6 +339,6 @@ public struct ArenaUpdateDefinitionBuilder(ArenaAllocator arena, char[] pathBuff
         _writer.WriteEndDocument(); // Close the last open operator document ($set or $unset)
         _writer.WriteEndDocument(); // Close root document
         
-        return _writer.Commit(arena);
+        return _writer.Commit(_arena);
     }
 }

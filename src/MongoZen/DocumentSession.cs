@@ -15,7 +15,7 @@ public sealed class DocumentSession : IDisposable
 {
     private readonly DocumentStore _store;
     private readonly IMongoDatabase _database;
-    private readonly ChangeTracker _changeTracker;
+    private ChangeTracker _changeTracker;
     private readonly ConcurrentDictionary<object, object> _identityMap = new();
     private readonly ArenaAllocator _arena;
     private readonly int _initialArenaSize;
@@ -438,6 +438,7 @@ public sealed class DocumentSession : IDisposable
         }
 
         _clientSession?.Dispose();
+        _changeTracker.Dispose();
         _arena.Dispose();
         _disposed = true;
     }
