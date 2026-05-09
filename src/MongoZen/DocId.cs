@@ -159,16 +159,9 @@ public readonly struct DocId : IEquatable<DocId>
 
     private Guid ToGuid()
     {
-        unsafe
-        {
-            var p1 = _part1;
-            var p2 = _part2;
-            var ptr = (byte*)&p1; // This is a bit hacky but works for blittable structs
-            // Actually simpler:
-            Span<ulong> parts = stackalloc ulong[2];
-            parts[0] = _part1;
-            parts[1] = _part2;
-            return MemoryMarshal.Cast<ulong, Guid>(parts)[0];
-        }
+        Span<ulong> parts = stackalloc ulong[2];
+        parts[0] = _part1;
+        parts[1] = _part2;
+        return MemoryMarshal.Cast<ulong, Guid>(parts)[0];
     }
 }
