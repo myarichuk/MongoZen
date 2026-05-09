@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Reflection;
 using MongoDB.Bson;
 // ReSharper disable ComplexConditionExpression
 
@@ -6,6 +7,14 @@ namespace MongoZen.FilterUtils.ExpressionTranslators;
 
 public sealed class AllOperatorFilterElementTranslator : FilterElementTranslatorBase
 {
+    private static readonly MethodInfo EnumerableContainsMethod = typeof(Enumerable)
+        .GetMethods(BindingFlags.Static | BindingFlags.Public)
+        .First(m => m.Name == nameof(Enumerable.Contains) && m.GetParameters().Length == 2);
+
+    private static readonly MethodInfo EnumerableAllMethod = typeof(Enumerable)
+        .GetMethods(BindingFlags.Static | BindingFlags.Public)
+        .First(m => m.Name == nameof(Enumerable.All) && m.GetParameters().Length == 2);
+
     public override string Operator => "$all";
 
     public override Expression Handle(string field, BsonValue value, ParameterExpression param)
@@ -19,10 +28,7 @@ public sealed class AllOperatorFilterElementTranslator : FilterElementTranslator
         var itemType = left.Type.GetGenericArguments().First(); // e.g., string
 
         // Build inner loop: array.All(val => field.Contains(val))
-        var containsMethod = typeof(Enumerable)
-            .GetMethods()
-            .First(m => m.Name == nameof(Enumerable.Contains) && m.GetParameters().Length == 2)
-            .MakeGenericMethod(itemType);
+        var containsMethod = EnumerableContainsMethod.MakeGenericMethod(itemType);
 
         var allValues = array.Select(b => Expression.Constant(Convert.ChangeType(BsonTypeMapper.MapToDotNetValue(b), itemType)));
         var valuesArray = Expression.NewArrayInit(itemType, allValues);
@@ -34,10 +40,7 @@ public sealed class AllOperatorFilterElementTranslator : FilterElementTranslator
 
         var allLambda = Expression.Lambda(containsCall, paramVal);
 
-        var allMethod = typeof(Enumerable)
-            .GetMethods()
-            .First(m => m.Name == nameof(Enumerable.All) && m.GetParameters().Length == 2)
-            .MakeGenericMethod(itemType);
+        var allMethod = EnumerableAllMethod.MakeGenericMethod(itemType);
 
         var allExpr = Expression.Call(null, allMethod, valuesArray, allLambda);
 
