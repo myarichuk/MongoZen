@@ -146,7 +146,7 @@ public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValueP
 
     public bool ContainsKey(TKey key) => TryGetValue(key, out _);
 
-    public IEnumerable<TValue> Values => this.Select(kvp => kvp.Value);
+    public ValueCollection Values => new ValueCollection(this);
 
     public bool Remove(TKey key)
     {
@@ -263,6 +263,48 @@ public class PooledDictionary<TKey, TValue> : IDisposable, IEnumerable<KeyValueP
         object IEnumerator.Current => Current;
         public void Reset() => _index = -1;
         public void Dispose() { }
+    }
+
+    public readonly struct ValueCollection : IEnumerable<TValue>
+    {
+        private readonly PooledDictionary<TKey, TValue> _dict;
+
+        public ValueCollection(PooledDictionary<TKey, TValue> dict)
+        {
+            _dict = dict;
+        }
+
+        public Enumerator GetEnumerator() => new Enumerator(_dict);
+        IEnumerator<TValue> IEnumerable<TValue>.GetEnumerator() => GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public struct Enumerator : IEnumerator<TValue>
+        {
+            private readonly PooledDictionary<TKey, TValue> _dict;
+            private int _index;
+
+            internal Enumerator(PooledDictionary<TKey, TValue> dict)
+            {
+                _dict = dict;
+                _index = -1;
+            }
+
+            public bool MoveNext()
+            {
+                if (_dict._entries == null) return false;
+                while (++_index < _dict._entries.Length)
+                {
+                    if (_dict._occupied![_index] != 0)
+                        return true;
+                }
+                return false;
+            }
+
+            public TValue Current => _dict._entries![_index].Value;
+            object IEnumerator.Current => Current!;
+            public void Reset() => _index = -1;
+            public void Dispose() { }
+        }
     }
 
     private static int NextPowerOfTwo(int n)
