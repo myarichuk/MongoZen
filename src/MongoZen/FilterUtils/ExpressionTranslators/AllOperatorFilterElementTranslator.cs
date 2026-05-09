@@ -4,8 +4,22 @@ using MongoDB.Bson;
 
 namespace MongoZen.FilterUtils.ExpressionTranslators;
 
+using System.Collections.Concurrent;
+using System.Reflection;
+
 public sealed class AllOperatorFilterElementTranslator : FilterElementTranslatorBase
 {
+    private static readonly MethodInfo EnumerableContainsMethod = typeof(Enumerable)
+        .GetMethods(BindingFlags.Static | BindingFlags.Public)
+        .First(m => m.Name == nameof(Enumerable.Contains) && m.GetParameters().Length == 2);
+
+    private static readonly MethodInfo EnumerableAllMethod = typeof(Enumerable)
+        .GetMethods(BindingFlags.Static | BindingFlags.Public)
+        .First(m => m.Name == nameof(Enumerable.All) && m.GetParameters().Length == 2);
+
+    private static readonly ConcurrentDictionary<Type, MethodInfo> ContainsMethodCache = new();
+    private static readonly ConcurrentDictionary<Type, MethodInfo> AllMethodCache = new();
+
     public override string Operator => "$all";
 
     public override Expression Handle(string field, BsonValue value, ParameterExpression param)
@@ -19,10 +33,7 @@ public sealed class AllOperatorFilterElementTranslator : FilterElementTranslator
         var itemType = left.Type.GetGenericArguments().First(); // e.g., string
 
         // Build inner loop: array.All(val => field.Contains(val))
-        var containsMethod = typeof(Enumerable)
-            .GetMethods()
-            .First(m => m.Name == nameof(Enumerable.Contains) && m.GetParameters().Length == 2)
-            .MakeGenericMethod(itemType);
+        var containsMethod = ContainsMethodCache.GetOrAdd(itemType, t => EnumerableContainsMethod.MakeGenericMethod(t));
 
         var allValues = array.Select(b => Expression.Constant(Convert.ChangeType(BsonTypeMapper.MapToDotNetValue(b), itemType)));
         var valuesArray = Expression.NewArrayInit(itemType, allValues);
@@ -34,10 +45,7 @@ public sealed class AllOperatorFilterElementTranslator : FilterElementTranslator
 
         var allLambda = Expression.Lambda(containsCall, paramVal);
 
-        var allMethod = typeof(Enumerable)
-            .GetMethods()
-            .First(m => m.Name == nameof(Enumerable.All) && m.GetParameters().Length == 2)
-            .MakeGenericMethod(itemType);
+        var allMethod = AllMethodCache.GetOrAdd(itemType, t => EnumerableAllMethod.MakeGenericMethod(t));
 
         var allExpr = Expression.Call(null, allMethod, valuesArray, allLambda);
 
