@@ -13,6 +13,10 @@ public abstract class FilterElementTranslatorBase : IFilterElementTranslator
         .GetMethods(BindingFlags.Static | BindingFlags.Public)
         .First(m => m.Name == nameof(Enumerable.Contains) && m.GetParameters().Length == 2);
 
+    private static readonly MethodInfo EnumerableAnyMethod = typeof(Enumerable)
+        .GetMethods(BindingFlags.Static | BindingFlags.Public)
+        .First(m => m.Name == nameof(Enumerable.Any) && m.GetParameters().Length == 2);
+
     private static readonly ConcurrentDictionary<Type, MethodInfo> AnyMethodCache = new();
 
     private static readonly char[] DotSeparator = { '.' };
@@ -68,11 +72,7 @@ public abstract class FilterElementTranslatorBase : IFilterElementTranslator
     }
 
     protected static MethodInfo GetAnyMethod(Type elementType) =>
-        AnyMethodCache.GetOrAdd(elementType, t =>
-            typeof(Enumerable)
-                .GetMethods(BindingFlags.Static | BindingFlags.Public)
-                .First(m => m.Name == nameof(Enumerable.Any) && m.GetParameters().Length == 2)
-                .MakeGenericMethod(t));
+        AnyMethodCache.GetOrAdd(elementType, t => EnumerableAnyMethod.MakeGenericMethod(t));
 
     private static bool IsCollection(Type type) =>
         type != typeof(string) && type != typeof(byte[]) && typeof(IEnumerable).IsAssignableFrom(type);
