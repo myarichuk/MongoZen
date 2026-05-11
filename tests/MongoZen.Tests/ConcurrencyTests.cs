@@ -206,5 +206,54 @@ public class ConcurrencyTests : IntegrationTestBase
         Assert.Single(ex.FailedIds);
         Assert.Equal("p1", ex.FailedIds[0]);
     }
+
+    [Fact]
+    public async Task Should_Allow_Retry_After_ConcurrencyException()
+    {
+        var db = new MyDbContext(new DbContextOptions(Database!));
+
+        // 1. Initial setup
+        await using (var session = await MyDbContextSession.OpenSessionAsync(db))
+        {
+            session.People.Add(new Person { Id = "p1", Name = "Alice", Version = 1 });
+            await session.SaveChangesAsync();
+        }
+
+        // 2. Load in two concurrent sessions
+        await using var session1 = await MyDbContextSession.OpenSessionAsync(db);
+        await using var session2 = await MyDbContextSession.OpenSessionAsync(db);
+
+        var p1 = await session1.People.LoadAsync("p1");
+        var p2 = await session2.People.LoadAsync("p1");
+
+        Assert.NotNull(p1);
+        Assert.NotNull(p2);
+
+        // 3. Update session 1 and save
+        p1.Name = "Alice Revised";
+        await session1.SaveChangesAsync();
+
+        // 4. Update session 2 and try to save - should fail
+        p2.Name = "Alice Conflict";
+        await Assert.ThrowsAsync<ConcurrencyException>(() => session2.SaveChangesAsync());
+
+        // 5. Resolve conflict in session 2 by taking the newer version
+        // To properly simulate resolving, we should get the latest version from the db
+        var latest = await db.People.QueryAsync(p => p.Id == "p1");
+        Assert.Single(latest);
+
+        // The framework expects the user to fetch latest, and if they want to overwrite,
+        // they update their local entity version to match the latest.
+        p2.Version = latest.First().Version;
+
+        // 6. Retry save - it should succeed if tracking/shadows weren't corrupted by the catch block
+        await session2.SaveChangesAsync();
+
+        // Verify final state
+        var final = await db.People.QueryAsync(p => p.Id == "p1");
+        Assert.Single(final);
+        Assert.Equal("Alice Conflict", final.First().Name);
+        Assert.Equal(p2.Version, final.First().Version);
+    }
 }
 
