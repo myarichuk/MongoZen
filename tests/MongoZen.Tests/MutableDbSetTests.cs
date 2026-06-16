@@ -96,4 +96,32 @@ public class MutableDbSetTests
         var result = await mutableSet.QueryAsync(u => true);
         Assert.Empty(result);
     }
+
+    [Fact]
+    public void Reset_Clears_Pending_Changes()
+    {
+        var inner = new InMemoryDbSet<User>("Users", new Conventions { IdConvention = Convention });
+        var mutableSet = new MutableDbSet<User>(inner, null!, null!, null, null, null, new Conventions { IdConvention = Convention });
+
+        var userAdd = new User { Id = "1", Name = "Alice" };
+        var userRemove = new User { Id = "2", Name = "Bob" };
+
+        inner.Seed(userRemove);
+
+        mutableSet.Add(userAdd);
+        mutableSet.Remove(userRemove);
+
+        var added = mutableSet.Advanced.GetAdded();
+        Assert.Single(added);
+        Assert.Same(userAdd, added.First());
+
+        var removed = mutableSet.Advanced.GetRemoved();
+        Assert.Single(removed);
+        Assert.Same(userRemove, removed.First());
+
+        mutableSet.Reset();
+
+        Assert.Empty(mutableSet.Advanced.GetAdded().ToList());
+        Assert.Empty(mutableSet.Advanced.GetRemoved().ToList());
+    }
 }
