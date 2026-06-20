@@ -232,7 +232,7 @@ public class ComparisonBenchmarks
         var result = await _collection.BulkWriteAsync(writes);
         if (result.MatchedCount < entities.Count)
         {
-            throw new Exception("Concurrency conflict");
+            throw new ConcurrencyException("Concurrency conflict");
         }
     }
 
@@ -299,7 +299,7 @@ public class ComparisonBenchmarks
         var result = await _collection.BulkWriteAsync(writes);
         if (result.MatchedCount < entities.Count)
         {
-            throw new Exception("Concurrency conflict");
+            throw new ConcurrencyException("Concurrency conflict");
         }
     }
 
