@@ -17,7 +17,7 @@ jobs:
     name: Ensure Conventional Commits
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: webiny/action-conventional-commits@v1.3.0
 
 
@@ -39,7 +39,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
