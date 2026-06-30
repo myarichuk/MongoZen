@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using MongoDB.Bson;
 using MongoZen.Bson;
 using MongoZen.ChangeTracking;
@@ -103,6 +104,81 @@ public class TrackingTests
         var setDoc = doc.GetDocument("$set".AsSpan(), _allocator);
         Assert.Equal("Updated Child", setDoc.GetString("Child.Name".AsSpan()));
     }
+
+    [Fact]
+    public void Should_Not_Mark_Unchanged_Collection_As_Dirty()
+    {
+        var entity = new CollectionTrackingEntity
+        {
+            Id = 1,
+            Tags = ["alpha", "beta"],
+            Scores = [10, 20, 30]
+        };
+        var snapshot = Snapshot(entity);
+
+        var builder = new ArenaUpdateDefinitionBuilder(_allocator);
+        CollectionTrackingEntity.BuildUpdate(entity, snapshot, ref builder, _allocator, default);
+
+        Assert.False(builder.HasChanges);
+    }
+
+    [Fact]
+    public void Should_Detect_Collection_Change()
+    {
+        var entity = new CollectionTrackingEntity
+        {
+            Id = 1,
+            Tags = ["alpha", "beta"],
+            Scores = [10, 20]
+        };
+        var snapshot = Snapshot(entity);
+
+        entity.Scores[1] = 99;
+        var builder = new ArenaUpdateDefinitionBuilder(_allocator);
+        CollectionTrackingEntity.BuildUpdate(entity, snapshot, ref builder, _allocator, default);
+
+        Assert.True(builder.HasChanges);
+        var doc = builder.Build();
+        var setDoc = doc.GetDocument("$set".AsSpan(), _allocator);
+        Assert.True(setDoc.ContainsKey("Scores".AsSpan()));
+        Assert.False(setDoc.ContainsKey("Tags".AsSpan()));
+    }
+
+    [Fact]
+    public void Should_Not_Mark_Unchanged_Dictionary_As_Dirty()
+    {
+        var entity = new DictionaryTrackingEntity
+        {
+            Id = 1,
+            Metadata = new Dictionary<string, int> { ["a"] = 1, ["b"] = 2 }
+        };
+        var snapshot = Snapshot(entity);
+
+        var builder = new ArenaUpdateDefinitionBuilder(_allocator);
+        DictionaryTrackingEntity.BuildUpdate(entity, snapshot, ref builder, _allocator, default);
+
+        Assert.False(builder.HasChanges);
+    }
+
+    [Fact]
+    public void Should_Detect_Dictionary_Change()
+    {
+        var entity = new DictionaryTrackingEntity
+        {
+            Id = 1,
+            Metadata = new Dictionary<string, int> { ["a"] = 1, ["b"] = 2 }
+        };
+        var snapshot = Snapshot(entity);
+
+        entity.Metadata["b"] = 42;
+        var builder = new ArenaUpdateDefinitionBuilder(_allocator);
+        DictionaryTrackingEntity.BuildUpdate(entity, snapshot, ref builder, _allocator, default);
+
+        Assert.True(builder.HasChanges);
+        var doc = builder.Build();
+        var setDoc = doc.GetDocument("$set".AsSpan(), _allocator);
+        Assert.True(setDoc.ContainsKey("Metadata".AsSpan()));
+    }
 }
 
 [Document]
@@ -143,4 +219,19 @@ public partial class ComplexEntity
 {
     public int Id { get; set; }
     public SimpleTrackingEntity Child { get; set; } = null!;
+}
+
+[Document]
+public partial class CollectionTrackingEntity
+{
+    public int Id { get; set; }
+    public List<string> Tags { get; set; } = [];
+    public List<int> Scores { get; set; } = [];
+}
+
+[Document]
+public partial class DictionaryTrackingEntity
+{
+    public int Id { get; set; }
+    public Dictionary<string, int> Metadata { get; set; } = new();
 }

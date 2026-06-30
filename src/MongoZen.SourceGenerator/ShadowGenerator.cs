@@ -393,10 +393,22 @@ public class ShadowGenerator : IIncrementalGenerator
                 sb.AppendLine("            }");
                 break;
             case TypeCategory.Collection:
-                sb.AppendLine($"            {builderVar}.Set(path_{prop.Symbol.Name}, CollectionHelper<{prop.NestedType!.ToDisplayString()}>.ToBsonValue({propAccess}));");
+                sb.AppendLine($"            if ({propAccess} != null)");
+                sb.AppendLine("            {");
+                sb.AppendLine($"                if (!CollectionHelper<{prop.NestedType!.ToDisplayString()}>.EqualsSnapshotAtOffset({propAccess}, {snapVar}, off_{prop.Symbol.Name}, arena))");
+                sb.AppendLine($"                    {builderVar}.Set(path_{prop.Symbol.Name}, CollectionHelper<{prop.NestedType!.ToDisplayString()}>.ToBsonValue({propAccess}));");
+                sb.AppendLine("            }");
+                sb.AppendLine($"            else if (ArenaBsonReader.GetElementType({snapVar}, off_{prop.Symbol.Name}) != BlittableBsonConstants.BsonType.Null)");
+                sb.AppendLine($"                {builderVar}.Unset(path_{prop.Symbol.Name});");
                 break;
             case TypeCategory.Dictionary:
-                sb.AppendLine($"            {builderVar}.Set(path_{prop.Symbol.Name}, DictionaryHelper<{prop.SecondaryNestedType!.ToDisplayString()}>.ToBsonValue({propAccess}));");
+                sb.AppendLine($"            if ({propAccess} != null)");
+                sb.AppendLine("            {");
+                sb.AppendLine($"                if (!DictionaryHelper<{prop.SecondaryNestedType!.ToDisplayString()}>.EqualsSnapshotAtOffset({propAccess}, {snapVar}, off_{prop.Symbol.Name}, arena))");
+                sb.AppendLine($"                    {builderVar}.Set(path_{prop.Symbol.Name}, DictionaryHelper<{prop.SecondaryNestedType!.ToDisplayString()}>.ToBsonValue({propAccess}));");
+                sb.AppendLine("            }");
+                sb.AppendLine($"            else if (ArenaBsonReader.GetElementType({snapVar}, off_{prop.Symbol.Name}) != BlittableBsonConstants.BsonType.Null)");
+                sb.AppendLine($"                {builderVar}.Unset(path_{prop.Symbol.Name});");
                 break;
             default:
                 sb.AppendLine($"            {builderVar}.Set(path_{prop.Symbol.Name}, BsonValue.Create({propAccess}));");

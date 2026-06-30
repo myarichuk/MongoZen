@@ -381,6 +381,82 @@ public static class DynamicBlittableSerializer<T>
             return Expression.Lambda<BuildUpdateAction>(Expression.Block(body), entityParam, snapshotParam, builderParam, arenaParam, prefixParam).Compile();
         }
 
+        private static Expression EmitCollectionDiff(
+            Expression propValue,
+            Expression snapshot,
+            ParameterExpression builder,
+            ParameterExpression arena,
+            Type collectionType,
+            Type elementType,
+            ParameterExpression pathVar,
+            ParameterExpression offsetVar,
+            Expression elementNameExpr)
+        {
+            var helperType = typeof(CollectionHelper<>).MakeGenericType(elementType);
+            var equalsAtOffsetMethod = helperType.GetMethod(nameof(CollectionHelper<int>.EqualsSnapshotAtOffset))!;
+            var enumerableType = typeof(IEnumerable<>).MakeGenericType(elementType);
+            var convertedCollection = Expression.Convert(propValue, enumerableType);
+            var toBsonValueMethod = helperType.GetMethod(nameof(CollectionHelper<int>.ToBsonValue))!;
+            var setBsonValueMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Set", [typeof(ReadOnlySpan<char>), typeof(BsonValue)])!;
+            var unsetMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Unset", [typeof(ReadOnlySpan<char>)])!;
+            var tryGetOffsetMethod = typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!;
+            var getElementTypeMethod = typeof(ArenaBsonReader).GetMethod(nameof(ArenaBsonReader.GetElementType))!;
+            var nullBsonType = Expression.Constant(BlittableBsonConstants.BsonType.Null);
+
+            return Expression.Block([offsetVar],
+                Expression.IfThenElse(
+                    Expression.Call(snapshot, tryGetOffsetMethod, elementNameExpr, offsetVar),
+                    Expression.IfThenElse(
+                        Expression.NotEqual(propValue, Expression.Constant(null, collectionType)),
+                        Expression.IfThen(
+                            Expression.Not(Expression.Call(null, equalsAtOffsetMethod, convertedCollection, snapshot, offsetVar, arena)),
+                            Expression.Call(builder, setBsonValueMethod, pathVar, Expression.Call(null, toBsonValueMethod, propValue))),
+                        Expression.IfThen(
+                            Expression.NotEqual(Expression.Call(null, getElementTypeMethod, snapshot, offsetVar), nullBsonType),
+                            Expression.Call(builder, unsetMethod, pathVar))),
+                    Expression.IfThen(
+                        Expression.NotEqual(propValue, Expression.Constant(null, collectionType)),
+                        Expression.Call(builder, setBsonValueMethod, pathVar, Expression.Call(null, toBsonValueMethod, propValue)))));
+        }
+
+        private static Expression EmitDictionaryDiff(
+            Expression propValue,
+            Expression snapshot,
+            ParameterExpression builder,
+            ParameterExpression arena,
+            Type dictionaryType,
+            Type valueType,
+            ParameterExpression pathVar,
+            ParameterExpression offsetVar,
+            Expression elementNameExpr)
+        {
+            var helperType = typeof(DictionaryHelper<>).MakeGenericType(valueType);
+            var equalsAtOffsetMethod = helperType.GetMethod(nameof(DictionaryHelper<int>.EqualsSnapshotAtOffset))!;
+            var dictInterfaceType = typeof(IDictionary<,>).MakeGenericType(typeof(string), valueType);
+            var convertedDictionary = Expression.Convert(propValue, dictInterfaceType);
+            var toBsonValueMethod = helperType.GetMethod(nameof(DictionaryHelper<int>.ToBsonValue))!;
+            var setBsonValueMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Set", [typeof(ReadOnlySpan<char>), typeof(BsonValue)])!;
+            var unsetMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Unset", [typeof(ReadOnlySpan<char>)])!;
+            var tryGetOffsetMethod = typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!;
+            var getElementTypeMethod = typeof(ArenaBsonReader).GetMethod(nameof(ArenaBsonReader.GetElementType))!;
+            var nullBsonType = Expression.Constant(BlittableBsonConstants.BsonType.Null);
+
+            return Expression.Block([offsetVar],
+                Expression.IfThenElse(
+                    Expression.Call(snapshot, tryGetOffsetMethod, elementNameExpr, offsetVar),
+                    Expression.IfThenElse(
+                        Expression.NotEqual(propValue, Expression.Constant(null, dictionaryType)),
+                        Expression.IfThen(
+                            Expression.Not(Expression.Call(null, equalsAtOffsetMethod, convertedDictionary, snapshot, offsetVar, arena)),
+                            Expression.Call(builder, setBsonValueMethod, pathVar, Expression.Call(null, toBsonValueMethod, propValue))),
+                        Expression.IfThen(
+                            Expression.NotEqual(Expression.Call(null, getElementTypeMethod, snapshot, offsetVar), nullBsonType),
+                            Expression.Call(builder, unsetMethod, pathVar))),
+                    Expression.IfThen(
+                        Expression.NotEqual(propValue, Expression.Constant(null, dictionaryType)),
+                        Expression.Call(builder, setBsonValueMethod, pathVar, Expression.Call(null, toBsonValueMethod, propValue)))));
+        }
+
         private static Expression EmitPropertyDiff(Expression entity, Expression snapshot, ParameterExpression builder, ParameterExpression arena, PropertyInfo prop, Expression prefix)
         {
             var type = prop.PropertyType;
@@ -469,18 +545,13 @@ public static class DynamicBlittableSerializer<T>
                     ));
                 }
             }
-            else if (IsCollection(type, out _) || IsDictionary(type, out _))
+            else if (IsCollection(type, out var collectionElementType))
             {
-                var setObjectMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("SetObject")!.MakeGenericMethod(type);
-                
-                pathBody.Add(Expression.IfThenElse(
-                    Expression.NotEqual(propValue, Expression.Constant(null, type)),
-                    Expression.Call(builder, setObjectMethod, pathVar, propValue),
-                    Expression.IfThen(
-                         Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, elementNameExpr, offsetVar),
-                         Expression.Call(builder, typeof(ArenaUpdateDefinitionBuilder).GetMethod("Unset", [typeof(ReadOnlySpan<char>)])!, pathVar)
-                    )
-                ));
+                pathBody.Add(EmitCollectionDiff(propValue, snapshot, builder, arena, type, collectionElementType, pathVar, offsetVar, elementNameExpr));
+            }
+            else if (IsDictionary(type, out var dictionaryValueType))
+            {
+                pathBody.Add(EmitDictionaryDiff(propValue, snapshot, builder, arena, type, dictionaryValueType, pathVar, offsetVar, elementNameExpr));
             }
             else if (type.IsEnum)
             {

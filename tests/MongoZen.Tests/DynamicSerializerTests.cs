@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using Xunit;
 using SharpArena.Allocators;
 using MongoZen.Bson;
+using MongoZen.ChangeTracking;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 
@@ -164,6 +166,97 @@ public class DynamicSerializerTests
         Assert.Equal(id, result.Id);
         Assert.Equal(now, result.Timestamp);
         Assert.Equal("Some data", result.Data);
+    }
+
+    [Fact]
+    public void BuildUpdate_Should_Not_Mark_Unchanged_Collection_As_Dirty()
+    {
+        using var arena = new ArenaAllocator();
+        var entity = new CollectionPoco
+        {
+            Title = "Test",
+            Scores = [1, 2, 3],
+            Children = [new SimplePoco { Name = "child", Age = 5 }]
+        };
+
+        var writer = new ArenaBsonWriter(arena);
+        DynamicBlittableSerializer<CollectionPoco>.SerializeDelegate(ref writer, entity);
+        var snapshot = writer.Commit(arena);
+
+        var builder = new ArenaUpdateDefinitionBuilder(arena);
+        DynamicBlittableSerializer<CollectionPoco>.BuildUpdateDelegate(entity, snapshot, ref builder, arena, default);
+
+        Assert.False(builder.HasChanges);
+    }
+
+    [Fact]
+    public void BuildUpdate_Should_Detect_Collection_Change()
+    {
+        using var arena = new ArenaAllocator();
+        var entity = new CollectionPoco
+        {
+            Title = "Test",
+            Scores = [1, 2, 3]
+        };
+
+        var writer = new ArenaBsonWriter(arena);
+        DynamicBlittableSerializer<CollectionPoco>.SerializeDelegate(ref writer, entity);
+        var snapshot = writer.Commit(arena);
+
+        entity.Scores[2] = 99;
+        var builder = new ArenaUpdateDefinitionBuilder(arena);
+        DynamicBlittableSerializer<CollectionPoco>.BuildUpdateDelegate(entity, snapshot, ref builder, arena, default);
+
+        Assert.True(builder.HasChanges);
+        var doc = builder.Build();
+        var setDoc = doc.GetDocument("$set".AsSpan(), arena);
+        Assert.True(setDoc.ContainsKey("Scores".AsSpan()));
+        Assert.False(setDoc.ContainsKey("Title".AsSpan()));
+    }
+
+    [Fact]
+    public void BuildUpdate_Should_Not_Mark_Unchanged_Dictionary_As_Dirty()
+    {
+        using var arena = new ArenaAllocator();
+        var entity = new DictionaryPoco
+        {
+            Name = "Test",
+            Metadata = new Dictionary<string, int> { ["x"] = 1, ["y"] = 2 }
+        };
+
+        var writer = new ArenaBsonWriter(arena);
+        DynamicBlittableSerializer<DictionaryPoco>.SerializeDelegate(ref writer, entity);
+        var snapshot = writer.Commit(arena);
+
+        var builder = new ArenaUpdateDefinitionBuilder(arena);
+        DynamicBlittableSerializer<DictionaryPoco>.BuildUpdateDelegate(entity, snapshot, ref builder, arena, default);
+
+        Assert.False(builder.HasChanges);
+    }
+
+    [Fact]
+    public void BuildUpdate_Should_Detect_Dictionary_Change()
+    {
+        using var arena = new ArenaAllocator();
+        var entity = new DictionaryPoco
+        {
+            Name = "Test",
+            Metadata = new Dictionary<string, int> { ["x"] = 1, ["y"] = 2 }
+        };
+
+        var writer = new ArenaBsonWriter(arena);
+        DynamicBlittableSerializer<DictionaryPoco>.SerializeDelegate(ref writer, entity);
+        var snapshot = writer.Commit(arena);
+
+        entity.Metadata["y"] = 99;
+        var builder = new ArenaUpdateDefinitionBuilder(arena);
+        DynamicBlittableSerializer<DictionaryPoco>.BuildUpdateDelegate(entity, snapshot, ref builder, arena, default);
+
+        Assert.True(builder.HasChanges);
+        var doc = builder.Build();
+        var setDoc = doc.GetDocument("$set".AsSpan(), arena);
+        Assert.True(setDoc.ContainsKey("Metadata".AsSpan()));
+        Assert.False(setDoc.ContainsKey("Name".AsSpan()));
     }
 
     [Fact]
