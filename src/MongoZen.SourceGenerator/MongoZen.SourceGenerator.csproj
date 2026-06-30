@@ -1,33 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <PropertyGroup>
-        <TargetFramework>netstandard2.0</TargetFramework>
-        <IsPackable>false</IsPackable>
-        <Nullable>enable</Nullable>
-        <LangVersion>latest</LangVersion>
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <LangVersion>latest</LangVersion>
+    <Description>Source generators for MongoZen v2 shadow tracking.</Description>
+    <NoWarn>$(NoWarn);RS2008</NoWarn>
+  </PropertyGroup>
 
-        <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
-        <IsRoslynComponent>true</IsRoslynComponent>
-        <PackageId>MongoZen.SourceGenerator</PackageId>
-        <RootNamespace>MongoZen.SourceGenerator</RootNamespace>
-    </PropertyGroup>
-
-    <ItemGroup>
-        <!-- resolve CVE-2026-26171 -->
-        <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.6">
-            <PrivateAssets>all</PrivateAssets>
-        </PackageReference>        
-        <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.3.4">
-            <PrivateAssets>all</PrivateAssets>
-            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-        </PackageReference>
-        <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" PrivateAssets="all"/>
-        <PackageReference Include="System.Collections.Immutable" Version="8.0.0" PrivateAssets="all"/>
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="Properties\" />
-    </ItemGroup>
-
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" PrivateAssets="all" />
+  </ItemGroup>
 
 </Project>

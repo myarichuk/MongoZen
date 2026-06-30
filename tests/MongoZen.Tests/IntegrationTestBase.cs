@@ -1,74 +1,91 @@
-using EphemeralMongo;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using System.Reflection;
+using Testcontainers.MongoDb;
+using Xunit;
 
 namespace MongoZen.Tests;
 
-/// <summary>
-/// Provides a shared ephemeral MongoDB test harness for integration tests.
-/// </summary>
 public abstract class IntegrationTestBase : IAsyncLifetime
 {
-    /// <summary>
-    /// Shared runner and client to avoid expensive startup and discovery costs per test.
-    /// xUnit runs tests in parallel across classes, so they share this instance.
-    /// </summary>
-    private static readonly Lazy<Task<(IMongoRunner Runner, MongoClient Client)>> RunnerLazy = new(async () =>
+    static IntegrationTestBase()
     {
-        var options = new MongoRunnerOptions
-        {
-            Version = MongoVersion.V8,
-            Edition = MongoEdition.Community,
-            UseSingleNodeReplicaSet = true,
-            AdditionalArguments = [ "--quiet" ],
-            ConnectionTimeout = TimeSpan.FromSeconds(10),
-            DataDirectoryLifetime = TimeSpan.FromMinutes(30),
-        };
-        var runner = await MongoRunner.RunAsync(options);
-        var client = new MongoClient(runner.ConnectionString);
-        
-        // One-time check for replica set readiness to avoid per-test ping overhead.
         try
         {
-            await client.GetDatabase("admin")
-                .RunCommandAsync<BsonDocument>(new BsonDocument("replSetGetStatus", 1));
+            MongoDB.Bson.Serialization.BsonSerializer.RegisterSerializer(new MongoDB.Bson.Serialization.Serializers.GuidSerializer(GuidRepresentation.Standard));
         }
-        catch { }
-        
-        return (runner, client);
+        catch (MongoDB.Bson.BsonSerializationException)
+        {
+            // Already registered
+        }
+    }
+
+    private static readonly Lazy<Task<(MongoDbContainer Container, MongoClient Client)>> ContainerLazy = new(async () =>
+    {
+        var container = new MongoDbBuilder()
+            .WithUsername("")
+            .WithPassword("")
+            .WithCommand("--replSet", "rs0", "--bind_ip_all")
+            .Build();
+
+        await container.StartAsync();
+
+        await container.ExecAsync([
+            "mongosh", "--eval",
+            "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+        ]);
+
+        var connectionString = container.GetConnectionString();
+
+        if (!connectionString.Contains("replicaSet="))
+        {
+            connectionString += (connectionString.Contains("?") ? "&" : "?") + "replicaSet=rs0";      
+        }
+        else if (connectionString.Contains("directConnection=true"))
+        {
+            connectionString = connectionString.Replace("directConnection=true", "directConnection=false");
+        }
+
+        var client = new MongoClient(connectionString);
+
+        // Wait for primary
+        for (int i = 0; i < 30; i++)
+        {
+            try
+            {
+                var admin = client.GetDatabase("admin");
+                var hello = await admin.RunCommandAsync<BsonDocument>(new BsonDocument("hello", 1));
+                if (hello.TryGetValue("isWritablePrimary", out var isPrimary) && isPrimary.AsBoolean)
+                {
+                    break;
+                }
+            }
+            catch
+            {
+            }
+            await Task.Delay(1000);
+        }
+
+        return (container, client);
     });
 
     private string? _databaseName;
-    protected IMongoDatabase? Database;
+    protected IMongoDatabase Database = null!;
     private MongoClient? _mongoClient;
 
-    /// <summary>
-    /// Gets the MongoDB client connected to the shared ephemeral instance.
-    /// </summary>
     protected MongoClient Client => _mongoClient ?? throw new InvalidOperationException("Client not initialized.");
 
-    protected IntegrationTestBase()
-    {
-    }
-
-    /// <inheritdoc/>
     public async Task InitializeAsync()
     {
-        var (runner, client) = await RunnerLazy.Value;
+        var (_, client) = await ContainerLazy.Value;
         _mongoClient = client;
-        
-        // Each test gets a unique database to ensure isolation during parallel execution.
-        // We avoid dropping databases in DisposeAsync because it's an expensive metadata operation;
-        // EphemeralMongo cleans up the entire data directory at the end of the run.
+
         _databaseName = $"test_{Guid.NewGuid():N}";
         Database = _mongoClient.GetDatabase(_databaseName);
     }
 
-    /// <inheritdoc/>
     public Task DisposeAsync()
     {
-        // No-op for performance. Database dropping is the primary bottleneck in integration tests.
+        // For performance, we don't drop databases per test, as it's expensive.
         return Task.CompletedTask;
     }
 }

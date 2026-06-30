@@ -1,28 +1,15 @@
-using System;
-using System.Collections.Generic;
-
 namespace MongoZen;
 
 /// <summary>
-/// Thrown when an optimistic concurrency check fails during SaveChangesAsync.
+/// Thrown when an optimistic concurrency check fails.
 /// </summary>
-public class ConcurrencyException : Exception
+public sealed class ConcurrencyException : Exception
 {
-    public ConcurrencyException(string message) : base(message)
-    {
-    }
-
-    public ConcurrencyException(string message, Exception innerException) : base(message, innerException)
-    {
-    }
-
     /// <summary>
-    /// The IDs of the entities that caused the concurrency conflict.
+    /// Gets the entity that caused the concurrency exception.
     /// </summary>
-    public List<object> FailedIds { get; } = new();
+    public object? Entity { get; }
 
-    public ConcurrencyException(string message, IEnumerable<object> failedIds) : base(message)
-    {
-        FailedIds.AddRange(failedIds);
-    }
+    public ConcurrencyException(string message, object? entity = null, Exception? inner = null)
+        : base(message, inner) => Entity = entity;
 }

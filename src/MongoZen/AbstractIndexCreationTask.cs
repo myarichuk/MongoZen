@@ -4,7 +4,7 @@ namespace MongoZen;
 
 internal interface IAbstractIndexCreationTask
 {
-    Task ExecuteAsync(IMongoDatabase database, CancellationToken cancellationToken);
+    ValueTask ExecuteAsync(DocumentStore store, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -20,9 +20,9 @@ public abstract class AbstractIndexCreationTask<T> : IAbstractIndexCreationTask 
     public virtual string IndexName => GetType().Name;
 
     /// <summary>
-    /// Gets the name of the collection. Defaults to the entity type name.
+    /// Gets the name of the collection. Defaults to the value resolved via store conventions.
     /// </summary>
-    public virtual string CollectionName => typeof(T).Name;
+    public virtual string? CollectionName => null;
 
     /// <summary>
     /// Gets or sets whether to drop the index if it exists with a different definition and recreate it.
@@ -49,9 +49,10 @@ public abstract class AbstractIndexCreationTask<T> : IAbstractIndexCreationTask 
         if (single != null) yield return single;
     }
 
-    async Task IAbstractIndexCreationTask.ExecuteAsync(IMongoDatabase database, CancellationToken cancellationToken)
+    async ValueTask IAbstractIndexCreationTask.ExecuteAsync(DocumentStore store, CancellationToken cancellationToken)
     {
-        var collection = database.GetCollection<T>(CollectionName);
+        var collectionName = CollectionName ?? store.Conventions.GetCollectionName(typeof(T));
+        var collection = store.Database.GetCollection<T>(collectionName);
         var models = CreateIndexModels().ToList();
 
         if (models.Count == 0) return;
@@ -85,7 +86,7 @@ public abstract class AbstractIndexCreationTask<T> : IAbstractIndexCreationTask 
             }
 
             throw new InvalidOperationException(
-                $"Index creation failed for collection '{CollectionName}'. An index with the same name already exists but with a different definition. " +
+                $"Index creation failed for collection '{collectionName}'. An index with the same name already exists but with a different definition. " +
                 "Update the index name, manually drop the existing index, or set 'ForceRecreate = true' in your index task class.", ex);
         }
     }

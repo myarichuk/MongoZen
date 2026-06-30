@@ -1,5 +1,4 @@
 using System.Reflection;
-using MongoDB.Driver;
 
 namespace MongoZen;
 
@@ -12,9 +11,9 @@ public static class IndexCreation
     /// Scans the specified assembly for all index creation tasks and executes them.
     /// </summary>
     /// <param name="assembly">The assembly to scan.</param>
-    /// <param name="database">The MongoDB database.</param>
+    /// <param name="store">The DocumentStore instance.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    public static async Task CreateIndexesAsync(Assembly assembly, IMongoDatabase database, CancellationToken cancellationToken = default)
+    public static async ValueTask CreateIndexesAsync(Assembly assembly, DocumentStore store, CancellationToken cancellationToken = default)
     {
         var taskTypes = assembly.GetTypes()
             .Where(t => t is { IsAbstract: false, IsClass: true } && typeof(IAbstractIndexCreationTask).IsAssignableFrom(t));
@@ -28,16 +27,12 @@ public static class IndexCreation
             }
         }
 
-        // Deduplicate by IndexName + CollectionName to avoid firing identical commands in parallel
-        // Note: A single class might create multiple models, so we check ExecuteAsync logic too.
-        // For simplicity, we assume one Task class per index (or group of indexes).
-        
-        await Task.WhenAll(tasks.Select(t => t.ExecuteAsync(database, cancellationToken))).ConfigureAwait(false);
+        await Task.WhenAll(tasks.Select(t => t.ExecuteAsync(store, cancellationToken).AsTask())).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Scans the assembly containing the specified type for all index creation tasks and executes them.
     /// </summary>
-    public static Task CreateIndexesAsync<T>(IMongoDatabase database, CancellationToken cancellationToken = default)
-        => CreateIndexesAsync(typeof(T).Assembly, database, cancellationToken);
+    public static ValueTask CreateIndexesAsync<T>(DocumentStore store, CancellationToken cancellationToken = default)
+        => CreateIndexesAsync(typeof(T).Assembly, store, cancellationToken);
 }

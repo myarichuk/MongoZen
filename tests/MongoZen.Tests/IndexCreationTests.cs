@@ -14,8 +14,6 @@ public class IndexCreationTests : IntegrationTestBase
 
     public class IndexedEntity_ByEmail : AbstractIndexCreationTask<IndexedEntity>
     {
-        public override string CollectionName => "IndexedEntities";
-
         public override CreateIndexModel<IndexedEntity> CreateIndexModel()
         {
             return new CreateIndexModel<IndexedEntity>(
@@ -28,60 +26,18 @@ public class IndexCreationTests : IntegrationTestBase
     [Fact]
     public async Task CanCreateIndexesFromAssembly()
     {
+        // Arrange
+        using var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
+
         // Act
-        await IndexCreation.CreateIndexesAsync(typeof(IndexCreationTests).Assembly, Database!);
+        await store.ExecuteIndexesAsync(typeof(IndexCreationTests).Assembly);
 
         // Assert
-        var collectionName = "IndexedEntities";
+        var collectionName = store.Conventions.GetCollectionName(typeof(IndexedEntity));
         var collection = Database!.GetCollection<IndexedEntity>(collectionName);
         var indexes = await (await collection.Indexes.ListAsync()).ToListAsync();
 
         Assert.Contains(indexes, i => i.GetValue("name", "").AsString == nameof(IndexedEntity_ByEmail));
         Assert.Contains(indexes, i => i.GetValue("unique", false).ToBoolean() == true);
-    }
-
-    public class TestDbContext : DbContext
-    {
-        public IDbSet<IndexedEntity> IndexedEntities { get; set; } = null!;
-
-        public TestDbContext(DbContextOptions options) : base(options)
-        {
-        }
-
-        protected override void InitializeDbSets()
-        {
-            if (Options.UseInMemory)
-            {
-                IndexedEntities = new InMemoryDbSet<IndexedEntity>("IndexedEntities", Options.Conventions);
-            }
-            else
-            {
-                IndexedEntities = new DbSet<IndexedEntity>(Options.Mongo!.GetCollection<IndexedEntity>("IndexedEntities"), Options.Conventions);
-            }
-        }
-
-        public override string GetCollectionName(Type entityType)
-        {
-            if (entityType == typeof(IndexedEntity)) return "IndexedEntities";
-            throw new ArgumentException();
-        }
-    }
-
-    [Fact]
-    public async Task DbContextCanCreateIndexes()
-    {
-        // Arrange
-        var options = new DbContextOptions(Database!);
-        var context = new TestDbContext(options);
-
-        // Act
-        await context.CreateIndexesAsync();
-
-        // Assert
-        var collectionName = context.GetCollectionName(typeof(IndexedEntity));
-        var collection = Database!.GetCollection<IndexedEntity>(collectionName);
-        var indexes = await (await collection.Indexes.ListAsync()).ToListAsync();
-
-        Assert.Contains(indexes, i => i.GetValue("name", "").AsString == nameof(IndexedEntity_ByEmail));
     }
 }
