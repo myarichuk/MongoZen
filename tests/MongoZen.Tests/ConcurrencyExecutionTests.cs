@@ -100,4 +100,38 @@ public class ConcurrencyExecutionTests : IntegrationTestBase
         Assert.Same(entityA, ex.Entity);
         Assert.Contains("was modified by another user", ex.Message);
     }
+
+    [Fact]
+    public async Task SaveChangesAsync_Should_Allow_Retry_After_ConcurrencyException()
+    {
+        var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
+
+        using (var session = store.OpenSession())
+        {
+            session.Store(new ConcurrencyEntity { Id = 4, Name = "Original" });
+            await session.SaveChangesAsync();
+        }
+
+        using var sessionA = store.OpenSession();
+        using var sessionB = store.OpenSession();
+
+        var entityA = await sessionA.LoadAsync<ConcurrencyEntity>(4);
+        var entityB = await sessionB.LoadAsync<ConcurrencyEntity>(4);
+
+        entityA!.Name = "Modified by A";
+        entityB!.Name = "Modified by B";
+
+        await sessionA.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<ConcurrencyException>(() => sessionB.SaveChangesAsync());
+
+        await sessionB.Advanced.RefreshAsync(entityB);
+        entityB.Name = "Modified by B";
+        await sessionB.SaveChangesAsync();
+
+        using var verifySession = store.OpenSession();
+        var final = await verifySession.LoadAsync<ConcurrencyEntity>(4);
+        Assert.NotNull(final);
+        Assert.Equal("Modified by B", final.Name);
+    }
 }
