@@ -67,7 +67,10 @@ public unsafe struct ChangeTracker
     private ArenaList<EntityEntry> _entries;
     private object[] _entities;
     private int _count;
-    private readonly List<string> _collectionNames;
+    private readonly Dictionary<object, int> _entityIndex;   // reference → slot index
+    private readonly Dictionary<DocId, int> _docIdIndex;     // DocId → slot index
+    private readonly Dictionary<string, int> _collectionNameToId;
+    private readonly List<string> _collectionNamesById;      // reverse: id → name
 
     public ChangeTracker(DocumentConventions conventions, ArenaAllocator arena)
     {
@@ -76,22 +79,23 @@ public unsafe struct ChangeTracker
         _entries = new ArenaList<EntityEntry>(arena, 64);
         _entities = ArrayPool<object>.Shared.Rent(64);
         _count = 0;
-        _collectionNames = new List<string>();
+        _entityIndex = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        _docIdIndex = new Dictionary<DocId, int>();
+        _collectionNameToId = new Dictionary<string, int>();
+        _collectionNamesById = new List<string>();
     }
 
     public int TrackedCount => _count;
 
-    public string GetCollectionName(int collectionId) => _collectionNames[collectionId];
+    public string GetCollectionName(int collectionId) => _collectionNamesById[collectionId];
 
     public int GetCollectionId(string name)
     {
-        for (int i = 0; i < _collectionNames.Count; i++)
-        {
-            if (_collectionNames[i] == name) return i;
-        }
-
-        _collectionNames.Add(name);
-        return _collectionNames.Count - 1;
+        if (_collectionNameToId.TryGetValue(name, out var id)) return id;
+        id = _collectionNamesById.Count;
+        _collectionNamesById.Add(name);
+        _collectionNameToId[name] = id;
+        return id;
     }
 
     private void EnsureCapacity()
@@ -114,23 +118,11 @@ public unsafe struct ChangeTracker
         }
     }
 
-    private int FindIndex(object entity)
-    {
-        for (int i = 0; i < _count; i++)
-        {
-            if (ReferenceEquals(_entities[i], entity)) return i;
-        }
-        return -1;
-    }
+    private int FindIndex(object entity) =>
+        _entityIndex.TryGetValue(entity, out var idx) ? idx : -1;
 
-    private int FindIndex(DocId id)
-    {
-        for (int i = 0; i < _count; i++)
-        {
-            if (_entries[i].Id == id) return i;
-        }
-        return -1;
-    }
+    private int FindIndex(DocId id) =>
+        _docIdIndex.TryGetValue(id, out var idx) ? idx : -1;
 
     public void Track<T>(T entity, BlittableBsonDocument? snapshot = null)
     {
@@ -163,18 +155,20 @@ public unsafe struct ChangeTracker
         index = FindIndex(docId);
         if (index != -1)
         {
-            // Already tracking another object with same ID? DocumentSession prevents this.
-            // But we'll handle it by updating the reference.
+            // Already tracking another object with same ID — update the entity reference.
+            var oldEntity = _entities[index];
             _entities[index] = entity;
+            _entityIndex.Remove(oldEntity);
+            _entityIndex[entity] = index;
             ref var entry = ref _entries[index];
             entry.DispatcherId = EntityDispatcherCache.GetId(typeof(T));
-            // ... update snapshot if provided ...
             return;
         }
 
         EnsureCapacity();
         index = _count++;
         _entities[index] = entity;
+        _entityIndex[entity] = index;
 
         var newEntry = new EntityEntry
         {
@@ -193,6 +187,7 @@ public unsafe struct ChangeTracker
         }
 
         _entries.Add(newEntry);
+        _docIdIndex[docId] = index;
     }
 
     public void Track(object entity, Guid expectedEtag)
@@ -212,6 +207,7 @@ public unsafe struct ChangeTracker
         EnsureCapacity();
         index = _count++;
         _entities[index] = entity;
+        _entityIndex[entity] = index;
 
         var newEntry = new EntityEntry
         {
@@ -222,6 +218,7 @@ public unsafe struct ChangeTracker
         };
 
         _entries.Add(newEntry);
+        _docIdIndex[docId] = index;
     }
 
     public void Evict(object? entity)
@@ -231,12 +228,19 @@ public unsafe struct ChangeTracker
         var index = FindIndex(entity);
         if (index == -1) return;
 
+        _entityIndex.Remove(entity);
+        _docIdIndex.Remove(_entries[index].Id);
+
         var lastIndex = _count - 1;
         if (index != lastIndex)
         {
-            // Swap with last element
-            _entities[index] = _entities[lastIndex];
-            _entries[index] = _entries[lastIndex];
+            // Move last element into the evicted slot and update its dict entries
+            var movedEntity = _entities[lastIndex];
+            var movedEntry = _entries[lastIndex];
+            _entities[index] = movedEntity;
+            _entries[index] = movedEntry;
+            _entityIndex[movedEntity] = index;
+            _docIdIndex[movedEntry.Id] = index;
         }
 
         _entities[lastIndex] = null!;
@@ -269,7 +273,10 @@ public unsafe struct ChangeTracker
             index = FindIndex(docId);
             if (index != -1)
             {
+                var oldEntity = _entities[index];
                 _entities[index] = entity;
+                _entityIndex.Remove(oldEntity);
+                _entityIndex[entity] = index;
                 ref var entry = ref _entries[index];
                 entry.IsDeleted = true;
                 return;
@@ -278,6 +285,7 @@ public unsafe struct ChangeTracker
             EnsureCapacity();
             index = _count++;
             _entities[index] = entity;
+            _entityIndex[entity] = index;
 
             var newEntry = new EntityEntry
             {
@@ -287,6 +295,7 @@ public unsafe struct ChangeTracker
             };
 
             _entries.Add(newEntry);
+            _docIdIndex[docId] = index;
         }
     }
 
@@ -332,6 +341,28 @@ public unsafe struct ChangeTracker
         _count = newCount;
         _entries = newEntries;
         _arena = newArena;
+
+        // Rebuild index dicts from compacted arrays
+        _entityIndex.Clear();
+        _docIdIndex.Clear();
+        for (int i = 0; i < newCount; i++)
+        {
+            _entityIndex[_entities[i]] = i;
+            _docIdIndex[newEntries[i].Id] = i;
+        }
+    }
+
+    public void CollectDeletedIds(List<object> ids)
+    {
+        for (int i = 0; i < _count; i++)
+        {
+            ref var entry = ref _entries[i];
+            if (entry.IsDeleted && !entry.IsNew)
+            {
+                var id = EntityIdAccessor.GetId(_entities[i]);
+                if (id != null) ids.Add(id);
+            }
+        }
     }
 
     public BlittableBsonDocument? GetSnapshot(object entity)

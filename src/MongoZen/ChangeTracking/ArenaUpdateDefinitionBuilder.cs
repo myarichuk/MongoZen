@@ -1,6 +1,7 @@
 using MongoDB.Bson;
 using MongoZen.Bson;
 using SharpArena.Allocators;
+using SharpArena.Collections;
 
 namespace MongoZen.ChangeTracking;
 
@@ -41,14 +42,51 @@ public unsafe struct ArenaUpdateDefinitionBuilder
         int totalLength = prefix.Length + 1 + elementName.Length;
         if (totalLength > _pathBufferLength)
         {
-            // Fallback for extremely deep nesting
-            return string.Concat(prefix.ToString(), ".", elementName).AsSpan();
+            // Overflow: encode the combined path as UTF-8 into the arena.
+            // Callers must use CombinePathUtf8 and the ArenaUtf8String WriteName overload.
+            // This overload falls through to that path by returning empty — callers should
+            // prefer CombinePathUtf8 directly when the prefix is known to be long.
+            return CombinePathToBuffer(prefix, elementName, totalLength);
         }
 
         prefix.CopyTo(new Span<char>(_pathBuffer, _pathBufferLength));
         _pathBuffer[prefix.Length] = '.';
         elementName.AsSpan().CopyTo(new Span<char>(_pathBuffer + prefix.Length + 1, _pathBufferLength - prefix.Length - 1));
         return new ReadOnlySpan<char>(_pathBuffer, totalLength);
+    }
+
+    private ReadOnlySpan<char> CombinePathToBuffer(ReadOnlySpan<char> prefix, string elementName, int totalLength)
+    {
+        // Allocate a char buffer in the arena for paths that overflow the stack buffer.
+        // Arena lifetime = session lifetime, so the span is safe to use until Dispose.
+        var extended = (char*)_arena.Alloc((nuint)(totalLength * sizeof(char)));
+        prefix.CopyTo(new Span<char>(extended, totalLength));
+        extended[prefix.Length] = '.';
+        elementName.AsSpan().CopyTo(new Span<char>(extended + prefix.Length + 1, elementName.Length));
+        return new ReadOnlySpan<char>(extended, totalLength);
+    }
+
+    /// <summary>
+    /// Combines a path prefix and element name into an arena-lifetime UTF-8 view.
+    /// Use this instead of <see cref="CombinePath"/> when the combined path may exceed 256 chars,
+    /// and pair it with the <c>WriteName(ArenaUtf8String, ...)</c> overload to avoid re-encoding.
+    /// </summary>
+    public ArenaUtf8String CombinePathUtf8(ReadOnlySpan<char> prefix, string elementName)
+    {
+        if (prefix.Length == 0)
+        {
+            return ArenaUtf8String.Clone(elementName.AsSpan(), _arena);
+        }
+
+        int totalLength = prefix.Length + 1 + elementName.Length;
+        Span<char> tmp = totalLength <= 512
+            ? stackalloc char[totalLength]
+            : new char[totalLength]; // very deep nesting edge case
+
+        prefix.CopyTo(tmp);
+        tmp[prefix.Length] = '.';
+        elementName.AsSpan().CopyTo(tmp[(prefix.Length + 1)..]);
+        return ArenaUtf8String.Clone(tmp[..totalLength], _arena);
     }
 
     private void EnsureSetStarted()
@@ -315,6 +353,17 @@ public unsafe struct ArenaUpdateDefinitionBuilder
         elementType = null!;
         return false;
     }
+
+    // ArenaUtf8String overloads — use with CombinePathUtf8 to avoid double UTF-8 encoding on deep paths
+    public void Set(ArenaUtf8String path, int value) { EnsureSetStarted(); _writer.WriteName(path, BlittableBsonConstants.BsonType.Int32); _writer.WriteInt32Value(value); }
+    public void Set(ArenaUtf8String path, long value) { EnsureSetStarted(); _writer.WriteName(path, BlittableBsonConstants.BsonType.Int64); _writer.WriteInt64Value(value); }
+    public void Set(ArenaUtf8String path, double value) { EnsureSetStarted(); _writer.WriteName(path, BlittableBsonConstants.BsonType.Double); _writer.WriteDoubleValue(value); }
+    public void Set(ArenaUtf8String path, bool value) { EnsureSetStarted(); _writer.WriteName(path, BlittableBsonConstants.BsonType.Boolean); _writer.WriteBooleanValue(value); }
+    public void Set(ArenaUtf8String path, string? value) { EnsureSetStarted(); if (value == null) _writer.WriteName(path, BlittableBsonConstants.BsonType.Null); else { _writer.WriteName(path, BlittableBsonConstants.BsonType.String); _writer.WriteStringValue(value.AsSpan()); } }
+    public void Set(ArenaUtf8String path, Guid value) { EnsureSetStarted(); _writer.WriteName(path, BlittableBsonConstants.BsonType.Binary); _writer.WriteGuidValue(value); }
+    public void Set(ArenaUtf8String path, DateTime value) { EnsureSetStarted(); _writer.WriteName(path, BlittableBsonConstants.BsonType.DateTime); _writer.WriteDateTimeValue(value); }
+    public void Set(ArenaUtf8String path, decimal value) { EnsureSetStarted(); _writer.WriteName(path, BlittableBsonConstants.BsonType.Decimal128); _writer.WriteDecimal128Value(value); }
+    public void Unset(ArenaUtf8String path) { EnsureUnsetStarted(); _writer.WriteName(path, BlittableBsonConstants.BsonType.Int32); _writer.WriteInt32Value(1); }
 
     public void SetRaw(ReadOnlySpan<char> path, ReadOnlySpan<byte> bsonValue, BlittableBsonConstants.BsonType type)
     {

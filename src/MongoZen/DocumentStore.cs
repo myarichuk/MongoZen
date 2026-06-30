@@ -47,7 +47,8 @@ public sealed class DocumentStore : IDisposable
         ConventionRegistry.Register("GuidStandard", guidConvention, _ => true);
     }
 
-    private ClusterFeatures GetOrDiscoverFeatures(string key) => new();
+    private ClusterFeatures GetOrDiscoverFeatures(string key) =>
+        TopologyCache.GetOrAdd(key, _ => new ClusterFeatures());
 
     /// <summary>
     /// Gets the underlying MongoDB database.
@@ -91,5 +92,12 @@ public sealed class DocumentStore : IDisposable
 
 public sealed class ClusterFeatures
 {
-    public bool? SupportsTransactions { get; internal set; }
+    // 0 = unknown, 1 = supported, 2 = not supported
+    private volatile int _state = 0;
+
+    public bool? SupportsTransactions
+    {
+        get => _state switch { 1 => true, 2 => false, _ => null };
+        internal set => _state = value switch { true => 1, false => 2, _ => 0 };
+    }
 }

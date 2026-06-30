@@ -76,16 +76,13 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
     public void WriteName(ReadOnlySpan<char> name, BlittableBsonConstants.BsonType type)
     {
         _buffer.Add((byte)type);
-        
+
         int byteCount = Encoding.UTF8.GetByteCount(name);
         if (byteCount <= 128)
         {
             Span<byte> nameBytes = stackalloc byte[128];
             int written = Encoding.UTF8.GetBytes(name, nameBytes);
-            for (int i = 0; i < written; i++)
-            {
-                _buffer.Add(nameBytes[i]);
-            }
+            _buffer.AddRange(nameBytes[..written]);
         }
         else
         {
@@ -93,17 +90,24 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
             try
             {
                 int written = Encoding.UTF8.GetBytes(name, rented);
-                for (int i = 0; i < written; i++)
-                {
-                    _buffer.Add(rented[i]);
-                }
+                _buffer.AddRange(new ReadOnlySpan<byte>(rented, 0, written));
             }
             finally
             {
                 ArrayPool<byte>.Shared.Return(rented);
             }
         }
-        
+
+        _buffer.Add(0); // C-string null terminator
+    }
+
+    /// <summary>
+    /// Writes a BSON element header using a pre-encoded UTF-8 field name (no re-encoding).
+    /// </summary>
+    public void WriteName(ArenaUtf8String name, BlittableBsonConstants.BsonType type)
+    {
+        _buffer.Add((byte)type);
+        _buffer.AddRange(name.AsSpan());
         _buffer.Add(0); // C-string null terminator
     }
 
@@ -244,10 +248,7 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         {
             Span<byte> valBytes = stackalloc byte[512];
             int written = Encoding.UTF8.GetBytes(value, valBytes);
-            for (int i = 0; i < written; i++)
-            {
-                _buffer.Add(valBytes[i]);
-            }
+            _buffer.AddRange(valBytes[..written]);
         }
         else
         {
@@ -255,10 +256,7 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
             try
             {
                 int written = Encoding.UTF8.GetBytes(value, rented);
-                for (int i = 0; i < written; i++)
-                {
-                    _buffer.Add(rented[i]);
-                }
+                _buffer.AddRange(new ReadOnlySpan<byte>(rented, 0, written));
             }
             finally
             {
@@ -271,11 +269,8 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
 
     public void WriteObjectIdValue(ObjectId value)
     {
-        var bytes = value.ToByteArray();
-        for (int i = 0; i < 12; i++)
-        {
-            _buffer.Add(bytes[i]);
-        }
+        // TODO: replace with zero-alloc span write when MongoDB.Bson exposes TryWriteToBytes(Span<byte>)
+        _buffer.AddRange(value.ToByteArray());
     }
 
     public void WriteDateTimeValue(DateTime value)
@@ -288,23 +283,17 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
     {
         WriteInt32Value(bytes.Length);
         _buffer.Add(subtype);
-        for (int i = 0; i < bytes.Length; i++)
-        {
-            _buffer.Add(bytes[i]);
-        }
+        _buffer.AddRange(bytes);
     }
 
     public void WriteGuidValue(Guid value)
     {
         WriteInt32Value(16);
         _buffer.Add(0x04); // UUID Standard subtype
-        
+
         Span<byte> bytes = stackalloc byte[16];
         value.TryWriteBytes(bytes, bigEndian: true, out _);
-        for (int i = 0; i < 16; i++)
-        {
-            _buffer.Add(bytes[i]);
-        }
+        _buffer.AddRange((ReadOnlySpan<byte>)bytes);
     }
 
     public void WriteDecimal128(ReadOnlySpan<char> name, decimal value)
@@ -374,13 +363,7 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
         }
     }
 
-    public void WriteRaw(ReadOnlySpan<byte> bytes)
-    {
-        for (int i = 0; i < bytes.Length; i++)
-        {
-            _buffer.Add(bytes[i]);
-        }
-    }
+    public void WriteRaw(ReadOnlySpan<byte> bytes) => _buffer.AddRange(bytes);
 
     // Value-only versions for arrays (using index as string key)
     public void WriteInt32(int index, int value)

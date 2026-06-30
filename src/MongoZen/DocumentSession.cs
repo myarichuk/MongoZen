@@ -18,6 +18,7 @@ public sealed class DocumentSession : IDisposable
     private ChangeTracker _changeTracker;
     private readonly ConcurrentDictionary<object, object> _identityMap = new();
     private readonly ArenaAllocator _arena;
+    private ArenaAllocator? _snapshotArena;
     private readonly int _initialArenaSize;
     private IClientSessionHandle? _clientSession;
     private bool _disposed;
@@ -246,9 +247,21 @@ public sealed class DocumentSession : IDisposable
                 await _clientSession.CommitTransactionAsync(cancellationToken);
             }
 
-            // Successfully saved, refresh snapshots for next call to SaveChangesAsync
+            // Collect deleted IDs before snapshot refresh removes them from the tracker
+            var deletedIds = new List<object>();
+            _changeTracker.CollectDeletedIds(deletedIds);
+
+            // Refresh snapshots into a new arena; old snapshot arena can be freed after migration
             var newArena = new ArenaAllocator((nuint)_initialArenaSize);
             _changeTracker.RefreshSnapshots(newArena);
+            _snapshotArena?.Dispose();
+            _snapshotArena = newArena;
+
+            // Purge deleted entities from the identity map so subsequent LoadAsync hits the DB
+            foreach (var deletedId in deletedIds)
+            {
+                _identityMap.TryRemove(deletedId, out _);
+            }
         }
         catch
         {
@@ -440,6 +453,7 @@ public sealed class DocumentSession : IDisposable
         _clientSession?.Dispose();
         _changeTracker.Dispose();
         _arena.Dispose();
+        _snapshotArena?.Dispose();
         _disposed = true;
     }
 }
