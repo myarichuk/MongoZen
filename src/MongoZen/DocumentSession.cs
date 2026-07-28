@@ -4,6 +4,7 @@ using System.Linq.Expressions;
 using SharpArena.Allocators;
 using MongoDB.Driver;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoZen.Bson;
 using MongoZen.ChangeTracking;
 
@@ -63,14 +64,7 @@ public sealed class DocumentSession : IDisposable
             return default;
         }
 
-        var slice = rawBson.Slice;
-        var doc = ArenaBsonReader.Read(slice.AccessBackingBytes(0), _arena);
-        
-        var entity = DynamicBlittableSerializer<T>.DeserializeDelegate(doc, _arena);
-        _identityMap[id] = entity!;
-        _changeTracker.Track(entity, doc);
-
-        return entity;
+        return MaterializeTracked<T>(rawBson, id);
     }
 
     public void Store<T>(T entity)
@@ -373,27 +367,89 @@ public sealed class DocumentSession : IDisposable
 
     public BlittableBsonDocument? GetSnapshot(object entity) => _changeTracker.GetSnapshot(entity);
 
-    public async ValueTask<IEnumerable<T>> QueryAsync<T>(FilterDefinition<T> filter, CancellationToken ct = default)
+    /// <summary>
+    /// Materialize a RawBsonDocument into a tracked entity, preserving identity map coherence.
+    /// </summary>
+    private T MaterializeTracked<T>(RawBsonDocument rawBson, object? precomputedId = null)
     {
-        var collectionName = _store.Conventions.GetCollectionName(typeof(T));
-        var collection = _database.GetCollection<T>(collectionName);
+        var slice = rawBson.Slice;
+        var doc = ArenaBsonReader.Read(slice.AccessBackingBytes(0), _arena);
+        var entity = DynamicBlittableSerializer<T>.DeserializeDelegate(doc, _arena);
+        var id = precomputedId ?? EntityIdAccessor.GetId(entity!);
 
-        var cursor = _clientSession != null
-            ? await collection.FindAsync(_clientSession, filter, cancellationToken: ct)
-            : await collection.FindAsync(filter, cancellationToken: ct);
+        if (id != null && _identityMap.TryGetValue(id, out var existing))
+            return (T)existing; // Return existing tracked instance to preserve in-flight edits
 
-        return await cursor.ToListAsync(ct);
+        if (id != null) _identityMap[id] = entity!;
+        _changeTracker.Track(entity, doc);
+        return entity!;
     }
 
-    public async ValueTask<IEnumerable<T>> QueryAsync<T>(Expression<Func<T, bool>> filter, CancellationToken ct = default)
+    /// <summary>
+    /// Query entities by filter. Results are added to the identity map and change-tracked;
+    /// mutations are persisted on the next SaveChangesAsync.
+    /// </summary>
+    public async ValueTask<IReadOnlyList<T>> QueryAsync<T>(
+        FilterDefinition<T> filter,
+        SortDefinition<T>? sort = null,
+        int? skip = null,
+        int? limit = null,
+        CancellationToken ct = default)
+    {
+        var collectionName = _store.Conventions.GetCollectionName(typeof(T));
+        var rawCollection = _store.GetRawCollection(collectionName);
+
+        var serializer = BsonSerializer.SerializerRegistry.GetSerializer<T>();
+        var renderArgs = new RenderArgs<T>(serializer, BsonSerializer.SerializerRegistry);
+        var rawFilter = (FilterDefinition<RawBsonDocument>)filter.Render(renderArgs).AsBsonDocument;
+
+        var find = _clientSession != null
+            ? rawCollection.Find(_clientSession, rawFilter)
+            : rawCollection.Find(rawFilter);
+
+        if (sort != null)
+            find = find.Sort((SortDefinition<RawBsonDocument>)sort.Render(renderArgs).AsBsonDocument);
+        if (skip.HasValue)
+            find = find.Skip(skip.Value);
+        if (limit.HasValue)
+            find = find.Limit(limit.Value);
+
+        var results = new List<T>();
+        using var cursor = await find.ToCursorAsync(ct);
+        while (await cursor.MoveNextAsync(ct))
+        {
+            foreach (var rawBson in cursor.Current)
+                results.Add(MaterializeTracked<T>(rawBson));
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Query entities by expression filter. Results are added to the identity map and change-tracked;
+    /// mutations are persisted on the next SaveChangesAsync.
+    /// </summary>
+    public ValueTask<IReadOnlyList<T>> QueryAsync<T>(
+        Expression<Func<T, bool>> filter,
+        SortDefinition<T>? sort = null,
+        int? skip = null,
+        int? limit = null,
+        CancellationToken ct = default)
+        => QueryAsync(Builders<T>.Filter.Where(filter), sort, skip, limit, ct);
+
+    /// <summary>
+    /// Run an aggregation pipeline. Results are NOT tracked; TResult is a read-only projection.
+    /// </summary>
+    public async ValueTask<IReadOnlyList<TResult>> AggregateAsync<T, TResult>(
+        PipelineDefinition<T, TResult> pipeline,
+        AggregateOptions? options = null,
+        CancellationToken ct = default)
     {
         var collectionName = _store.Conventions.GetCollectionName(typeof(T));
         var collection = _database.GetCollection<T>(collectionName);
-        var mongoFilter = Builders<T>.Filter.Where(filter);
 
         var cursor = _clientSession != null
-            ? await collection.FindAsync(_clientSession, mongoFilter, cancellationToken: ct)
-            : await collection.FindAsync(mongoFilter, cancellationToken: ct);
+            ? await collection.AggregateAsync(_clientSession, pipeline, options, ct)
+            : await collection.AggregateAsync(pipeline, options, ct);
 
         return await cursor.ToListAsync(ct);
     }

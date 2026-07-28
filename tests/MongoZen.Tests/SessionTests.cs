@@ -171,7 +171,100 @@ public class SessionTests : IntegrationTestBase
         Assert.Equal(later, set.GetDateTime("Timestamp".AsSpan()));
         Assert.Equal("Changed", set.GetString("Text".AsSpan()));
         Assert.Equal("ChildChanged", set.GetString("Child.Name".AsSpan()));
-        Assert.False(set.ContainsKey("Child.Age".AsSpan())); 
+        Assert.False(set.ContainsKey("Child.Age".AsSpan()));
+    }
+
+    [Fact]
+    public async Task Evict_Should_Not_Corrupt_Other_Tracked_Entities()
+    {
+        var db = Database;
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
+        var collection = db.GetCollection<SimpleEntity>(collectionName);
+
+        // Seed 3 docs
+        await collection.InsertOneAsync(new SimpleEntity { Id = 1, Name = "First", Age = 10 });
+        await collection.InsertOneAsync(new SimpleEntity { Id = 2, Name = "Second", Age = 20 });
+        await collection.InsertOneAsync(new SimpleEntity { Id = 3, Name = "Third", Age = 30 });
+
+        using var session = store.OpenSession();
+
+        // Load 3 entities
+        var e1 = await session.LoadAsync<SimpleEntity>(1);
+        var e2 = await session.LoadAsync<SimpleEntity>(2);
+        var e3 = await session.LoadAsync<SimpleEntity>(3);
+
+        // Evict the middle one
+        session.Advanced.Evict(e2);
+
+        // Mutate the remaining ones
+        e1.Name = "FirstModified";
+        e3.Name = "ThirdModified";
+
+        await session.SaveChangesAsync();
+
+        // Verify both mutations persisted
+        var updated1 = await collection.Find(Builders<SimpleEntity>.Filter.Eq(x => x.Id, 1)).FirstAsync();
+        var updated3 = await collection.Find(Builders<SimpleEntity>.Filter.Eq(x => x.Id, 3)).FirstAsync();
+
+        Assert.Equal("FirstModified", updated1.Name);
+        Assert.Equal("ThirdModified", updated3.Name);
+    }
+
+    [Fact]
+    public async Task SaveChangesAsync_Should_Diff_Correctly_On_Second_Save_In_Same_Session()
+    {
+        var db = Database;
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
+        var collection = db.GetCollection<SimpleEntity>(collectionName);
+
+        // Seed doc
+        await collection.InsertOneAsync(new SimpleEntity { Id = 1, Name = "Original", Age = 25 });
+
+        using var session = store.OpenSession();
+
+        // Load
+        var entity = await session.LoadAsync<SimpleEntity>(1);
+
+        // Mutate field A
+        entity.Name = "ModifiedA";
+        await session.SaveChangesAsync();
+
+        // Mutate field B (different field)
+        entity.Age = 50;
+        await session.SaveChangesAsync();
+
+        // Verify both mutations persisted independently
+        var updated = await collection.Find(Builders<SimpleEntity>.Filter.Eq(x => x.Id, 1)).FirstAsync();
+        Assert.Equal("ModifiedA", updated.Name);
+        Assert.Equal(50, updated.Age);
+    }
+
+    [Fact]
+    public async Task Delete_Then_LoadAsync_Should_Reflect_Deletion()
+    {
+        var db = Database;
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
+        var collection = db.GetCollection<SimpleEntity>(collectionName);
+
+        // Seed doc
+        await collection.InsertOneAsync(new SimpleEntity { Id = 1, Name = "ToDelete", Age = 20 });
+
+        using var session = store.OpenSession();
+
+        // Load
+        var entity = await session.LoadAsync<SimpleEntity>(1);
+        Assert.NotNull(entity);
+
+        // Delete in the same session
+        session.Delete(entity);
+        await session.SaveChangesAsync();
+
+        // LoadAsync again in the same session — should hit DB and return null (not the stale identity map entry)
+        var reloaded = await session.LoadAsync<SimpleEntity>(1);
+        Assert.Null(reloaded);
     }
 }
 
