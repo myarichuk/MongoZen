@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Linq.Expressions;
 using SharpArena.Allocators;
 using MongoDB.Driver;
 using MongoDB.Bson;
@@ -371,6 +372,31 @@ public sealed class DocumentSession : IDisposable
     }
 
     public BlittableBsonDocument? GetSnapshot(object entity) => _changeTracker.GetSnapshot(entity);
+
+    public async ValueTask<IEnumerable<T>> QueryAsync<T>(FilterDefinition<T> filter, CancellationToken ct = default)
+    {
+        var collectionName = _store.Conventions.GetCollectionName(typeof(T));
+        var collection = _database.GetCollection<T>(collectionName);
+
+        var cursor = _clientSession != null
+            ? await collection.FindAsync(_clientSession, filter, cancellationToken: ct)
+            : await collection.FindAsync(filter, cancellationToken: ct);
+
+        return await cursor.ToListAsync(ct);
+    }
+
+    public async ValueTask<IEnumerable<T>> QueryAsync<T>(Expression<Func<T, bool>> filter, CancellationToken ct = default)
+    {
+        var collectionName = _store.Conventions.GetCollectionName(typeof(T));
+        var collection = _database.GetCollection<T>(collectionName);
+        var mongoFilter = Builders<T>.Filter.Where(filter);
+
+        var cursor = _clientSession != null
+            ? await collection.FindAsync(_clientSession, mongoFilter, cancellationToken: ct)
+            : await collection.FindAsync(mongoFilter, cancellationToken: ct);
+
+        return await cursor.ToListAsync(ct);
+    }
 
     private class SessionAdvancedOperations(DocumentSession session) : ISessionAdvancedOperations
     {
