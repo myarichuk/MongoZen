@@ -448,9 +448,16 @@ public unsafe struct ChangeTracker
                 if (builder.HasChanges)
                 {
                     var nextEtag = Guid.NewGuid();
-                    if (dispatcher.HasConcurrencyCheck)
+                    // Stamp _etag when the type declares concurrency checking, OR when the
+                    // tracked document already carries an _etag the type doesn't expose as a
+                    // property (a brownfield document under external/hidden concurrency control).
+                    // A type/document with neither never had _etag and must not gain one here.
+                    if (dispatcher.HasConcurrencyCheck || entry.ExpectedETag != Guid.Empty)
                     {
-                        dispatcher.SetETag(entity, nextEtag);
+                        if (dispatcher.HasConcurrencyCheck)
+                        {
+                            dispatcher.SetETag(entity, nextEtag);
+                        }
                         builder.Set("_etag", nextEtag);
                     }
                     var updateDoc = builder.Build();

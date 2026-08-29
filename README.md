@@ -45,6 +45,60 @@ session.Delete(user);
 await session.SaveChangesAsync(); // Deletes document AND its GridFS files
 ```
 
+### 4. Hi/Lo ID Generation
+```csharp
+public class User
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+}
+
+var user = new User { Name = "Oren Eini" };
+session.Store(user); // no Id set: MongoZen assigns "users/1" (RavenDB-style) synchronously
+await session.SaveChangesAsync();
+```
+Ids are claimed from an in-memory `[low, high)` range per collection tag, backed by a counter
+document in a `HiLo` collection (configurable via `DocumentConventions.HiLoCollectionName`/
+`HiLoCapacity`). Only a cold refill (range exhausted) makes a blocking DB round-trip. This only
+applies to entities with a **settable `string` Id property** — other Id types (`Guid`,
+`ObjectId`, `int`, ...) still require you to set the Id yourself before `Store()`. Mutating an
+entity's Id after `Store()` throws `InvalidOperationException`.
+
+### 5. Querying Beyond Load/Query
+```csharp
+long total = await session.CountAsync<User>(u => u.Age >= 18);
+bool any = await session.AnyAsync<User>(u => u.Name == "Oren Eini");
+
+// Untracked, non-buffered streaming — mutations on yielded entities are NOT persisted.
+await foreach (var user in session.StreamAsync(Builders<User>.Filter.Empty))
+{
+    Process(user);
+}
+```
+
+### 6. Bulk Filter-Based Mutations
+```csharp
+// Executes immediately against the server — NOT deferred to SaveChangesAsync, and it
+// bypasses the identity map, so already-loaded entities can go stale relative to the DB.
+await session.Advanced.UpdateManyAsync<User>(
+    Builders<User>.Filter.Eq(u => u.Active, false),
+    Builders<User>.Update.Set(u => u.Archived, true));
+
+await session.Advanced.DeleteManyAsync<User>(Builders<User>.Filter.Eq(u => u.Active, false));
+```
+
+### 7. Transaction Requirement
+A `SaveChangesAsync()` touching more than one distinct `(collection, operation type)` group is
+non-atomic by default (today's opportunistic, silently-degrading transaction attempt). Set
+`RequireTransactions` to fail loudly instead:
+```csharp
+var store = new DocumentStore(connectionString, "MyDatabase",
+    new DocumentConventions { RequireTransactions = true });
+
+// Throws TransactionRequirementException if the server can't provide a transaction
+// for a multi-group save, instead of silently falling back to non-atomic writes.
+```
+
 ## Architectural Tiers
 
 *   **Tier 1 (Source Gen)**: Compile-time non-allocating diffing.

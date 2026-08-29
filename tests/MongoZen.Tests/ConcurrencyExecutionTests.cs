@@ -134,4 +134,42 @@ public class ConcurrencyExecutionTests : IntegrationTestBase
         Assert.NotNull(final);
         Assert.Equal("Modified by B", final.Name);
     }
+
+    [Fact]
+    public async Task SaveChangesAsync_Should_Never_Stamp_ETag_On_Entity_Without_ConcurrencyCheck()
+    {
+        var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
+        var collection = Database.GetCollection<BsonDocument>(store.Conventions.GetCollectionName(typeof(HiddenConcurrencyEntity)));
+
+        using (var session = store.OpenSession())
+        {
+            session.Store(new HiddenConcurrencyEntity { Id = 100, Name = "Original" });
+            await session.SaveChangesAsync();
+        }
+
+        var afterInsert = await collection.Find(Builders<BsonDocument>.Filter.Eq("_id", 100)).FirstAsync();
+        Assert.False(afterInsert.Contains("_etag"));
+
+        using (var session = store.OpenSession())
+        {
+            var entity = await session.LoadAsync<HiddenConcurrencyEntity>(100);
+            Assert.NotNull(entity);
+            entity!.Name = "Updated once";
+            await session.SaveChangesAsync();
+        }
+
+        var afterFirstUpdate = await collection.Find(Builders<BsonDocument>.Filter.Eq("_id", 100)).FirstAsync();
+        Assert.False(afterFirstUpdate.Contains("_etag"));
+
+        using (var session = store.OpenSession())
+        {
+            var entity = await session.LoadAsync<HiddenConcurrencyEntity>(100);
+            Assert.NotNull(entity);
+            entity!.Name = "Updated twice";
+            await session.SaveChangesAsync();
+        }
+
+        var afterSecondUpdate = await collection.Find(Builders<BsonDocument>.Filter.Eq("_id", 100)).FirstAsync();
+        Assert.False(afterSecondUpdate.Contains("_etag"));
+    }
 }

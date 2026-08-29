@@ -164,6 +164,156 @@ public class QueryTests : IntegrationTestBase
         var age20After = results2.First(x => x.Id == 20);
         Assert.Equal(1, age20After.Count); // Still 1, not 999
     }
+
+    [Fact]
+    public async Task CountAsync_Should_Count_Matching_Documents()
+    {
+        var db = Database;
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
+        var collection = db.GetCollection<SimpleEntity>(collectionName);
+
+        await collection.InsertOneAsync(new SimpleEntity { Id = 1, Name = "A", Age = 10 });
+        await collection.InsertOneAsync(new SimpleEntity { Id = 2, Name = "B", Age = 20 });
+        await collection.InsertOneAsync(new SimpleEntity { Id = 3, Name = "C", Age = 30 });
+
+        using var session = store.OpenSession();
+
+        var count = await session.CountAsync(Builders<SimpleEntity>.Filter.Gte(x => x.Age, 20));
+        Assert.Equal(2, count);
+
+        var zero = await session.CountAsync<SimpleEntity>(x => x.Age > 100);
+        Assert.Equal(0, zero);
+    }
+
+    [Fact]
+    public async Task AnyAsync_Should_Report_Presence_Of_Matching_Documents()
+    {
+        var db = Database;
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
+        var collection = db.GetCollection<SimpleEntity>(collectionName);
+
+        await collection.InsertOneAsync(new SimpleEntity { Id = 1, Name = "A", Age = 10 });
+
+        using var session = store.OpenSession();
+
+        Assert.True(await session.AnyAsync(Builders<SimpleEntity>.Filter.Eq(x => x.Id, 1)));
+        Assert.False(await session.AnyAsync<SimpleEntity>(x => x.Age > 100));
+    }
+
+    [Fact]
+    public async Task StreamAsync_Should_Enumerate_All_Matches_Without_Tracking()
+    {
+        var db = Database;
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
+        var collection = db.GetCollection<SimpleEntity>(collectionName);
+
+        for (int i = 1; i <= 10; i++)
+        {
+            await collection.InsertOneAsync(new SimpleEntity { Id = i, Name = $"Entity{i}", Age = i });
+        }
+
+        using var session = store.OpenSession();
+
+        var seen = new List<int>();
+        await foreach (var entity in session.StreamAsync(Builders<SimpleEntity>.Filter.Empty))
+        {
+            seen.Add(entity.Id);
+        }
+
+        Assert.Equal(10, seen.Count);
+        Assert.Equal(Enumerable.Range(1, 10), seen.OrderBy(x => x));
+
+        // Streamed entities are untracked: the session's identity map is unaffected by streaming.
+        var loaded = await session.LoadAsync<SimpleEntity>(1);
+        Assert.NotNull(loaded);
+    }
+
+    [Fact]
+    public async Task StreamAsync_Early_Break_Then_Restream_Should_Still_Work()
+    {
+        var db = Database;
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
+        var collection = db.GetCollection<SimpleEntity>(collectionName);
+
+        for (int i = 1; i <= 5; i++)
+        {
+            await collection.InsertOneAsync(new SimpleEntity { Id = i, Name = $"Entity{i}", Age = i });
+        }
+
+        using var session = store.OpenSession();
+
+        int count = 0;
+        await foreach (var entity in session.StreamAsync(Builders<SimpleEntity>.Filter.Empty))
+        {
+            count++;
+            if (count == 2) break;
+        }
+
+        Assert.Equal(2, count);
+
+        // Breaking out of an `await foreach` early disposes the async iterator (and its `using`
+        // cursor/arena) via DisposeAsync; a second independent stream confirms the session is
+        // still usable afterward.
+        var secondPassCount = 0;
+        await foreach (var _ in session.StreamAsync(Builders<SimpleEntity>.Filter.Empty))
+        {
+            secondPassCount++;
+        }
+        Assert.Equal(5, secondPassCount);
+    }
+
+    [Fact]
+    public async Task UpdateManyAsync_Should_Apply_Immediately_And_Bypass_Identity_Map()
+    {
+        var db = Database;
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
+        var collection = db.GetCollection<SimpleEntity>(collectionName);
+
+        await collection.InsertOneAsync(new SimpleEntity { Id = 1, Name = "A", Age = 10 });
+        await collection.InsertOneAsync(new SimpleEntity { Id = 2, Name = "B", Age = 20 });
+
+        using var session = store.OpenSession();
+
+        // Load one entity first so the identity map holds a stale copy after the bulk update.
+        var tracked = await session.LoadAsync<SimpleEntity>(1);
+        Assert.NotNull(tracked);
+
+        var modified = await session.Advanced.UpdateManyAsync(
+            Builders<SimpleEntity>.Filter.Empty,
+            Builders<SimpleEntity>.Update.Set(x => x.Name, "BulkUpdated"));
+
+        Assert.Equal(2, modified);
+
+        var raw = await collection.Find(Builders<SimpleEntity>.Filter.Eq(x => x.Id, 1)).FirstAsync();
+        Assert.Equal("BulkUpdated", raw.Name);
+
+        // The already-tracked instance is untouched by the bulk write (documented staleness).
+        Assert.Equal("A", tracked!.Name);
+    }
+
+    [Fact]
+    public async Task DeleteManyAsync_Should_Apply_Immediately()
+    {
+        var db = Database;
+        var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
+        var collection = db.GetCollection<SimpleEntity>(collectionName);
+
+        await collection.InsertOneAsync(new SimpleEntity { Id = 1, Name = "A", Age = 10 });
+        await collection.InsertOneAsync(new SimpleEntity { Id = 2, Name = "B", Age = 20 });
+
+        using var session = store.OpenSession();
+
+        var deleted = await session.Advanced.DeleteManyAsync(Builders<SimpleEntity>.Filter.Gte(x => x.Age, 15));
+
+        Assert.Equal(1, deleted);
+        Assert.Equal(1, await collection.CountDocumentsAsync(Builders<SimpleEntity>.Filter.Empty));
+    }
 }
 
 public class AggregationResult

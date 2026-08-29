@@ -41,48 +41,38 @@ public sealed class HiLoIdGenerator
 
     /// <summary>
     /// Internal holder for a tag's Hi/Lo range and current position.
+    /// A per-tag <see cref="SemaphoreSlim"/> is the sole coordination point for refills: on
+    /// exhaustion, callers wait on it (blocking for the sync path, asynchronously for the
+    /// async path) instead of busy-spinning, and re-check the range once inside in case
+    /// another caller already refilled it.
     /// </summary>
     private sealed class HiLoRangeHolder
     {
-        private long _low;
         private long _high;
         private long _current;
-        private bool _refilling;
-        private readonly object _lock = new();
-
-        public HiLoRangeHolder()
-        {
-            _low = 0;
-            _high = 0;
-            _current = 0;
-            _refilling = false;
-        }
+        private readonly SemaphoreSlim _gate = new(1, 1);
 
         public string GenerateNextId(string tag, IMongoDatabase database, DocumentConventions conventions)
         {
             while (true)
             {
                 long nextValue = Interlocked.Increment(ref _current);
-                if (nextValue < _high)
+                if (nextValue <= Interlocked.Read(ref _high))
                 {
                     return $"{tag}/{nextValue}";
                 }
 
-                bool shouldRefill = false;
-                lock (_lock)
+                _gate.Wait();
+                try
                 {
-                    nextValue = Interlocked.Read(ref _current);
-                    if (nextValue >= _high && !_refilling)
+                    if (Interlocked.Read(ref _current) > _high)
                     {
-                        _refilling = true;
-                        shouldRefill = true;
+                        RefillRange(tag, database, conventions);
                     }
                 }
-
-                if (shouldRefill)
+                finally
                 {
-                    RefillRange(tag, database, conventions);
-                    _refilling = false;
+                    _gate.Release();
                 }
             }
         }
@@ -92,26 +82,22 @@ public sealed class HiLoIdGenerator
             while (true)
             {
                 long nextValue = Interlocked.Increment(ref _current);
-                if (nextValue < _high)
+                if (nextValue <= Interlocked.Read(ref _high))
                 {
                     return $"{tag}/{nextValue}";
                 }
 
-                bool shouldRefill = false;
-                lock (_lock)
+                await _gate.WaitAsync(ct);
+                try
                 {
-                    nextValue = Interlocked.Read(ref _current);
-                    if (nextValue >= _high && !_refilling)
+                    if (Interlocked.Read(ref _current) > _high)
                     {
-                        _refilling = true;
-                        shouldRefill = true;
+                        await RefillRangeAsync(tag, database, conventions, ct);
                     }
                 }
-
-                if (shouldRefill)
+                finally
                 {
-                    await RefillRangeAsync(tag, database, conventions, ct);
-                    _refilling = false;
+                    _gate.Release();
                 }
             }
         }
@@ -119,7 +105,7 @@ public sealed class HiLoIdGenerator
         private void RefillRange(string tag, IMongoDatabase database, DocumentConventions conventions)
         {
             var collection = database.GetCollection<BsonDocument>(conventions.HiLoCollectionName);
-            var update = Builders<BsonDocument>.Update.Inc("Max", conventions.HiLoCapacity);
+            var update = Builders<BsonDocument>.Update.Inc("Max", (long)conventions.HiLoCapacity);
             var options = new FindOneAndUpdateOptions<BsonDocument, BsonDocument>
             {
                 IsUpsert = true,
@@ -129,19 +115,13 @@ public sealed class HiLoIdGenerator
             var filter = Builders<BsonDocument>.Filter.Eq("_id", tag);
             var result = collection.FindOneAndUpdate(filter, update, options);
 
-            if (result != null && result.TryGetValue("Max", out var maxValue) && maxValue.IsInt64)
-            {
-                long max = maxValue.AsInt64;
-                _low = max - conventions.HiLoCapacity;
-                _high = max;
-                Interlocked.Exchange(ref _current, _low);
-            }
+            ApplyRefillResult(result, conventions);
         }
 
         private async Task RefillRangeAsync(string tag, IMongoDatabase database, DocumentConventions conventions, CancellationToken ct)
         {
             var collection = database.GetCollection<BsonDocument>(conventions.HiLoCollectionName);
-            var update = Builders<BsonDocument>.Update.Inc("Max", conventions.HiLoCapacity);
+            var update = Builders<BsonDocument>.Update.Inc("Max", (long)conventions.HiLoCapacity);
             var options = new FindOneAndUpdateOptions<BsonDocument, BsonDocument>
             {
                 IsUpsert = true,
@@ -151,12 +131,22 @@ public sealed class HiLoIdGenerator
             var filter = Builders<BsonDocument>.Filter.Eq("_id", tag);
             var result = await collection.FindOneAndUpdateAsync(filter, update, options, ct);
 
-            if (result != null && result.TryGetValue("Max", out var maxValue) && maxValue.IsInt64)
+            ApplyRefillResult(result, conventions);
+        }
+
+        private void ApplyRefillResult(BsonDocument? result, DocumentConventions conventions)
+        {
+            if (result != null && result.TryGetValue("Max", out var maxValue) && maxValue.IsNumeric)
             {
-                long max = maxValue.AsInt64;
-                _low = max - conventions.HiLoCapacity;
+                // $inc on a field that doesn't exist yet creates it with the operand's own BSON
+                // numeric type (Int32 here, since HiLoCapacity is an int), not Int64 — ToInt64()
+                // converts regardless of which numeric type the server actually stored.
+                long max = maxValue.ToInt64();
+                // Range is (low, high] so a fresh range of size HiLoCapacity yields exactly
+                // HiLoCapacity ids: low+1 .. high.
+                long low = max - conventions.HiLoCapacity;
                 _high = max;
-                Interlocked.Exchange(ref _current, _low);
+                Interlocked.Exchange(ref _current, low);
             }
         }
     }

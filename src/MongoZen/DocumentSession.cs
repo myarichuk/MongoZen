@@ -299,7 +299,7 @@ public sealed class DocumentSession : IDocumentSession
         }
     }
 
-    private static int ComputeGroupCount(PendingOperation[] buffer, int count)
+    internal static int ComputeGroupCount(PendingOperation[] buffer, int count)
     {
         if (count == 0) return 0;
 
