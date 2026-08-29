@@ -3,20 +3,24 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
+using MongoZen.HiLo;
 
 namespace MongoZen;
 
 /// <summary>
 /// Thread-safe entry point for MongoZen. Manages the connection to MongoDB and creates sessions.
 /// </summary>
-public sealed class DocumentStore : IDisposable
+public sealed class DocumentStore : IDocumentStore
 {
     private readonly IMongoClient _client;
     private readonly string _databaseName;
     private readonly IMongoDatabase _database;
     private readonly ClusterFeatures _features;
+    private readonly HiLoIdGenerator _hiLo;
 
     private static readonly ConcurrentDictionary<string, ClusterFeatures> TopologyCache = new();
+    private static readonly object _guidRegistrationLock = new();
+    private static GuidRepresentation? _registeredGuidRepresentation;
 
     /// <summary>
     /// Gets the conventions used by this DocumentStore instance.
@@ -26,25 +30,39 @@ public sealed class DocumentStore : IDisposable
     /// <summary>
     /// Initializes a new instance of the DocumentStore with an existing IMongoClient.
     /// </summary>
+    public DocumentStore(string connectionString, string databaseName, DocumentConventions? conventions = null)
+        : this(new MongoClient(connectionString), databaseName, conventions) { }
+
     public DocumentStore(IMongoClient client, string databaseName, DocumentConventions? conventions = null)
     {
         _client = client;
         _databaseName = databaseName;
         _database = _client.GetDatabase(databaseName);
         Conventions = conventions ?? new DocumentConventions();
-        
+        _hiLo = new HiLoIdGenerator(_database, Conventions);
+
         // For shared clients, we use the servers list as the key
         var servers = string.Join(",", client.Settings.Servers);
         _features = GetOrDiscoverFeatures(servers);
 
-        // NOTE: The MongoDB Driver's ConventionRegistry is global. 
-        // We register it here for convenience, but be aware that if multiple DocumentStore 
-        // instances are created with different GuidRepresentations, the last one registered 
-        // will apply to the entire AppDomain.
-        var guidConvention = new ConventionPack { 
-            new GuidSerializerConvention(Conventions.GuidRepresentation) 
-        };
-        ConventionRegistry.Register("GuidStandard", guidConvention, _ => true);
+        // Guarded, idempotent registration of GUID convention
+        lock (_guidRegistrationLock)
+        {
+            if (_registeredGuidRepresentation is null)
+            {
+                var guidConvention = new ConventionPack { new GuidSerializerConvention(Conventions.GuidRepresentation) };
+                ConventionRegistry.Register("MongoZen.GuidStandard", guidConvention, _ => true);
+                _registeredGuidRepresentation = Conventions.GuidRepresentation;
+            }
+            else if (_registeredGuidRepresentation != Conventions.GuidRepresentation)
+            {
+                throw new InvalidOperationException(
+                    $"A DocumentStore with GuidRepresentation={_registeredGuidRepresentation} has already registered " +
+                    "MongoDB driver conventions in this process. The driver's ConventionRegistry is process-global, so " +
+                    $"mixing GuidRepresentation ({Conventions.GuidRepresentation} requested) across DocumentStore instances " +
+                    "in one process is not supported.");
+            }
+        }
     }
 
     private ClusterFeatures GetOrDiscoverFeatures(string key) =>
@@ -66,11 +84,18 @@ public sealed class DocumentStore : IDisposable
     public ClusterFeatures Features => _features;
 
     /// <summary>
+    /// Gets the Hi/Lo ID generator for this store.
+    /// </summary>
+    internal HiLoIdGenerator HiLo => _hiLo;
+
+    /// <summary>
     /// Opens a new high-performance, unit-of-work session.
     /// </summary>
     /// <param name="initialArenaSize">The initial size of the arena allocator in bytes. Defaults to 1MB.</param>
-    public DocumentSession OpenSession(int initialArenaSize = 1024 * 1024) => 
+    public DocumentSession OpenSession(int initialArenaSize = 1024 * 1024) =>
         new(this, initialArenaSize);
+
+    IDocumentSession IDocumentStore.OpenSession(int initialArenaSize) => OpenSession(initialArenaSize);
 
     /// <summary>
     /// Scans the specified assembly for all index creation tasks and executes them.

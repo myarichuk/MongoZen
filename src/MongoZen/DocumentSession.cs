@@ -13,7 +13,7 @@ namespace MongoZen;
 /// <summary>
 /// A high-performance unit-of-work session for MongoDB.
 /// </summary>
-public sealed class DocumentSession : IDisposable
+public sealed class DocumentSession : IDocumentSession
 {
     private readonly DocumentStore _store;
     private readonly IMongoDatabase _database;
@@ -75,9 +75,18 @@ public sealed class DocumentSession : IDisposable
         }
 
         var id = EntityIdAccessor.GetId(entity);
-        if (id == null)
+        if (id is null || (id is string s && string.IsNullOrEmpty(s)))
         {
-            throw new InvalidOperationException("Entity must have an ID property.");
+            if (EntityIdAccessorUtility<T>.HasSettableStringId)
+            {
+                var tag = _store.Conventions.GetCollectionName(typeof(T));
+                id = _store.HiLo.GenerateNextId(tag);
+                EntityIdAccessorUtility<T>.SetId(entity, (string)id);
+            }
+            else
+            {
+                throw new InvalidOperationException("Entity must have an ID property.");
+            }
         }
 
         if (_identityMap.TryAdd(id, entity))
@@ -110,11 +119,28 @@ public sealed class DocumentSession : IDisposable
             var count = _changeTracker.GetPendingUpdates(buffer, entities, _arena);
             if (count == 0) return;
 
-            await EnsureTransactionStartedAsync(cancellationToken);
-
             // Sort buffer by CollectionId then Type to group operations
-            Array.Sort(buffer, 0, count, Comparer<PendingOperation>.Create((a, b) => 
+            Array.Sort(buffer, 0, count, Comparer<PendingOperation>.Create((a, b) =>
                 a.CollectionId != b.CollectionId ? a.CollectionId.CompareTo(b.CollectionId) : a.Type.CompareTo(b.Type)));
+
+            // Count distinct (CollectionId, Type) groups
+            int groupCount = ComputeGroupCount(buffer, count);
+
+            // If multi-group and transactions required, ensure transaction is started
+            if (groupCount > 1 && _store.Conventions.RequireTransactions)
+            {
+                await EnsureTransactionStartedAsync(cancellationToken);
+                if (_clientSession is not { IsInTransaction: true })
+                {
+                    throw new TransactionRequirementException(
+                        $"A transaction is required for this multi-group (group count: {groupCount}) SaveChangesAsync operation, " +
+                        "but the server does not support transactions or they are not available.");
+                }
+            }
+            else
+            {
+                await EnsureTransactionStartedAsync(cancellationToken);
+            }
 
             int start = 0;
             while (start < count)
@@ -271,6 +297,27 @@ public sealed class DocumentSession : IDisposable
             ArrayPool<PendingOperation>.Shared.Return(buffer);
             ArrayPool<object>.Shared.Return(entities);
         }
+    }
+
+    private static int ComputeGroupCount(PendingOperation[] buffer, int count)
+    {
+        if (count == 0) return 0;
+
+        int groupCount = 1;
+        int currentCollectionId = buffer[0].CollectionId;
+        var currentType = buffer[0].Type;
+
+        for (int i = 1; i < count; i++)
+        {
+            if (buffer[i].CollectionId != currentCollectionId || buffer[i].Type != currentType)
+            {
+                groupCount++;
+                currentCollectionId = buffer[i].CollectionId;
+                currentType = buffer[i].Type;
+            }
+        }
+
+        return groupCount;
     }
 
     internal async Task EnsureTransactionStartedAsync(CancellationToken token = default)
@@ -454,8 +501,101 @@ public sealed class DocumentSession : IDisposable
         return await cursor.ToListAsync(ct);
     }
 
+    /// <summary>
+    /// Counts documents matching the filter.
+    /// </summary>
+    public async ValueTask<long> CountAsync<T>(FilterDefinition<T> filter, CancellationToken ct = default)
+    {
+        var collectionName = _store.Conventions.GetCollectionName(typeof(T));
+        var rawCollection = _store.GetRawCollection(collectionName);
+
+        var serializer = BsonSerializer.SerializerRegistry.GetSerializer<T>();
+        var renderArgs = new RenderArgs<T>(serializer, BsonSerializer.SerializerRegistry);
+        var rawFilter = (FilterDefinition<RawBsonDocument>)filter.Render(renderArgs).AsBsonDocument;
+
+        return _clientSession != null
+            ? await rawCollection.CountDocumentsAsync(_clientSession, rawFilter, cancellationToken: ct)
+            : await rawCollection.CountDocumentsAsync(rawFilter, cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Counts documents matching the expression filter.
+    /// </summary>
+    public ValueTask<long> CountAsync<T>(Expression<Func<T, bool>> filter, CancellationToken ct = default)
+        => CountAsync(Builders<T>.Filter.Where(filter), ct);
+
+    /// <summary>
+    /// Checks if any documents match the filter.
+    /// </summary>
+    public async ValueTask<bool> AnyAsync<T>(FilterDefinition<T> filter, CancellationToken ct = default)
+    {
+        var collectionName = _store.Conventions.GetCollectionName(typeof(T));
+        var rawCollection = _store.GetRawCollection(collectionName);
+
+        var serializer = BsonSerializer.SerializerRegistry.GetSerializer<T>();
+        var renderArgs = new RenderArgs<T>(serializer, BsonSerializer.SerializerRegistry);
+        var rawFilter = (FilterDefinition<RawBsonDocument>)filter.Render(renderArgs).AsBsonDocument;
+
+        var count = _clientSession != null
+            ? await rawCollection.CountDocumentsAsync(_clientSession, rawFilter, new CountOptions { Limit = 1 }, cancellationToken: ct)
+            : await rawCollection.CountDocumentsAsync(rawFilter, new CountOptions { Limit = 1 }, cancellationToken: ct);
+
+        return count > 0;
+    }
+
+    /// <summary>
+    /// Checks if any documents match the expression filter.
+    /// </summary>
+    public ValueTask<bool> AnyAsync<T>(Expression<Func<T, bool>> filter, CancellationToken ct = default)
+        => AnyAsync(Builders<T>.Filter.Where(filter), ct);
+
+    /// <summary>
+    /// Streams documents without tracking them. Results are not persisted on SaveChangesAsync.
+    /// Early termination (break) does not leak the underlying cursor.
+    /// </summary>
+    public async IAsyncEnumerable<T> StreamAsync<T>(
+        FilterDefinition<T> filter,
+        SortDefinition<T>? sort = null,
+        int? skip = null,
+        int? limit = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var collectionName = _store.Conventions.GetCollectionName(typeof(T));
+        var rawCollection = _store.GetRawCollection(collectionName);
+
+        var serializer = BsonSerializer.SerializerRegistry.GetSerializer<T>();
+        var renderArgs = new RenderArgs<T>(serializer, BsonSerializer.SerializerRegistry);
+        var rawFilter = (FilterDefinition<RawBsonDocument>)filter.Render(renderArgs).AsBsonDocument;
+
+        var find = _clientSession != null
+            ? rawCollection.Find(_clientSession, rawFilter)
+            : rawCollection.Find(rawFilter);
+
+        if (sort != null)
+            find = find.Sort((SortDefinition<RawBsonDocument>)sort.Render(renderArgs).AsBsonDocument);
+        if (skip.HasValue)
+            find = find.Skip(skip.Value);
+        if (limit.HasValue)
+            find = find.Limit(limit.Value);
+
+        using var cursor = await find.ToCursorAsync(ct);
+        using var scratchArena = new ArenaAllocator(64 * 1024);
+        while (await cursor.MoveNextAsync(ct))
+        {
+            foreach (var rawBson in cursor.Current)
+            {
+                var slice = rawBson.Slice;
+                var doc = ArenaBsonReader.Read(slice.AccessBackingBytes(0), scratchArena);
+                var entity = DynamicBlittableSerializer<T>.DeserializeDelegate(doc, scratchArena);
+                yield return entity;
+            }
+        }
+    }
+
     private class SessionAdvancedOperations(DocumentSession session) : ISessionAdvancedOperations
     {
+        public bool IsTransactional => session._clientSession is { IsInTransaction: true };
+
         public Guid? GetETagFor(object entity) => session._changeTracker.GetExpectedETag(entity);
 
         public void Store(object entity, Guid expectedEtag)
@@ -518,10 +658,34 @@ public sealed class DocumentSession : IDisposable
                 // We convert BsonDocument to arena bytes for compatibility with the rest of the engine
                 var bytes = bsonDoc.ToBson();
                 var doc = ArenaBsonReader.Read(bytes, session._arena);
-                
+
                 DynamicBlittableSerializer<T>.DeserializeIntoDelegate(doc, session._arena, entity);
                 session._changeTracker.Track(entity, doc);
             }
+        }
+
+        public async ValueTask<long> UpdateManyAsync<T>(FilterDefinition<T> filter, UpdateDefinition<T> update, CancellationToken ct = default)
+        {
+            var collectionName = session._store.Conventions.GetCollectionName(typeof(T));
+            var collection = session._database.GetCollection<T>(collectionName);
+
+            var result = session._clientSession != null
+                ? await collection.UpdateManyAsync(session._clientSession, filter, update, cancellationToken: ct)
+                : await collection.UpdateManyAsync(filter, update, cancellationToken: ct);
+
+            return result.ModifiedCount;
+        }
+
+        public async ValueTask<long> DeleteManyAsync<T>(FilterDefinition<T> filter, CancellationToken ct = default)
+        {
+            var collectionName = session._store.Conventions.GetCollectionName(typeof(T));
+            var collection = session._database.GetCollection<T>(collectionName);
+
+            var result = session._clientSession != null
+                ? await collection.DeleteManyAsync(session._clientSession, filter, cancellationToken: ct)
+                : await collection.DeleteManyAsync(filter, cancellationToken: ct);
+
+            return result.DeletedCount;
         }
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using MongoDB.Driver;
 
 namespace MongoZen;
 
@@ -28,4 +29,23 @@ public interface ISessionAdvancedOperations
     /// Refreshes the entity from the database, updating its properties and resetting its change tracking state.
     /// </summary>
     ValueTask RefreshAsync<T>(T entity, CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets a value indicating whether a transaction is currently active for this session.
+    /// </summary>
+    bool IsTransactional { get; }
+
+    /// <summary>
+    /// Updates many documents matching the filter without loading entities.
+    /// This operation executes immediately and is not deferred to SaveChangesAsync.
+    /// Previously-loaded entities may become stale relative to the database.
+    /// </summary>
+    ValueTask<long> UpdateManyAsync<T>(FilterDefinition<T> filter, UpdateDefinition<T> update, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes many documents matching the filter without loading entities.
+    /// This operation executes immediately and is not deferred to SaveChangesAsync.
+    /// Previously-loaded entities may become stale relative to the database.
+    /// </summary>
+    ValueTask<long> DeleteManyAsync<T>(FilterDefinition<T> filter, CancellationToken ct = default);
 }

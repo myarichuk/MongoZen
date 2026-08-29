@@ -70,29 +70,47 @@ public static class EntityIdAccessor
 public static class EntityIdAccessorUtility<T>
 {
     public static readonly bool HasETag;
+    public static readonly bool HasSettableStringId;
     private static readonly Action<T, Guid> _etagSetter;
+    private static readonly Action<T, string> _idSetter;
 
     static EntityIdAccessorUtility()
     {
         var props = typeof(T).GetProperties();
-        var prop = props.FirstOrDefault(p => p.GetCustomAttribute<ConcurrencyCheckAttribute>() != null)
-                   ?? typeof(T).GetProperty("ETag") 
+        var etagProp = props.FirstOrDefault(p => p.GetCustomAttribute<ConcurrencyCheckAttribute>() != null)
+                   ?? typeof(T).GetProperty("ETag")
                    ?? typeof(T).GetProperty("_etag")
                    ?? typeof(T).GetProperty("Version");
 
-        HasETag = prop != null && prop.PropertyType == typeof(Guid);
+        HasETag = etagProp != null && etagProp.PropertyType == typeof(Guid);
         if (HasETag)
         {
             var entityParam = System.Linq.Expressions.Expression.Parameter(typeof(T), "entity");
             var etagParam = System.Linq.Expressions.Expression.Parameter(typeof(Guid), "etag");
-            var assign = System.Linq.Expressions.Expression.Assign(System.Linq.Expressions.Expression.Property(entityParam, prop!), etagParam);
+            var assign = System.Linq.Expressions.Expression.Assign(System.Linq.Expressions.Expression.Property(entityParam, etagProp!), etagParam);
             _etagSetter = System.Linq.Expressions.Expression.Lambda<Action<T, Guid>>(assign, entityParam, etagParam).Compile();
         }
         else
         {
             _etagSetter = (_, _) => { };
         }
+
+        var convention = DefaultIdConvention.Instance;
+        var idProp = convention.ResolveIdProperty<T>();
+        HasSettableStringId = idProp != null && idProp.PropertyType == typeof(string) && idProp.CanWrite;
+        if (HasSettableStringId)
+        {
+            var entityParam = System.Linq.Expressions.Expression.Parameter(typeof(T), "entity");
+            var idParam = System.Linq.Expressions.Expression.Parameter(typeof(string), "id");
+            var assign = System.Linq.Expressions.Expression.Assign(System.Linq.Expressions.Expression.Property(entityParam, idProp!), idParam);
+            _idSetter = System.Linq.Expressions.Expression.Lambda<Action<T, string>>(assign, entityParam, idParam).Compile();
+        }
+        else
+        {
+            _idSetter = (_, _) => { };
+        }
     }
 
     public static void SetETag(T entity, Guid etag) => _etagSetter(entity, etag);
+    public static void SetId(T entity, string id) => _idSetter(entity, id);
 }

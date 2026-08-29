@@ -434,6 +434,14 @@ public unsafe struct ChangeTracker
             }
             else
             {
+                var currentDocId = EntityIdAccessor.GetDocId(entity);
+                if (currentDocId != entry.Id)
+                {
+                    throw new InvalidOperationException(
+                        $"The Id of entity of type {entity.GetType()} was changed after Store(). " +
+                        "Mutating an entity's Id after tracking begins is not supported.");
+                }
+
                 var builder = new ArenaUpdateDefinitionBuilder(_arena, pathBuffer);
                 dispatcher.BuildUpdate(entity, entry, ref builder, _arena, default);
 
@@ -443,9 +451,8 @@ public unsafe struct ChangeTracker
                     if (dispatcher.HasConcurrencyCheck)
                     {
                         dispatcher.SetETag(entity, nextEtag);
+                        builder.Set("_etag", nextEtag);
                     }
-
-                    builder.Set("_etag", nextEtag);
                     var updateDoc = builder.Build();
 
                     buffer[count] = new PendingOperation

@@ -24,6 +24,25 @@ public sealed class DocumentConventions
     /// </summary>
     public GuidRepresentation GuidRepresentation { get; set; } = GuidRepresentation.Standard;
 
+    /// <summary>
+    /// Gets or sets the capacity (window size) for Hi/Lo ID generation ranges.
+    /// Defaults to 32 IDs per range; higher values reduce DB round-trips but consume more IDs.
+    /// </summary>
+    public int HiLoCapacity { get; set; } = 32;
+
+    /// <summary>
+    /// Gets or sets the collection name for Hi/Lo ID sequence storage.
+    /// Defaults to "HiLo".
+    /// </summary>
+    public string HiLoCollectionName { get; set; } = "HiLo";
+
+    /// <summary>
+    /// Gets or sets whether transactions are required for multi-group SaveChangesAsync operations.
+    /// Defaults to false (today's silent-fallback behavior). When true, an exception is thrown
+    /// if a transaction cannot be started for a multi-group operation.
+    /// </summary>
+    public bool RequireTransactions { get; set; } = false;
+
     public DocumentConventions()
     {
         FindCollectionName = type => _cachedCollectionNames.GetOrAdd(type, t => Inflector.Pluralize(t.Name));
