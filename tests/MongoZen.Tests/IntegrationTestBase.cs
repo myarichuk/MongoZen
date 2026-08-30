@@ -1,6 +1,6 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
-using Testcontainers.MongoDb;
+using Mongo.Fakes.Server;
 using Xunit;
 
 namespace MongoZen.Tests;
@@ -19,53 +19,27 @@ public abstract class IntegrationTestBase : IAsyncLifetime
         }
     }
 
-    private static readonly Lazy<Task<(MongoDbContainer Container, MongoClient Client)>> ContainerLazy = new(async () =>
+    private static readonly Lazy<Task<MongoClient>> ClientLazy = new(async () =>
     {
-        var container = new MongoDbBuilder()
-            .WithUsername("")
-            .WithPassword("")
-            .WithCommand("--replSet", "rs0", "--bind_ip_all")
-            .Build();
+        var baseline = new EmptyBaselineProvider();
+        var backend = new BsonFileBackend(baseline);
+        var server = new MongoFakeServer(backend, port: 0);
+        await server.StartAsync();
 
-        await container.StartAsync();
-
-        await container.ExecAsync([
-            "mongosh", "--eval",
-            "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
-        ]);
-
-        var connectionString = container.GetConnectionString();
-
-        if (!connectionString.Contains("replicaSet="))
-        {
-            connectionString += (connectionString.Contains("?") ? "&" : "?") + "replicaSet=rs0";      
-        }
-        else if (connectionString.Contains("directConnection=true"))
-        {
-            connectionString = connectionString.Replace("directConnection=true", "directConnection=false");
-        }
-
+        var connectionString = $"mongodb://127.0.0.1:{server.Port}/?directConnection=true";
         var client = new MongoClient(connectionString);
 
-        // Wait for primary
-        for (int i = 0; i < 30; i++)
+        // Verify connection
+        try
         {
-            try
-            {
-                var admin = client.GetDatabase("admin");
-                var hello = await admin.RunCommandAsync<BsonDocument>(new BsonDocument("hello", 1));
-                if (hello.TryGetValue("isWritablePrimary", out var isPrimary) && isPrimary.AsBoolean)
-                {
-                    break;
-                }
-            }
-            catch
-            {
-            }
-            await Task.Delay(1000);
+            await client.GetDatabase("admin").RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1));
+        }
+        catch
+        {
+            throw new InvalidOperationException("Failed to connect to mongo.fakes server.");
         }
 
-        return (container, client);
+        return client;
     });
 
     private string? _databaseName;
@@ -76,7 +50,7 @@ public abstract class IntegrationTestBase : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        var (_, client) = await ContainerLazy.Value;
+        var client = await ClientLazy.Value;
         _mongoClient = client;
 
         _databaseName = $"test_{Guid.NewGuid():N}";
@@ -87,5 +61,12 @@ public abstract class IntegrationTestBase : IAsyncLifetime
     {
         // For performance, we don't drop databases per test, as it's expensive.
         return Task.CompletedTask;
+    }
+
+    private class EmptyBaselineProvider : IBaselineDataProvider
+    {
+        public IReadOnlyList<BsonDocument> GetCollection(string database, string collection) => Array.Empty<BsonDocument>();
+        public IReadOnlyList<string> GetDatabases() => Array.Empty<string>();
+        public IReadOnlyList<string> GetCollections(string database) => Array.Empty<string>();
     }
 }
