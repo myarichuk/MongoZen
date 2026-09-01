@@ -43,8 +43,14 @@ public sealed class DocumentSession : IDocumentSession
         Attachments = new AttachmentsSessionOperations(this);
     }
 
+    private void ThrowIfDisposed()
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(DocumentSession));
+    }
+
     public async ValueTask<T?> LoadAsync<T>(object id, CancellationToken ct = default)
     {
+        ThrowIfDisposed();
         if (_identityMap.TryGetValue(id, out var existing))
         {
             return (T)existing;
@@ -69,6 +75,7 @@ public sealed class DocumentSession : IDocumentSession
 
     public void Store<T>(T entity)
     {
+        ThrowIfDisposed();
         if (entity == null)
         {
             throw new ArgumentNullException(nameof(entity));
@@ -95,8 +102,42 @@ public sealed class DocumentSession : IDocumentSession
         }
     }
 
+    /// <summary>
+    /// Same as <see cref="Store{T}"/>, but awaits the Hi/Lo refill (if the current range is
+    /// exhausted) instead of blocking the calling thread on the DB round-trip.
+    /// </summary>
+    public async ValueTask StoreAsync<T>(T entity, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        if (entity == null)
+        {
+            throw new ArgumentNullException(nameof(entity));
+        }
+
+        var id = EntityIdAccessor.GetId(entity);
+        if (id is null || (id is string s && string.IsNullOrEmpty(s)))
+        {
+            if (EntityIdAccessorUtility<T>.HasSettableStringId)
+            {
+                var tag = _store.Conventions.GetCollectionName(typeof(T));
+                id = await _store.HiLo.GenerateNextIdAsync(tag, ct);
+                EntityIdAccessorUtility<T>.SetId(entity, (string)id);
+            }
+            else
+            {
+                throw new InvalidOperationException("Entity must have an ID property.");
+            }
+        }
+
+        if (_identityMap.TryAdd(id, entity))
+        {
+            _changeTracker.Track(entity);
+        }
+    }
+
     public void Delete<T>(T entity)
     {
+        ThrowIfDisposed();
         if (entity == null)
         {
             throw new ArgumentNullException(nameof(entity));
@@ -107,7 +148,7 @@ public sealed class DocumentSession : IDocumentSession
 
     public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(DocumentSession));
+        ThrowIfDisposed();
 
         var trackedCount = _changeTracker.TrackedCount;
         if (trackedCount == 0) return;
@@ -154,96 +195,75 @@ public sealed class DocumentSession : IDocumentSession
                 }
 
                 var collectionName = _changeTracker.GetCollectionName(currentCollectionId);
-                
-                // Build raw BSON command
-                var cmdWriter = new ArenaBsonWriter(_arena);
-                cmdWriter.WriteStartDocument();
-                
-                switch (currentType)
+                var rawCollection = _store.GetRawCollection(collectionName);
+
+                // Build write models directly over the arena-backed payloads (zero-copy for
+                // insert/update document bodies), routed through BulkWriteAsync so the driver's
+                // retryable-writes machinery covers us (RunCommand bypasses it entirely).
+                //
+                // Known limitation: this is an ordered bulk write. Outside a transaction (single
+                // -group saves, or a deployment without transaction support), a mid-batch failure
+                // means earlier items in the same group already committed server-side, but the
+                // change tracker still considers all of them dirty (RefreshSnapshots below never
+                // runs, since the exception unwinds past it). A naive retry of SaveChangesAsync
+                // after such a failure will re-attempt the already-persisted inserts and hit a
+                // duplicate-key error. Prior to this change the same partial-failure case existed
+                // but was silently swallowed for inserts (see the removed "n" check), which masked
+                // data loss instead of surfacing it — this is strictly more visible, but callers
+                // that need atomicity across a whole group should opt into RequireTransactions.
+                var models = new List<WriteModel<RawBsonDocument>>(end - start);
+                var payloadBuffers = new List<PooledByteBuffer>(end - start);
+                try
                 {
-                    case OperationType.Insert:
-                        cmdWriter.WriteString("insert", collectionName);
-                        cmdWriter.WriteStartArray("documents");
-                        for (int i = start; i < end; i++)
-                        {
-                            cmdWriter.WriteName(i - start, BlittableBsonConstants.BsonType.Document);
-                            unsafe { cmdWriter.WriteRaw(new ReadOnlySpan<byte>(buffer[i].PayloadPtr, buffer[i].PayloadLength)); }
-                        }
-                        cmdWriter.WriteEndArray();
-                        break;
-
-                    case OperationType.Update:
-                        cmdWriter.WriteString("update", collectionName);
-                        cmdWriter.WriteStartArray("updates");
-                        for (int i = start; i < end; i++)
-                        {
-                            cmdWriter.WriteStartDocument(i - start);
-                            
-                            // q: { _id: ..., _etag: ... }
-                            cmdWriter.WriteStartDocument("q");
-                            var bsonId = buffer[i].Id.ToBsonValue() ?? _store.Conventions.CreateBsonValue(EntityIdAccessor.GetId(entities[i]));
-                            cmdWriter.WriteBsonValue("_id", bsonId);
-                            if (buffer[i].ExpectedEtag != Guid.Empty)
-                            {
-                                cmdWriter.WriteGuid("_etag", buffer[i].ExpectedEtag);
-                            }
-                            cmdWriter.WriteEndDocument();
-
-                            // u: { ... }
-                            cmdWriter.WriteName("u", BlittableBsonConstants.BsonType.Document);
-                            unsafe { cmdWriter.WriteRaw(new ReadOnlySpan<byte>(buffer[i].PayloadPtr, buffer[i].PayloadLength)); }
-                            
-                            cmdWriter.WriteEndDocument();
-                        }
-                        cmdWriter.WriteEndArray();
-                        break;
-
-                    case OperationType.Delete:
-                        cmdWriter.WriteString("delete", collectionName);
-                        cmdWriter.WriteStartArray("deletes");
-                        for (int i = start; i < end; i++)
-                        {
-                            cmdWriter.WriteStartDocument(i - start);
-                            
-                            // q: { _id: ..., _etag: ... }
-                            cmdWriter.WriteStartDocument("q");
-                            var bsonId = buffer[i].Id.ToBsonValue() ?? _store.Conventions.CreateBsonValue(EntityIdAccessor.GetId(entities[i]));
-                            cmdWriter.WriteBsonValue("_id", bsonId);
-                            if (buffer[i].ExpectedEtag != Guid.Empty)
-                            {
-                                cmdWriter.WriteGuid("_etag", buffer[i].ExpectedEtag);
-                            }
-                            cmdWriter.WriteEndDocument();
-
-                            cmdWriter.WriteInt32("limit", 1);
-                            cmdWriter.WriteEndDocument();
-                        }
-                        cmdWriter.WriteEndArray();
-                        break;
-                }
-
-                cmdWriter.WriteBoolean("ordered", true);
-                cmdWriter.WriteEndDocument();
-
-                var cmdDoc = cmdWriter.Commit(_arena);
-                
-                using (var cmdBuffer = PooledByteBuffer.Rent(cmdDoc.AsReadOnlySpan()))
-                {
-                    var rawCmd = new RawBsonDocument(cmdBuffer);
-                    
-                    BsonDocument result;
-                    if (_clientSession != null)
+                    for (int i = start; i < end; i++)
                     {
-                        result = await _database.RunCommandAsync<BsonDocument>(_clientSession, rawCmd, cancellationToken: cancellationToken);
+                        switch (currentType)
+                        {
+                            case OperationType.Insert:
+                            {
+                                PooledByteBuffer docBuffer;
+                                unsafe { docBuffer = PooledByteBuffer.Rent(new ReadOnlySpan<byte>(buffer[i].PayloadPtr, buffer[i].PayloadLength)); }
+                                payloadBuffers.Add(docBuffer);
+                                models.Add(new InsertOneModel<RawBsonDocument>(new RawBsonDocument(docBuffer)));
+                                break;
+                            }
+
+                            case OperationType.Update:
+                            {
+                                var filterDoc = BuildIdFilter(buffer[i], entities[i]);
+                                PooledByteBuffer updateBuffer;
+                                unsafe { updateBuffer = PooledByteBuffer.Rent(new ReadOnlySpan<byte>(buffer[i].PayloadPtr, buffer[i].PayloadLength)); }
+                                payloadBuffers.Add(updateBuffer);
+                                var updateDoc = new RawBsonDocument(updateBuffer);
+                                models.Add(new UpdateOneModel<RawBsonDocument>(
+                                    new BsonDocumentFilterDefinition<RawBsonDocument>(filterDoc),
+                                    new BsonDocumentUpdateDefinition<RawBsonDocument>(updateDoc)));
+                                break;
+                            }
+
+                            case OperationType.Delete:
+                            {
+                                var filterDoc = BuildIdFilter(buffer[i], entities[i]);
+                                models.Add(new DeleteOneModel<RawBsonDocument>(new BsonDocumentFilterDefinition<RawBsonDocument>(filterDoc)));
+                                break;
+                            }
+                        }
                     }
-                    else
-                    {
-                        result = await _database.RunCommandAsync<BsonDocument>(rawCmd, cancellationToken: cancellationToken);
-                    }
+
+                    var options = new BulkWriteOptions { IsOrdered = true };
+                    var result = _clientSession != null
+                        ? await rawCollection.BulkWriteAsync(_clientSession, models, options, cancellationToken)
+                        : await rawCollection.BulkWriteAsync(models, options, cancellationToken);
 
                     // Check for concurrency issues
                     int expectedCount = end - start;
-                    int actualCount = result.GetValue("n", 0).AsInt32;
+                    int actualCount = currentType switch
+                    {
+                        OperationType.Insert => (int)result.InsertedCount,
+                        OperationType.Update => (int)result.MatchedCount,
+                        OperationType.Delete => (int)result.DeletedCount,
+                        _ => expectedCount
+                    };
 
                     if (actualCount < expectedCount && currentType != OperationType.Insert)
                     {
@@ -257,6 +277,13 @@ public sealed class DocumentSession : IDocumentSession
                         {
                             await Attachments.DeleteAllAsync(EntityIdAccessor.GetId(entities[i])!, cancellationToken);
                         }
+                    }
+                }
+                finally
+                {
+                    foreach (var payloadBuffer in payloadBuffers)
+                    {
+                        payloadBuffer.Dispose();
                     }
                 }
 
@@ -299,6 +326,17 @@ public sealed class DocumentSession : IDocumentSession
         }
     }
 
+    private BsonDocument BuildIdFilter(PendingOperation op, object entity)
+    {
+        var bsonId = op.Id.ToBsonValue() ?? _store.Conventions.CreateBsonValue(EntityIdAccessor.GetId(entity));
+        var filter = new BsonDocument("_id", bsonId);
+        if (op.ExpectedEtag != Guid.Empty)
+        {
+            filter.Add("_etag", _store.Conventions.CreateBsonValue(op.ExpectedEtag));
+        }
+        return filter;
+    }
+
     internal static int ComputeGroupCount(PendingOperation[] buffer, int count)
     {
         if (count == 0) return 0;
@@ -327,6 +365,21 @@ public sealed class DocumentSession : IDocumentSession
             return;
         }
 
+        if (_store.Features.SupportsTransactions == null)
+        {
+            try
+            {
+                await _store.Features.EnsureDiscoveredAsync(_database.Client, token);
+            }
+            catch (MongoException)
+            {
+                // Topology discovery itself failed (network blip, auth, etc.). Leave feature
+                // state unknown so a later call can retry, and degrade to non-transactional
+                // for this save rather than failing the write outright.
+                return;
+            }
+        }
+
         if (_store.Features.SupportsTransactions == false)
         {
             return;
@@ -336,19 +389,22 @@ public sealed class DocumentSession : IDocumentSession
         {
             _clientSession = await _database.Client.StartSessionAsync(cancellationToken: token);
             _clientSession.StartTransaction();
-            _store.Features.SupportsTransactions = true;
         }
         catch (NotSupportedException)
         {
+            // Topology discovery said transactions should be supported, but starting one
+            // still failed (e.g. driver/server version mismatch); fall back defensively.
             _clientSession?.Dispose();
             _clientSession = null;
             _store.Features.SupportsTransactions = false;
         }
-        catch (MongoException ex) when (ex.Message.Contains("sessions") || ex.Message.Contains("transaction"))
+        catch (MongoException)
         {
+            // StartSessionAsync round-trips for server selection and can fail independently
+            // of the topology check above (e.g. transient network error); degrade rather
+            // than fail the write.
             _clientSession?.Dispose();
             _clientSession = null;
-            _store.Features.SupportsTransactions = false;
         }
     }
 
@@ -443,6 +499,7 @@ public sealed class DocumentSession : IDocumentSession
         int? limit = null,
         CancellationToken ct = default)
     {
+        ThrowIfDisposed();
         var collectionName = _store.Conventions.GetCollectionName(typeof(T));
         var rawCollection = _store.GetRawCollection(collectionName);
 
@@ -491,6 +548,7 @@ public sealed class DocumentSession : IDocumentSession
         AggregateOptions? options = null,
         CancellationToken ct = default)
     {
+        ThrowIfDisposed();
         var collectionName = _store.Conventions.GetCollectionName(typeof(T));
         var collection = _database.GetCollection<T>(collectionName);
 
@@ -506,6 +564,7 @@ public sealed class DocumentSession : IDocumentSession
     /// </summary>
     public async ValueTask<long> CountAsync<T>(FilterDefinition<T> filter, CancellationToken ct = default)
     {
+        ThrowIfDisposed();
         var collectionName = _store.Conventions.GetCollectionName(typeof(T));
         var rawCollection = _store.GetRawCollection(collectionName);
 
@@ -529,6 +588,7 @@ public sealed class DocumentSession : IDocumentSession
     /// </summary>
     public async ValueTask<bool> AnyAsync<T>(FilterDefinition<T> filter, CancellationToken ct = default)
     {
+        ThrowIfDisposed();
         var collectionName = _store.Conventions.GetCollectionName(typeof(T));
         var rawCollection = _store.GetRawCollection(collectionName);
 
@@ -553,12 +613,25 @@ public sealed class DocumentSession : IDocumentSession
     /// Streams documents without tracking them. Results are not persisted on SaveChangesAsync.
     /// Early termination (break) does not leak the underlying cursor.
     /// </summary>
-    public async IAsyncEnumerable<T> StreamAsync<T>(
+    public IAsyncEnumerable<T> StreamAsync<T>(
         FilterDefinition<T> filter,
         SortDefinition<T>? sort = null,
         int? skip = null,
         int? limit = null,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
+    {
+        // Iterator methods don't run any body until the first MoveNextAsync, so the disposed
+        // check has to live in a non-iterator wrapper to fire eagerly, on the calling frame.
+        ThrowIfDisposed();
+        return StreamAsyncCore<T>(filter, sort, skip, limit, ct);
+    }
+
+    private async IAsyncEnumerable<T> StreamAsyncCore<T>(
+        FilterDefinition<T> filter,
+        SortDefinition<T>? sort,
+        int? skip,
+        int? limit,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         var collectionName = _store.Conventions.GetCollectionName(typeof(T));
         var rawCollection = _store.GetRawCollection(collectionName);
@@ -589,6 +662,11 @@ public sealed class DocumentSession : IDocumentSession
                 var entity = DynamicBlittableSerializer<T>.DeserializeDelegate(doc, scratchArena);
                 yield return entity;
             }
+
+            // Deserialized entities copy all data into managed fields/arrays (see
+            // DynamicBlittableSerializer); nothing they hold points back into the arena, so
+            // it's safe to reclaim the scratch space between batches on a long-running stream.
+            scratchArena.Reset();
         }
     }
 
@@ -600,6 +678,7 @@ public sealed class DocumentSession : IDocumentSession
 
         public void Store(object entity, Guid expectedEtag)
         {
+            session.ThrowIfDisposed();
             if (entity == null)
             {
                 throw new ArgumentNullException(nameof(entity));
@@ -633,6 +712,7 @@ public sealed class DocumentSession : IDocumentSession
 
         public async ValueTask RefreshAsync<T>(T entity, CancellationToken ct = default)
         {
+            session.ThrowIfDisposed();
             if (entity == null)
             {
                 throw new ArgumentNullException(nameof(entity));
@@ -666,6 +746,7 @@ public sealed class DocumentSession : IDocumentSession
 
         public async ValueTask<long> UpdateManyAsync<T>(FilterDefinition<T> filter, UpdateDefinition<T> update, CancellationToken ct = default)
         {
+            session.ThrowIfDisposed();
             var collectionName = session._store.Conventions.GetCollectionName(typeof(T));
             var collection = session._database.GetCollection<T>(collectionName);
 
@@ -678,6 +759,7 @@ public sealed class DocumentSession : IDocumentSession
 
         public async ValueTask<long> DeleteManyAsync<T>(FilterDefinition<T> filter, CancellationToken ct = default)
         {
+            session.ThrowIfDisposed();
             var collectionName = session._store.Conventions.GetCollectionName(typeof(T));
             var collection = session._database.GetCollection<T>(collectionName);
 
