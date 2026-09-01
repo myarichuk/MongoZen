@@ -105,6 +105,15 @@ var store = new DocumentStore(connectionString, "MyDatabase",
 *   **Tier 2 (Dynamic Reflection)**: Compiled Expression Trees for zero-allocation runtime serialization.
 *   **Tier 3 (Driver Bridge)**: 100% compatibility fallback for complex custom driver configurations.
 
+Tier 2 recognizes collection/dictionary-shaped properties structurally — any type implementing
+`IList<T>`/`IReadOnlyList<T>`/`ICollection<T>`/`IEnumerable<T>`, or `IDictionary<string,V>`/
+`IReadOnlyDictionary<string,V>`, not just `List<T>`/`Dictionary<string,V>` themselves. This means
+third-party collection types (e.g. Google.Protobuf's `RepeatedField<T>`/`MapField<K,V>`) are picked
+up as collections/dictionaries on write rather than being serialized as an empty-looking nested
+document. Reading back into one of these properties is still only guaranteed for arrays and
+`List<T>`; other concrete collection types (again, `RepeatedField<T>` is an example) don't have a
+matching constructor and will throw on deserialization rather than silently dropping data.
+
 ## Performance vs. Official Driver
 
 | Operation | Gain |
