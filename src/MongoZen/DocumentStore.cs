@@ -13,10 +13,12 @@ namespace MongoZen;
 public sealed class DocumentStore : IDocumentStore
 {
     private readonly IMongoClient _client;
+    private readonly bool _ownsClient;
     private readonly string _databaseName;
     private readonly IMongoDatabase _database;
     private readonly ClusterFeatures _features;
     private readonly HiLoIdGenerator _hiLo;
+    private bool _disposed;
 
     private static readonly ConcurrentDictionary<string, ClusterFeatures> TopologyCache = new();
     private static readonly object _guidRegistrationLock = new();
@@ -31,11 +33,15 @@ public sealed class DocumentStore : IDocumentStore
     /// Initializes a new instance of the DocumentStore with an existing IMongoClient.
     /// </summary>
     public DocumentStore(string connectionString, string databaseName, DocumentConventions? conventions = null)
-        : this(new MongoClient(connectionString), databaseName, conventions) { }
+        : this(new MongoClient(connectionString), databaseName, conventions, ownsClient: true) { }
 
     public DocumentStore(IMongoClient client, string databaseName, DocumentConventions? conventions = null)
+        : this(client, databaseName, conventions, ownsClient: false) { }
+
+    private DocumentStore(IMongoClient client, string databaseName, DocumentConventions? conventions, bool ownsClient)
     {
         _client = client;
+        _ownsClient = ownsClient;
         _databaseName = databaseName;
         _database = _client.GetDatabase(databaseName);
         Conventions = conventions ?? new DocumentConventions();
@@ -111,7 +117,15 @@ public sealed class DocumentStore : IDocumentStore
 
     public void Dispose()
     {
-        // MongoClient handles its own connection pooling
+        if (_disposed) return;
+        _disposed = true;
+
+        // Only dispose a client we created ourselves (the connection-string constructor); a
+        // client passed in by the caller may be shared with other code and outlive this store.
+        if (_ownsClient && _client is IDisposable disposableClient)
+        {
+            disposableClient.Dispose();
+        }
     }
 }
 
@@ -119,10 +133,47 @@ public sealed class ClusterFeatures
 {
     // 0 = unknown, 1 = supported, 2 = not supported
     private volatile int _state = 0;
+    private readonly SemaphoreSlim _discoveryGate = new(1, 1);
 
     public bool? SupportsTransactions
     {
         get => _state switch { 1 => true, 2 => false, _ => null };
         internal set => _state = value switch { true => 1, false => 2, _ => 0 };
+    }
+
+    /// <summary>
+    /// Determines transaction support from cluster topology (replica set or sharded cluster)
+    /// via a single "hello" command, rather than inferring it from write failures. Idempotent
+    /// and safe to call concurrently; only the first caller does the round-trip.
+    /// </summary>
+    internal async ValueTask EnsureDiscoveredAsync(IMongoClient client, CancellationToken ct)
+    {
+        if (_state != 0) return;
+
+        await _discoveryGate.WaitAsync(ct);
+        try
+        {
+            if (_state != 0) return;
+
+            var admin = client.GetDatabase("admin");
+            BsonDocument result;
+            try
+            {
+                result = await admin.RunCommandAsync<BsonDocument>(new BsonDocument("hello", 1), cancellationToken: ct);
+            }
+            catch (MongoCommandException)
+            {
+                // Servers predating "hello" (renamed from "isMaster" in MongoDB 5.0) use the legacy name.
+                result = await admin.RunCommandAsync<BsonDocument>(new BsonDocument("isMaster", 1), cancellationToken: ct);
+            }
+
+            bool isReplicaSet = result.Contains("setName");
+            bool isMongos = result.TryGetValue("msg", out var msg) && msg.IsString && msg.AsString == "isdbgrid";
+            SupportsTransactions = isReplicaSet || isMongos;
+        }
+        finally
+        {
+            _discoveryGate.Release();
+        }
     }
 }
