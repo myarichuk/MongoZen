@@ -632,20 +632,57 @@ public static class DynamicBlittableSerializer<T>
             return elementAttr?.ElementName ?? prop.Name;
         }
 
+        private static readonly Type[] DictionaryInterfaceDefinitions =
+        [
+            typeof(IDictionary<,>),
+            typeof(IReadOnlyDictionary<,>)
+        ];
+
+        private static readonly Type[] CollectionInterfaceDefinitions =
+        [
+            typeof(IList<>),
+            typeof(IReadOnlyList<>),
+            typeof(ICollection<>),
+            typeof(IEnumerable<>)
+        ];
+
+        // Structural (duck-typed) rather than matching a fixed list of concrete generic types, so
+        // collection-shaped types from other libraries (e.g. protobuf's RepeatedField<T>/MapField<K,V>,
+        // which implement IList<T>/IDictionary<K,V> but aren't List<T>/Dictionary<K,V>) are recognized
+        // instead of silently falling through to nested-document serialization and losing their data.
+        private static IEnumerable<Type> GetInterfacesIncludingSelf(Type type)
+        {
+            if (type.IsInterface)
+            {
+                yield return type;
+            }
+
+            foreach (var iface in type.GetInterfaces())
+            {
+                yield return iface;
+            }
+        }
+
         private static bool IsDictionary(Type type, out Type valueType)
         {
-            if (type.IsGenericType)
+            if (type != typeof(string))
             {
-                var def = type.GetGenericTypeDefinition();
-                if (def == typeof(Dictionary<,>) || 
-                    def == typeof(IDictionary<,>) || 
-                    def == typeof(IReadOnlyDictionary<,>))
+                foreach (var iface in GetInterfacesIncludingSelf(type))
                 {
-                    var args = type.GetGenericArguments();
-                    if (args[0] == typeof(string))
+                    if (!iface.IsGenericType)
                     {
-                        valueType = args[1];
-                        return true;
+                        continue;
+                    }
+
+                    var def = iface.GetGenericTypeDefinition();
+                    if (Array.IndexOf(DictionaryInterfaceDefinitions, def) >= 0)
+                    {
+                        var args = iface.GetGenericArguments();
+                        if (args[0] == typeof(string))
+                        {
+                            valueType = args[1];
+                            return true;
+                        }
                     }
                 }
             }
@@ -667,18 +704,31 @@ public static class DynamicBlittableSerializer<T>
                 return false;
             }
 
+            // Dictionaries take precedence: IDictionary<K,V> is itself an ICollection<KeyValuePair<K,V>>,
+            // so without this guard every dictionary-shaped type would also match as a collection.
+            if (IsDictionary(type, out _))
+            {
+                elementType = null!;
+                return false;
+            }
+
             if (type.IsArray)
             {
                 elementType = type.GetElementType()!;
                 return true;
             }
 
-            if (type.IsGenericType)
+            foreach (var iface in GetInterfacesIncludingSelf(type))
             {
-                var def = type.GetGenericTypeDefinition();
-                if (def == typeof(List<>) || def == typeof(IEnumerable<>) || def == typeof(IReadOnlyList<>) || def == typeof(ICollection<>))
+                if (!iface.IsGenericType)
                 {
-                    elementType = type.GetGenericArguments()[0];
+                    continue;
+                }
+
+                var def = iface.GetGenericTypeDefinition();
+                if (Array.IndexOf(CollectionInterfaceDefinitions, def) >= 0)
+                {
+                    elementType = iface.GetGenericArguments()[0];
                     return true;
                 }
             }
