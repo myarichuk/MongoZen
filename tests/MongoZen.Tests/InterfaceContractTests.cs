@@ -48,6 +48,7 @@ public class InterfaceContractTests : IntegrationTestBase
 
         public ValueTask<T?> LoadAsync<T>(object id, CancellationToken ct = default) => throw new NotImplementedException();
         public void Store<T>(T entity) { }
+        public ValueTask StoreAsync<T>(T entity, CancellationToken ct = default) => ValueTask.CompletedTask;
         public void Delete<T>(T entity) { }
         public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
