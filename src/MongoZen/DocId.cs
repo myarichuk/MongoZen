@@ -172,15 +172,9 @@ public readonly struct DocId : IEquatable<DocId>
 
     private Guid ToGuid()
     {
-        Span<byte> bytes = stackalloc byte[16];
-        unsafe
-        {
-            fixed (byte* dst = bytes)
-            {
-                ((ulong*)dst)[0] = _part1;
-                ((ulong*)dst)[1] = _part2;
-            }
-        }
-        return new Guid(bytes);
+        Span<ulong> parts = stackalloc ulong[2];
+        parts[0] = _part1;
+        parts[1] = _part2;
+        return MemoryMarshal.Cast<ulong, Guid>(parts)[0];
     }
 }
