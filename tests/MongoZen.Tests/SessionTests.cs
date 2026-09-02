@@ -195,11 +195,14 @@ public class SessionTests : IntegrationTestBase
         var e3 = await session.LoadAsync<SimpleEntity>(3);
 
         // Evict the middle one
-        session.Advanced.Evict(e2);
+        if (e2 != null)
+            session.Advanced.Evict(e2);
 
         // Mutate the remaining ones
-        e1.Name = "FirstModified";
-        e3.Name = "ThirdModified";
+        if (e1 != null)
+            e1.Name = "FirstModified";
+        if (e3 != null)
+            e3.Name = "ThirdModified";
 
         await session.SaveChangesAsync();
 
@@ -228,12 +231,15 @@ public class SessionTests : IntegrationTestBase
         var entity = await session.LoadAsync<SimpleEntity>(1);
 
         // Mutate field A
-        entity.Name = "ModifiedA";
-        await session.SaveChangesAsync();
+        if (entity != null)
+        {
+            entity.Name = "ModifiedA";
+            await session.SaveChangesAsync();
 
-        // Mutate field B (different field)
-        entity.Age = 50;
-        await session.SaveChangesAsync();
+            // Mutate field B (different field)
+            entity.Age = 50;
+            await session.SaveChangesAsync();
+        }
 
         // Verify both mutations persisted independently
         var updated = await collection.Find(Builders<SimpleEntity>.Filter.Eq(x => x.Id, 1)).FirstAsync();

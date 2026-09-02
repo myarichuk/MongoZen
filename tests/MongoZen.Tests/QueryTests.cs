@@ -54,8 +54,8 @@ public class QueryTests : IntegrationTestBase
         var results = await session.QueryAsync<SimpleEntity>(x => x.Age >= 25);
 
         Assert.Equal(2, results.Count);
-        Assert.Single(results.Where(x => x.Name == "Bob"));
-        Assert.Single(results.Where(x => x.Name == "Charlie"));
+        Assert.Single(results, x => x.Name == "Bob");
+        Assert.Single(results, x => x.Name == "Charlie");
     }
 
     [Fact]

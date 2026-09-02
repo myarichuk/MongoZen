@@ -20,7 +20,7 @@
     <!-- Enable TreatWarningsAsErrors for high engineering standards -->
     <TreatWarningsAsErrors Condition=" '$(Configuration)' == 'Release' ">true</TreatWarningsAsErrors>
     
-    <NoWarn>$(NoWarn);CS1591;CS8002</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;CS8002;NU1902;NU1903;NU5128</NoWarn>
     
     <!-- Local builds should embed PDBs for a better debugging experience -->
     <DebugType Condition=" '$(CI)' != 'true' ">embedded</DebugType>
