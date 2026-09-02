@@ -1,12 +1,27 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using SharpArena.Allocators;
 using SharpArena.Collections;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 
 namespace MongoZen.Bson;
+
+// Cached per enum type: asks the driver's own serializer (attribute- and convention-driven) whether
+// an enum type is configured for string representation, so the fast route (both the property-level
+// code in DynamicBlittableSerializer and the collection/dictionary element code here) stays
+// consistent with whatever the driver would actually produce for that type.
+internal static class EnumRepresentation
+{
+    private static readonly ConcurrentDictionary<Type, bool> Cache = new();
+
+    public static bool IsString(Type enumType) =>
+        Cache.GetOrAdd(enumType, static t =>
+            BsonSerializer.LookupSerializer(t) is IHasRepresentationSerializer { Representation: BsonType.String });
+}
 
 public static class CollectionHelper<T>
 {
@@ -81,6 +96,11 @@ public static class CollectionHelper<T>
         var type = typeof(T);
         if (type.IsEnum)
         {
+            if (EnumRepresentation.IsString(type))
+            {
+                return item.ToString() == element.GetString();
+            }
+
             var underlying = Enum.GetUnderlyingType(type);
             if (underlying == typeof(int))
             {
@@ -259,6 +279,11 @@ public static class CollectionHelper<T>
         }
 
         var type = typeof(T);
+        if (type.IsEnum && EnumRepresentation.IsString(type))
+        {
+            return new BsonArray(collection.Select(x => x == null ? BsonNull.Value : (BsonValue)x.ToString()!));
+        }
+
         if (type.IsPrimitive || type == typeof(string) || type == typeof(decimal) || type == typeof(ObjectId) || type == typeof(Guid) || type == typeof(DateTime) || type.IsEnum)
         {
             return BsonValue.Create(collection);
@@ -389,6 +414,11 @@ public static class DictionaryHelper<TValue>
         var type = typeof(TValue);
         if (type.IsEnum)
         {
+            if (EnumRepresentation.IsString(type))
+            {
+                return value.ToString() == snapshot.GetString(offset);
+            }
+
             var underlying = Enum.GetUnderlyingType(type);
             if (underlying == typeof(int))
             {
@@ -494,6 +524,20 @@ public static class DictionaryHelper<TValue>
         }
 
         var type = typeof(TValue);
+        if (type.IsEnum)
+        {
+            var isString = EnumRepresentation.IsString(type);
+            var enumDoc = new BsonDocument();
+            foreach (var kvp in dictionary)
+            {
+                enumDoc[kvp.Key] = kvp.Value == null
+                    ? BsonNull.Value
+                    : isString ? kvp.Value.ToString()! : BsonValue.Create(kvp.Value);
+            }
+
+            return enumDoc;
+        }
+
         if (type.IsPrimitive || type == typeof(string) || type == typeof(decimal) || type == typeof(ObjectId) || type == typeof(Guid) || type == typeof(DateTime))
         {
             return BsonValue.Create(dictionary);

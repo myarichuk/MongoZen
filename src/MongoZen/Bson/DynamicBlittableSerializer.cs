@@ -103,17 +103,25 @@ public static class DynamicBlittableSerializer<T>
                 var elementName = GetElementName(prop);
                 var nameSpan = Expression.Call(AsSpanMethod, Expression.Constant(elementName));
                 
-                body.Add(EmitPropertyWrite(writerParam, nameSpan, propValue, prop.PropertyType));
+                body.Add(EmitPropertyWrite(writerParam, nameSpan, propValue, prop.PropertyType, prop));
             }
 
             body.Add(Expression.Call(writerParam, WriteEndDocMethod));
             return Expression.Lambda<SerializeAction>(Expression.Block(body), writerParam, objParam).Compile();
         }
 
-        private static Expression EmitPropertyWrite(ParameterExpression writer, Expression nameSpan, Expression value, Type type)
+        private static Expression EmitPropertyWrite(ParameterExpression writer, Expression nameSpan, Expression value, Type type, PropertyInfo? prop = null)
         {
             if (type.IsEnum)
             {
+                if (IsEnumStringRepresentation(prop))
+                {
+                    var toStringCall = Expression.Call(value, typeof(object).GetMethod(nameof(object.ToString), Type.EmptyTypes)!);
+                    var spanCall = Expression.Call(AsSpanMethod, toStringCall);
+                    var writeStringMethod = GetWriterMethod(nameof(ArenaBsonWriter.WriteString), typeof(ReadOnlySpan<char>), typeof(ReadOnlySpan<char>));
+                    return Expression.Call(writer, writeStringMethod, nameSpan, spanCall);
+                }
+
                 var underlyingType = Enum.GetUnderlyingType(type);
                 var convertedValue = Expression.Convert(value, underlyingType);
                 return EmitPropertyWrite(writer, nameSpan, convertedValue, underlyingType);
@@ -125,7 +133,7 @@ public static class DynamicBlittableSerializer<T>
                 var valueProp = type.GetProperty("Value")!;
                 return Expression.IfThenElse(
                     Expression.Property(value, hasValueProp),
-                    EmitPropertyWrite(writer, nameSpan, Expression.Property(value, valueProp), underlyingTypeNullable),
+                    EmitPropertyWrite(writer, nameSpan, Expression.Property(value, valueProp), underlyingTypeNullable, prop),
                     Expression.Call(writer, GetWriterMethod(nameof(ArenaBsonWriter.WriteNull), typeof(ReadOnlySpan<char>)), nameSpan)
                 );
             }
@@ -232,6 +240,9 @@ public static class DynamicBlittableSerializer<T>
 
             foreach (var prop in GetValidProperties(type))
             {
+                // GetValidProperties admits a get-only Id (see its comment there) so it still gets
+                // written; a get-only property can't be assigned to here, so it's still skipped for
+                // the read/deserialize direction specifically.
                 if (prop.SetMethod == null)
                 {
                     continue;
@@ -253,14 +264,7 @@ public static class DynamicBlittableSerializer<T>
             Expression? readExpr;
             if (type.IsEnum)
             {
-                var underlyingType = Enum.GetUnderlyingType(type);
-                var underlyingRead = underlyingType switch
-                {
-                    _ when underlyingType == typeof(int) => Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)), offsetVar),
-                    _ when underlyingType == typeof(long) => Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)), offsetVar),
-                    _ => throw new NotSupportedException($"Enum with underlying type {underlyingType} is not supported")
-                };
-                readExpr = Expression.Convert(underlyingRead, type);
+                readExpr = BuildEnumRead(type, doc, offsetVar, prop);
             }
             else if (IsNullable(type, out var underlyingTypeNullable))
             {
@@ -274,6 +278,7 @@ public static class DynamicBlittableSerializer<T>
                     _ when underlyingTypeNullable == typeof(DateTime) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetDateTime), typeof(int)), offsetVar), type),
                     _ when underlyingTypeNullable == typeof(Guid) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetGuid), typeof(int)), offsetVar), type),
                     _ when underlyingTypeNullable == typeof(decimal) => Expression.Convert(Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetDecimal128), typeof(int)), offsetVar), type),
+                    _ when underlyingTypeNullable.IsEnum => Expression.Convert(BuildEnumRead(underlyingTypeNullable, doc, offsetVar, prop), type),
                     _ => null
                 };
             }
@@ -346,7 +351,7 @@ public static class DynamicBlittableSerializer<T>
         private static Expression EmitDictionaryRead(ParameterExpression doc, ParameterExpression arena, ParameterExpression offset, Type type, Type valueType)
         {
             var helperType = typeof(DictionaryHelper<>).MakeGenericType(valueType);
-            var method = helperType.GetMethod(nameof(DictionaryHelper<>.ReadDictionary))!;
+            var method = helperType.GetMethod(nameof(DictionaryHelper<object>.ReadDictionary))!;
 
             var nestedDocExpr = Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetDocument), typeof(int), typeof(ArenaAllocator)), offset, arena);
             var result = Expression.Call(method, nestedDocExpr, arena);
@@ -503,35 +508,62 @@ public static class DynamicBlittableSerializer<T>
             }
             else if (IsNullable(type, out var underlyingTypeNullable))
             {
-                var readMethod = underlyingTypeNullable switch
-                {
-                    _ when underlyingTypeNullable == typeof(int) => GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)),
-                    _ when underlyingTypeNullable == typeof(long) => GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)),
-                    _ when underlyingTypeNullable == typeof(double) => GetDocMethod(nameof(BlittableBsonDocument.GetDouble), typeof(int)),
-                    _ when underlyingTypeNullable == typeof(bool) => GetDocMethod(nameof(BlittableBsonDocument.GetBoolean), typeof(int)),
-                    _ when underlyingTypeNullable == typeof(ObjectId) => GetDocMethod(nameof(BlittableBsonDocument.GetObjectId), typeof(int)),
-                    _ when underlyingTypeNullable == typeof(DateTime) => GetDocMethod(nameof(BlittableBsonDocument.GetDateTime), typeof(int)),
-                    _ when underlyingTypeNullable == typeof(Guid) => GetDocMethod(nameof(BlittableBsonDocument.GetGuid), typeof(int)),
-                    _ when underlyingTypeNullable == typeof(decimal) => GetDocMethod(nameof(BlittableBsonDocument.GetDecimal128), typeof(int)),
-                    _ => null
-                };
+                var hasValueProp = type.GetProperty("HasValue")!;
+                var valueProp = type.GetProperty("Value")!;
+                var setNullMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("SetNull", [typeof(ReadOnlySpan<char>)])!;
 
-                if (readMethod != null)
+                Expression? compareExpr = null;
+                Expression? setCall = null;
+
+                if (underlyingTypeNullable.IsEnum)
                 {
-                    var hasValueProp = type.GetProperty("HasValue")!;
-                    var valueProp = type.GetProperty("Value")!;
-                    var setMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Set", [typeof(ReadOnlySpan<char>), underlyingTypeNullable])!;
-                    var setNullMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("SetNull", [typeof(ReadOnlySpan<char>)])!;
+                    var (enumCompare, setValueExpr, enumSetMethod) = BuildEnumDiffCompare(
+                        underlyingTypeNullable, Expression.Property(propValue, valueProp), snapshot, offsetVar, prop);
+                    compareExpr = enumCompare;
+                    setCall = Expression.Call(builder, enumSetMethod, pathVar, setValueExpr);
+                }
+                else
+                {
+                    var readMethod = underlyingTypeNullable switch
+                    {
+                        _ when underlyingTypeNullable == typeof(int) => GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)),
+                        _ when underlyingTypeNullable == typeof(long) => GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)),
+                        _ when underlyingTypeNullable == typeof(double) => GetDocMethod(nameof(BlittableBsonDocument.GetDouble), typeof(int)),
+                        _ when underlyingTypeNullable == typeof(bool) => GetDocMethod(nameof(BlittableBsonDocument.GetBoolean), typeof(int)),
+                        _ when underlyingTypeNullable == typeof(ObjectId) => GetDocMethod(nameof(BlittableBsonDocument.GetObjectId), typeof(int)),
+                        _ when underlyingTypeNullable == typeof(DateTime) => GetDocMethod(nameof(BlittableBsonDocument.GetDateTime), typeof(int)),
+                        _ when underlyingTypeNullable == typeof(Guid) => GetDocMethod(nameof(BlittableBsonDocument.GetGuid), typeof(int)),
+                        _ when underlyingTypeNullable == typeof(decimal) => GetDocMethod(nameof(BlittableBsonDocument.GetDecimal128), typeof(int)),
+                        _ => null
+                    };
+
+                    if (readMethod != null)
+                    {
+                        var setMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Set", [typeof(ReadOnlySpan<char>), underlyingTypeNullable])!;
+                        compareExpr = Expression.NotEqual(Expression.Property(propValue, valueProp), Expression.Call(snapshot, readMethod, offsetVar));
+                        setCall = Expression.Call(builder, setMethod, pathVar, Expression.Property(propValue, valueProp));
+                    }
+                }
+
+                if (compareExpr != null)
+                {
+                    // The typed read in compareExpr (GetInt32/GetGuid/etc., or the enum branch's own
+                    // reads) throws InvalidCastException if the snapshot element is actually BSON
+                    // Null (see BlittableBsonDocument's per-type accessors) - which is exactly the
+                    // case on an ordinary null -> value transition. Short-circuit past the read
+                    // whenever the snapshot is Null; that alone means "changed" since HasValue is
+                    // known true in this branch.
+                    var snapshotIsNull = Expression.Equal(
+                        Expression.Call(null, typeof(ArenaBsonReader).GetMethod("GetElementType")!, snapshot, offsetVar),
+                        Expression.Constant(BlittableBsonConstants.BsonType.Null));
+                    compareExpr = Expression.OrElse(snapshotIsNull, compareExpr);
 
                     pathBody.Add(Expression.Block([offsetVar],
                         Expression.IfThenElse(
                             Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, elementNameExpr, offsetVar),
                             Expression.IfThenElse(
                                 Expression.Property(propValue, hasValueProp),
-                                Expression.IfThen(
-                                    Expression.NotEqual(Expression.Property(propValue, valueProp), Expression.Call(snapshot, readMethod, offsetVar)),
-                                    Expression.Call(builder, setMethod, pathVar, Expression.Property(propValue, valueProp))
-                                ),
+                                Expression.IfThen(compareExpr, setCall!),
                                 Expression.IfThen(
                                     Expression.NotEqual(Expression.Constant(BlittableBsonConstants.BsonType.Null), Expression.Call(null, typeof(ArenaBsonReader).GetMethod("GetElementType")!, snapshot, offsetVar)),
                                     Expression.Call(builder, setNullMethod, pathVar)
@@ -539,7 +571,7 @@ public static class DynamicBlittableSerializer<T>
                             ),
                             Expression.IfThen(
                                 Expression.Property(propValue, hasValueProp),
-                                Expression.Call(builder, setMethod, pathVar, Expression.Property(propValue, valueProp))
+                                setCall!
                             )
                         )
                     ));
@@ -555,22 +587,14 @@ public static class DynamicBlittableSerializer<T>
             }
             else if (type.IsEnum)
             {
-                var underlyingType = Enum.GetUnderlyingType(type);
-                var underlyingRead = underlyingType switch
-                {
-                    _ when underlyingType == typeof(int) => Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)), offsetVar),
-                    _ when underlyingType == typeof(long) => Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)), offsetVar),
-                    _ => throw new NotSupportedException($"Enum with underlying type {underlyingType} is not supported")
-                };
-                var compareExpr = Expression.NotEqual(Expression.Convert(propValue, underlyingType), underlyingRead);
-                var enumSetMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Set", [typeof(ReadOnlySpan<char>), underlyingType])!;
-                var setCall = Expression.Call(builder, enumSetMethod, pathVar, Expression.Convert(propValue, underlyingType));
+                var (compareExpr, setValueExpr, enumSetMethod) = BuildEnumDiffCompare(type, propValue, snapshot, offsetVar, prop);
+                var setCall = Expression.Call(builder, enumSetMethod, pathVar, setValueExpr);
 
                 pathBody.Add(Expression.Block([offsetVar],
                     Expression.IfThenElse(
                         Expression.Call(snapshot, typeof(BlittableBsonDocument).GetMethod(nameof(BlittableBsonDocument.TryGetElementOffset))!, elementNameExpr, offsetVar),
                         Expression.IfThen(compareExpr, setCall),
-                        Expression.Call(builder, enumSetMethod, pathVar, Expression.Convert(propValue, underlyingType))
+                        setCall
                     )
                 ));
             }
@@ -613,6 +637,21 @@ public static class DynamicBlittableSerializer<T>
         {
             underlyingType = Nullable.GetUnderlyingType(type)!;
             return underlyingType != null;
+        }
+
+        // A [BsonRepresentation] attribute on the property is member-scoped (resolved via the
+        // driver's class map), so it must be checked directly here. Deliberately NOT falling back to
+        // BsonSerializer.LookupSerializer(enumType) for attribute-less properties: that call resolves
+        // AND caches a default serializer for the type in the driver's global registry as a side
+        // effect, so calling it eagerly during fast-route compilation can make a later
+        // BsonSerializer.RegisterSerializer(...) for that same enum type throw
+        // ("already registered"), or silently diverge if registration happens after first use.
+        // (Collection/dictionary elements in CollectionHelpers.cs have no PropertyInfo to check an
+        // attribute against, so EnumRepresentation.IsString there still uses LookupSerializer as
+        // best-effort - same caveat applies there.)
+        private static bool IsEnumStringRepresentation(PropertyInfo? prop)
+        {
+            return prop?.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonRepresentationAttribute>() is { Representation: BsonType.String };
         }
 
         private static string GetElementName(PropertyInfo prop)
@@ -683,6 +722,12 @@ public static class DynamicBlittableSerializer<T>
                             valueType = args[1];
                             return true;
                         }
+
+                        throw new NotSupportedException(
+                            $"Type '{type}' is dictionary-shaped with key type '{args[0]}', but the fast BSON " +
+                            "serializer route only supports string-keyed dictionaries (BSON documents require " +
+                            "string field names). Use a string-keyed dictionary, or wrap this property so it " +
+                            "goes through the official driver's serializer instead.");
                     }
                 }
             }
@@ -746,6 +791,19 @@ public static class DynamicBlittableSerializer<T>
                     continue;
                 }
 
+                // Get-only Id properties (constructor-assigned, e.g. immutable entities) are an
+                // explicitly supported pattern elsewhere in this codebase - EntityIdAccessor's
+                // BuildGetter reads them without requiring a setter, and BuildSetter tolerates the
+                // missing setter as a no-op. Excluding a get-only Id here would drop "_id" from the
+                // document entirely, which is worse than the extra-field problem CanWrite exists to
+                // fix. Every other get-only property is still excluded to match the driver's
+                // AutoMap, which requires a setter.
+                var isId = prop.GetCustomAttribute<MongoDB.Bson.Serialization.Attributes.BsonIdAttribute>() != null || prop.Name == "Id";
+                if (!prop.CanWrite && !isId)
+                {
+                    continue;
+                }
+
                 if (prop.GetIndexParameters().Length > 0)
                 {
                     continue;
@@ -767,5 +825,77 @@ public static class DynamicBlittableSerializer<T>
 
         private static MethodInfo GetWriterMethod(string name, params Type[] types) => typeof(ArenaBsonWriter).GetMethod(name, types)!;
         private static MethodInfo GetDocMethod(string name, params Type[] types) => typeof(BlittableBsonDocument).GetMethod(name, types)!;
+
+        // Shared by the scalar (type.IsEnum) and nullable (Nullable<TEnum>) read branches. Returns an
+        // expression of type enumType (never Nullable<enumType> - the caller wraps with Convert for
+        // the nullable case, matching how the outer null-check wrapper handles Nullable<T> uniformly).
+        private static Expression BuildEnumRead(Type enumType, Expression doc, Expression offsetVar, PropertyInfo? prop)
+        {
+            var underlyingType = Enum.GetUnderlyingType(enumType);
+            var underlyingRead = underlyingType switch
+            {
+                _ when underlyingType == typeof(int) => Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)), offsetVar),
+                _ when underlyingType == typeof(long) => Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)), offsetVar),
+                _ => throw new NotSupportedException($"Enum with underlying type {underlyingType} is not supported")
+            };
+            var numericRead = Expression.Convert(underlyingRead, enumType);
+
+            if (!IsEnumStringRepresentation(prop))
+            {
+                return numericRead;
+            }
+
+            // Lenient like the driver's own EnumSerializer, which switches on the actual wire type
+            // rather than assuming the configured representation: a document written before this
+            // property was annotated (or by other, numeric-writing code) still has to be readable
+            // during a gradual migration to string representation.
+            var stringRead = Expression.Call(doc, GetDocMethod(nameof(BlittableBsonDocument.GetString), typeof(int)), offsetVar);
+            var enumParseMethod = typeof(Enum).GetMethod(nameof(Enum.Parse), [typeof(Type), typeof(string)])!;
+            var stringParsedRead = Expression.Convert(Expression.Call(enumParseMethod, Expression.Constant(enumType), stringRead), enumType);
+            var elementTypeExpr = Expression.Call(null, typeof(ArenaBsonReader).GetMethod(nameof(ArenaBsonReader.GetElementType))!, doc, offsetVar);
+            var isStringElement = Expression.Equal(elementTypeExpr, Expression.Constant(BlittableBsonConstants.BsonType.String));
+            return Expression.Condition(isStringElement, stringParsedRead, numericRead);
+        }
+
+        // Shared by the scalar (type.IsEnum) and nullable (Nullable<TEnum>) diff branches.
+        // enumValueExpr must be an expression of type enumType (the caller unwraps .Value first for
+        // the nullable case - HasValue/null handling stays in the caller, mirroring how the nullable
+        // numeric diff branch wraps its own readMethod-based comparison).
+        private static (Expression CompareNotEqual, Expression SetValue, MethodInfo SetMethod) BuildEnumDiffCompare(
+            Type enumType, Expression enumValueExpr, Expression snapshot, Expression offsetVar, PropertyInfo? prop)
+        {
+            if (IsEnumStringRepresentation(prop))
+            {
+                // Lenient like the read path: the existing snapshot may still hold a numeric value
+                // from before this property used string representation, so compare against whatever's
+                // actually there rather than assuming it's a string.
+                var toStringCall = Expression.Call(enumValueExpr, typeof(object).GetMethod(nameof(object.ToString), Type.EmptyTypes)!);
+                var stringRead = Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetString), typeof(int)), offsetVar);
+                var stringCompare = Expression.NotEqual(toStringCall, stringRead);
+
+                var fallbackUnderlyingType = Enum.GetUnderlyingType(enumType);
+                var numericSnapshotRead = fallbackUnderlyingType == typeof(long)
+                    ? Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)), offsetVar)
+                    : Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)), offsetVar);
+                var numericCompare = Expression.NotEqual(Expression.Convert(enumValueExpr, fallbackUnderlyingType), numericSnapshotRead);
+
+                var elementTypeExpr = Expression.Call(null, typeof(ArenaBsonReader).GetMethod(nameof(ArenaBsonReader.GetElementType))!, snapshot, offsetVar);
+                var isStringElement = Expression.Equal(elementTypeExpr, Expression.Constant(BlittableBsonConstants.BsonType.String));
+
+                var stringSetMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Set", [typeof(ReadOnlySpan<char>), typeof(string)])!;
+                return (Expression.Condition(isStringElement, stringCompare, numericCompare), toStringCall, stringSetMethod);
+            }
+
+            var underlyingType = Enum.GetUnderlyingType(enumType);
+            var underlyingRead = underlyingType switch
+            {
+                _ when underlyingType == typeof(int) => Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetInt32), typeof(int)), offsetVar),
+                _ when underlyingType == typeof(long) => Expression.Call(snapshot, GetDocMethod(nameof(BlittableBsonDocument.GetInt64), typeof(int)), offsetVar),
+                _ => throw new NotSupportedException($"Enum with underlying type {underlyingType} is not supported")
+            };
+            var numericSetMethod = typeof(ArenaUpdateDefinitionBuilder).GetMethod("Set", [typeof(ReadOnlySpan<char>), underlyingType])!;
+            var convertedValue = Expression.Convert(enumValueExpr, underlyingType);
+            return (Expression.NotEqual(convertedValue, underlyingRead), convertedValue, numericSetMethod);
+        }
     }
 }
