@@ -2,10 +2,11 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoZen.HiLo;
 using Xunit;
+using Xunit.Sdk;
 
 namespace MongoZen.Tests;
 
-public class HiLoIdGeneratorTests : IntegrationTestBase
+public class HiLoIdGeneratorTests : TestcontainersIntegrationTestBase
 {
     private DocumentConventions NewConventions(int capacity) => new()
     {
@@ -13,9 +14,10 @@ public class HiLoIdGeneratorTests : IntegrationTestBase
         HiLoCollectionName = "HiLo_" + Guid.NewGuid().ToString("N")
     };
 
-    [Fact]
+    [SkippableFact]
     public void GenerateNextId_Sync_Should_Produce_Sequential_Ids()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var conventions = NewConventions(4);
         var generator = new HiLoIdGenerator(Database, conventions);
 
@@ -24,9 +26,10 @@ public class HiLoIdGeneratorTests : IntegrationTestBase
         Assert.Equal(new[] { "sync-tag/1", "sync-tag/2", "sync-tag/3", "sync-tag/4" }, ids);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task GenerateNextIdAsync_Full_Capacity_Range_Should_Yield_Exactly_Capacity_Ids_Without_Extra_Roundtrip()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var conventions = NewConventions(5);
         var generator = new HiLoIdGenerator(Database, conventions);
         const string tag = "widgets";
@@ -44,9 +47,10 @@ public class HiLoIdGeneratorTests : IntegrationTestBase
         Assert.Equal(5L, doc["Max"].AsInt64);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task GenerateNextIdAsync_Exhausting_Range_Triggers_Exactly_One_Refill()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var conventions = NewConventions(3);
         var generator = new HiLoIdGenerator(Database, conventions);
         const string tag = "gadgets";
@@ -63,9 +67,10 @@ public class HiLoIdGeneratorTests : IntegrationTestBase
         Assert.Equal(6L, doc["Max"].AsInt64);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task GenerateNextIdAsync_Concurrent_Should_Never_Produce_Duplicates()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var conventions = NewConventions(4);
         var generator = new HiLoIdGenerator(Database, conventions);
         const string tag = "concurrent";
@@ -77,9 +82,10 @@ public class HiLoIdGeneratorTests : IntegrationTestBase
         Assert.Equal(callCount, ids.Distinct().Count());
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Two_Generators_Against_Same_Database_Claim_Disjoint_Ranges()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var conventions = NewConventions(4);
         var generatorA = new HiLoIdGenerator(Database, conventions);
         var generatorB = new HiLoIdGenerator(Database, conventions);

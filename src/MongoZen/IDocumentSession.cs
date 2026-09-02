@@ -29,6 +29,14 @@ public interface IDocumentSession : IDisposable
     void Store<T>(T entity);
 
     /// <summary>
+    /// Stores an entity in the session, same as <see cref="Store{T}"/>, but awaits the Hi/Lo ID
+    /// generator's refill instead of blocking the calling thread on it. Prefer this overload on
+    /// hot write paths where a synchronous DB round-trip inside <see cref="Store{T}"/> (only
+    /// triggered when the current Hi/Lo range is exhausted) would be undesirable.
+    /// </summary>
+    ValueTask StoreAsync<T>(T entity, CancellationToken ct = default);
+
+    /// <summary>
     /// Marks an entity for deletion.
     /// </summary>
     void Delete<T>(T entity);

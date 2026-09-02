@@ -1,10 +1,11 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Xunit;
+using Xunit.Sdk;
 
 namespace MongoZen.Tests;
 
-public class ImplicitTransactionTests : IntegrationTestBase
+public class ImplicitTransactionTests : TestcontainersIntegrationTestBase
 {
     public class SimpleDoc
     {
@@ -12,9 +13,10 @@ public class ImplicitTransactionTests : IntegrationTestBase
         public string Value { get; set; } = "";
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task SaveChanges_Should_Commit_Implicit_Transaction()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
         
         // 1. Store something
@@ -34,9 +36,10 @@ public class ImplicitTransactionTests : IntegrationTestBase
         }
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Load_Should_Participate_In_Implicit_Transaction()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
         
         // Setup
@@ -89,9 +92,10 @@ public class ImplicitTransactionTests : IntegrationTestBase
         }
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task SaveChanges_Failure_Should_Rollback()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
 
         using (var session = store.OpenSession())
