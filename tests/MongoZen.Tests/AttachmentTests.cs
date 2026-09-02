@@ -1,14 +1,16 @@
 using System.Text;
 using MongoDB.Driver;
 using Xunit;
+using Xunit.Sdk;
 
 namespace MongoZen.Tests;
 
-public class AttachmentTests : IntegrationTestBase
+public class AttachmentTests : TestcontainersIntegrationTestBase
 {
-    [Fact]
+    [SkippableFact]
     public async Task Session_Should_Store_And_Get_Attachment()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var db = Database;
         var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
         using var session = store.OpenSession();
@@ -29,15 +31,16 @@ public class AttachmentTests : IntegrationTestBase
         using var result = await session.Attachments.GetAsync(documentId, attachmentName);
         Assert.Equal(attachmentName, result.Name);
         Assert.Equal("text/plain", result.ContentType);
-        
+
         using var reader = new StreamReader(result.Stream);
         var actualContent = await reader.ReadToEndAsync();
         Assert.Equal(content, actualContent);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Session_Should_Delete_Attachment()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var db = Database;
         var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
         using var session = store.OpenSession();
@@ -47,7 +50,7 @@ public class AttachmentTests : IntegrationTestBase
         using var stream = new MemoryStream([1, 2, 3]);
 
         await session.Attachments.StoreAsync(documentId, attachmentName, stream);
-        
+
         var names = await session.Attachments.GetNamesAsync(documentId);
         Assert.Contains(attachmentName, names);
 
@@ -58,12 +61,13 @@ public class AttachmentTests : IntegrationTestBase
         Assert.DoesNotContain(attachmentName, names);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Session_Should_Cascade_Delete_Attachments()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var db = Database;
         var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
-        
+
         var entity = new SimpleEntity { Id = 100, Name = "Parent" };
         var collectionName = store.Conventions.GetCollectionName(typeof(SimpleEntity));
         await db.GetCollection<SimpleEntity>(collectionName).InsertOneAsync(entity);
@@ -85,22 +89,23 @@ public class AttachmentTests : IntegrationTestBase
         Assert.Empty(names);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Session_Should_Rollback_Attachments()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var db = Database;
         var store = new DocumentStore(db.Client, db.DatabaseNamespace.DatabaseName);
-        
+
         var documentId = "tx/1";
         var attachmentName = "secret.txt";
-        
+
         try
         {
             using var session = store.OpenSession();
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes("shhh"));
 
             await session.Attachments.StoreAsync(documentId, attachmentName, stream);
-            
+
             // Abort the transaction explicitly or throw
             throw new Exception("Simulated failure");
         }

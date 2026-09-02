@@ -1,9 +1,10 @@
 using MongoDB.Driver;
 using Xunit;
+using Xunit.Sdk;
 
 namespace MongoZen.Tests;
 
-public class IndexCreationTests : IntegrationTestBase
+public class IndexCreationTests : TestcontainersIntegrationTestBase
 {
     public class IndexedEntity
     {
@@ -23,16 +24,14 @@ public class IndexCreationTests : IntegrationTestBase
         }
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task CanCreateIndexesFromAssembly()
     {
-        // Arrange
+        Skip.IfNot(SkipReason is null, SkipReason);
         using var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
 
-        // Act
         await store.ExecuteIndexesAsync(typeof(IndexCreationTests).Assembly);
 
-        // Assert
         var collectionName = store.Conventions.GetCollectionName(typeof(IndexedEntity));
         var collection = Database!.GetCollection<IndexedEntity>(collectionName);
         var indexes = await (await collection.Indexes.ListAsync()).ToListAsync();
