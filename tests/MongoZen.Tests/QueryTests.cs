@@ -320,5 +320,6 @@ public class AggregationResult
 {
     [BsonId]
     public int Id { get; set; }
+    [BsonElement("count")]
     public int Count { get; set; }
 }
