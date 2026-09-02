@@ -1,5 +1,6 @@
 using MongoZen.ChangeTracking;
 using Xunit;
+using Xunit.Sdk;
 
 namespace MongoZen.Tests;
 
@@ -51,11 +52,12 @@ public class ComputeGroupCountTests
     }
 }
 
-public class TransactionRequirementTests : IntegrationTestBase
+public class TransactionRequirementTests : TestcontainersIntegrationTestBase
 {
-    [Fact]
+    [SkippableFact]
     public async Task SaveChangesAsync_MultiGroup_Without_RequireTransactions_Succeeds_Without_Transaction()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
         using var session = store.OpenSession();
 
@@ -66,9 +68,10 @@ public class TransactionRequirementTests : IntegrationTestBase
         await session.SaveChangesAsync();
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task SaveChangesAsync_MultiGroup_With_RequireTransactions_Persists_Both_Groups()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var conventions = new DocumentConventions { RequireTransactions = true };
         var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName, conventions);
         using var session = store.OpenSession();

@@ -1,12 +1,14 @@
 using Xunit;
+using Xunit.Sdk;
 
 namespace MongoZen.Tests;
 
-public class IdMutationGuardTests : IntegrationTestBase
+public class IdMutationGuardTests : TestcontainersIntegrationTestBase
 {
-    [Fact]
+    [SkippableFact]
     public async Task SaveChangesAsync_Should_Throw_When_Id_Mutated_After_Store()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
 
         using (var session = store.OpenSession())
@@ -27,9 +29,10 @@ public class IdMutationGuardTests : IntegrationTestBase
         Assert.Contains("Mutating", ex.Message);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task SaveChangesAsync_Should_Throw_When_HiLoGenerated_Id_Mutated_In_Fresh_Session()
     {
+        Skip.IfNot(SkipReason is null, SkipReason);
         var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
         string generatedId;
 
