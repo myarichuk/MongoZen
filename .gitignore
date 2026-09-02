@@ -358,3 +358,5 @@ MigrationBackup/
 .gemini/
 GEMINI.md
 conductor/
+mcps/
+terminals/

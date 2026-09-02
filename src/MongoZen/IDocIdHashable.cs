@@ -1,4 +1,4 @@
-namespace MongoZen;
+﻿namespace MongoZen;
 
 public interface IDocIdHashable
 {

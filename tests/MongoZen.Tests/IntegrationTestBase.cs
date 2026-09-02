@@ -1,74 +1,72 @@
-using EphemeralMongo;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using System.Reflection;
+using Mongo.Fakes.Server;
+using Xunit;
 
 namespace MongoZen.Tests;
 
-/// <summary>
-/// Provides a shared ephemeral MongoDB test harness for integration tests.
-/// </summary>
 public abstract class IntegrationTestBase : IAsyncLifetime
 {
-    /// <summary>
-    /// Shared runner and client to avoid expensive startup and discovery costs per test.
-    /// xUnit runs tests in parallel across classes, so they share this instance.
-    /// </summary>
-    private static readonly Lazy<Task<(IMongoRunner Runner, MongoClient Client)>> RunnerLazy = new(async () =>
+    static IntegrationTestBase()
     {
-        var options = new MongoRunnerOptions
-        {
-            Version = MongoVersion.V8,
-            Edition = MongoEdition.Community,
-            UseSingleNodeReplicaSet = true,
-            AdditionalArguments = [ "--quiet" ],
-            ConnectionTimeout = TimeSpan.FromSeconds(10),
-            DataDirectoryLifetime = TimeSpan.FromMinutes(30),
-        };
-        var runner = await MongoRunner.RunAsync(options);
-        var client = new MongoClient(runner.ConnectionString);
-        
-        // One-time check for replica set readiness to avoid per-test ping overhead.
         try
         {
-            await client.GetDatabase("admin")
-                .RunCommandAsync<BsonDocument>(new BsonDocument("replSetGetStatus", 1));
+            MongoDB.Bson.Serialization.BsonSerializer.RegisterSerializer(new MongoDB.Bson.Serialization.Serializers.GuidSerializer(GuidRepresentation.Standard));
         }
-        catch { }
-        
-        return (runner, client);
+        catch (MongoDB.Bson.BsonSerializationException)
+        {
+            // Already registered
+        }
+    }
+
+    private static readonly Lazy<Task<MongoClient>> ClientLazy = new(async () =>
+    {
+        var baseline = new EmptyBaselineProvider();
+        var backend = new BsonFileBackend(baseline);
+        var server = new MongoFakeServer(backend, port: 0);
+        await server.StartAsync();
+
+        var connectionString = $"mongodb://127.0.0.1:{server.Port}/?directConnection=true";
+        var client = new MongoClient(connectionString);
+
+        // Verify connection
+        try
+        {
+            await client.GetDatabase("admin").RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1));
+        }
+        catch
+        {
+            throw new InvalidOperationException("Failed to connect to mongo.fakes server.");
+        }
+
+        return client;
     });
 
     private string? _databaseName;
-    protected IMongoDatabase? Database;
+    protected IMongoDatabase Database = null!;
     private MongoClient? _mongoClient;
 
-    /// <summary>
-    /// Gets the MongoDB client connected to the shared ephemeral instance.
-    /// </summary>
     protected MongoClient Client => _mongoClient ?? throw new InvalidOperationException("Client not initialized.");
 
-    protected IntegrationTestBase()
-    {
-    }
-
-    /// <inheritdoc/>
     public async Task InitializeAsync()
     {
-        var (runner, client) = await RunnerLazy.Value;
+        var client = await ClientLazy.Value;
         _mongoClient = client;
-        
-        // Each test gets a unique database to ensure isolation during parallel execution.
-        // We avoid dropping databases in DisposeAsync because it's an expensive metadata operation;
-        // EphemeralMongo cleans up the entire data directory at the end of the run.
+
         _databaseName = $"test_{Guid.NewGuid():N}";
         Database = _mongoClient.GetDatabase(_databaseName);
     }
 
-    /// <inheritdoc/>
     public Task DisposeAsync()
     {
-        // No-op for performance. Database dropping is the primary bottleneck in integration tests.
+        // For performance, we don't drop databases per test, as it's expensive.
         return Task.CompletedTask;
+    }
+
+    private class EmptyBaselineProvider : IBaselineDataProvider
+    {
+        public IReadOnlyList<BsonDocument> GetCollection(string database, string collection) => Array.Empty<BsonDocument>();
+        public IReadOnlyList<string> GetDatabases() => Array.Empty<string>();
+        public IReadOnlyList<string> GetCollections(string database) => Array.Empty<string>();
     }
 }

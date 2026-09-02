@@ -1,10 +1,17 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
 using MongoDB.Bson;
 #nullable enable
 
 namespace MongoZen;
+
+
+
+public interface IIdConvention
+{
+    PropertyInfo? ResolveIdProperty<TEntity>();
+}
 
 /// <summary>
 /// Caches compiled Id‑accessor delegates per (TEntity, IIdConvention‑type) pair.
@@ -37,52 +44,71 @@ internal static class EntityIdAccessor<TEntity>
     private static Func<TEntity, DocId> BuildDocIdGetter(IIdConvention convention)
     {
         var prop = convention.ResolveIdProperty<TEntity>();
-        if (prop is null) return _ => default;
+        if (prop is null)
+        {
+            return _ => default;
+        }
 
         var parameter = Expression.Parameter(typeof(TEntity), "entity");
         var propertyAccess = Expression.Property(parameter, prop);
         
-        MethodInfo? method;
-        Expression? call;
+        var type = prop.PropertyType;
+        bool isNullable = type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Nullable<>);
+        var underlyingType = isNullable ? Nullable.GetUnderlyingType(type)! : type;
 
-        if (prop.PropertyType == typeof(int))
+        MethodInfo? method = null;
+        if (underlyingType == typeof(int))
         {
             method = typeof(DocId).GetMethod(nameof(DocId.FromInt32), [typeof(int)]);
-            call = Expression.Call(method!, propertyAccess);
         }
-        else if (prop.PropertyType == typeof(long))
+        else if (underlyingType == typeof(long))
         {
             method = typeof(DocId).GetMethod(nameof(DocId.FromInt64), [typeof(long)]);
-            call = Expression.Call(method!, propertyAccess);
         }
-        else if (prop.PropertyType == typeof(Guid))
+        else if (underlyingType == typeof(Guid))
         {
             method = typeof(DocId).GetMethod(nameof(DocId.FromGuid), [typeof(Guid)]);
-            call = Expression.Call(method!, propertyAccess);
         }
-        else if (prop.PropertyType == typeof(ObjectId))
+        else if (underlyingType == typeof(ObjectId))
         {
             method = typeof(DocId).GetMethod(nameof(DocId.FromObjectId), [typeof(ObjectId)]);
-            call = Expression.Call(method!, propertyAccess);
         }
-        else if (prop.PropertyType == typeof(string))
+        else if (underlyingType == typeof(string))
         {
             method = typeof(DocId).GetMethod(nameof(DocId.FromString), [typeof(string)]);
-            call = Expression.Call(method!, propertyAccess);
         }
-        else if (typeof(IDocIdHashable).IsAssignableFrom(prop.PropertyType))
+        else if (typeof(IDocIdHashable).IsAssignableFrom(underlyingType))
         {
             method = typeof(DocId).GetMethod(nameof(DocId.FromHashable), [typeof(IDocIdHashable)]);
-            call = Expression.Call(method!, Expression.Convert(propertyAccess, typeof(IDocIdHashable)));
-        }
-        else
-        {
-            // Fallback to boxing for unknown types
-            method = typeof(DocId).GetMethod(nameof(DocId.FromBson), [typeof(object)]);
-            call = Expression.Call(method!, Expression.Convert(propertyAccess, typeof(object)));
         }
 
-        return Expression.Lambda<Func<TEntity, DocId>>(call, parameter).Compile();
+        if (method != null)
+        {
+            if (isNullable)
+            {
+                var hasValueProp = type.GetProperty("HasValue")!;
+                var valueProp = type.GetProperty("Value")!;
+                var call = Expression.Condition(
+                    Expression.Property(propertyAccess, hasValueProp),
+                    Expression.Call(method, Expression.Property(propertyAccess, valueProp)),
+                    Expression.Constant(default(DocId))
+                );
+                return Expression.Lambda<Func<TEntity, DocId>>(call, parameter).Compile();
+            }
+            else
+            {
+                Expression argExpr = method.GetParameters()[0].ParameterType == typeof(IDocIdHashable) 
+                    ? Expression.Convert(propertyAccess, typeof(IDocIdHashable)) 
+                    : propertyAccess;
+                var call = Expression.Call(method, argExpr);
+                return Expression.Lambda<Func<TEntity, DocId>>(call, parameter).Compile();
+            }
+        }
+
+        // Fallback to boxing for unknown types
+        var fallbackMethod = typeof(DocId).GetMethod(nameof(DocId.FromBson), [typeof(object)])!;
+        var fallbackCall = Expression.Call(fallbackMethod, Expression.Convert(propertyAccess, typeof(object)));
+        return Expression.Lambda<Func<TEntity, DocId>>(fallbackCall, parameter).Compile();
     }
 
     private static Func<TEntity, object?> BuildGetter(IIdConvention convention)
