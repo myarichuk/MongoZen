@@ -43,7 +43,7 @@ public sealed class DocumentSession : IDocumentSession
         Attachments = new AttachmentsSessionOperations(this);
     }
 
-    private void ThrowIfDisposed()
+    internal void ThrowIfDisposed()
     {
         if (_disposed) throw new ObjectDisposedException(nameof(DocumentSession));
     }
@@ -146,19 +146,33 @@ public sealed class DocumentSession : IDocumentSession
         _changeTracker.TrackDelete(entity);
     }
 
+    /// <summary>
+    /// Persists all pending changes. Each call owns exactly one transaction (on deployments that
+    /// support them): it is started here, or earlier by an attachment write that joined this unit of
+    /// work, and is committed before this method returns or aborted if anything throws. A call with
+    /// no tracked entity changes still commits any attachment writes made since the last save.
+    /// </summary>
     public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
         var trackedCount = _changeTracker.TrackedCount;
-        if (trackedCount == 0) return;
+        if (trackedCount == 0)
+        {
+            await CommitPendingTransactionAsync(cancellationToken);
+            return;
+        }
 
         var buffer = ArrayPool<PendingOperation>.Shared.Rent(trackedCount);
         var entities = ArrayPool<object>.Shared.Rent(trackedCount);
         try
         {
             var count = _changeTracker.GetPendingUpdates(buffer, entities, _arena);
-            if (count == 0) return;
+            if (count == 0)
+            {
+                await CommitPendingTransactionAsync(cancellationToken);
+                return;
+            }
 
             // Sort buffer by CollectionId then Type to group operations
             Array.Sort(buffer, 0, count, Comparer<PendingOperation>.Create((a, b) =>
@@ -313,16 +327,61 @@ public sealed class DocumentSession : IDocumentSession
         }
         catch
         {
-            if (_clientSession is { IsInTransaction: true })
-            {
-                await _clientSession.AbortTransactionAsync(cancellationToken);
-            }
+            await AbortPendingTransactionAsync();
             throw;
         }
         finally
         {
             ArrayPool<PendingOperation>.Shared.Return(buffer);
             ArrayPool<object>.Shared.Return(entities);
+        }
+    }
+
+    /// <summary>
+    /// Commits the transaction left open by attachment writes when the save itself has nothing to
+    /// write. Without this, <c>Attachments.StoreAsync(...)</c> followed by a <c>SaveChangesAsync()</c>
+    /// that tracks no entity changes would leave the transaction open until Dispose aborts it, and
+    /// the attachment would silently vanish on replica sets.
+    /// </summary>
+    private async Task CommitPendingTransactionAsync(CancellationToken cancellationToken)
+    {
+        if (_clientSession is not { IsInTransaction: true })
+        {
+            return;
+        }
+
+        try
+        {
+            await _clientSession.CommitTransactionAsync(cancellationToken);
+        }
+        catch
+        {
+            await AbortPendingTransactionAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort abort used on the failure path. The driver marks the transaction as finished
+    /// even when the abort round-trip itself fails, and the caller is about to rethrow the original
+    /// exception, so a failing abort must never replace it.
+    /// </summary>
+    private async Task AbortPendingTransactionAsync()
+    {
+        if (_clientSession is not { IsInTransaction: true })
+        {
+            return;
+        }
+
+        try
+        {
+            // Deliberately not the caller's token: if the save failed *because* that token fired,
+            // we still want the abort to go out rather than throw OperationCanceledException here.
+            await _clientSession.AbortTransactionAsync(CancellationToken.None);
+        }
+        catch (MongoException)
+        {
+            // Swallowed on purpose; see summary. The transaction is dead either way.
         }
     }
 
@@ -358,9 +417,18 @@ public sealed class DocumentSession : IDocumentSession
         return groupCount;
     }
 
+    /// <summary>
+    /// Makes sure a transaction is open on this session's client session, if the deployment
+    /// supports transactions. Safe to call repeatedly: a transaction already in progress is reused,
+    /// and once it is committed or aborted the next call starts a fresh one on the same client
+    /// session. (The previous implementation returned early whenever a client session existed at
+    /// all, which meant only the very first <see cref="SaveChangesAsync"/> of a session was ever
+    /// transactional.) Degrades to non-transactional, without throwing, when topology discovery or
+    /// session creation fails.
+    /// </summary>
     internal async Task EnsureTransactionStartedAsync(CancellationToken token = default)
     {
-        if (_clientSession != null)
+        if (_clientSession is { IsInTransaction: true })
         {
             return;
         }
@@ -385,26 +453,31 @@ public sealed class DocumentSession : IDocumentSession
             return;
         }
 
+        if (_clientSession == null)
+        {
+            try
+            {
+                _clientSession = await _database.Client.StartSessionAsync(cancellationToken: token);
+            }
+            catch (MongoException)
+            {
+                // StartSessionAsync round-trips for server selection and can fail independently
+                // of the topology check above (e.g. transient network error); degrade rather
+                // than fail the write.
+                return;
+            }
+        }
+
         try
         {
-            _clientSession = await _database.Client.StartSessionAsync(cancellationToken: token);
             _clientSession.StartTransaction();
         }
         catch (NotSupportedException)
         {
-            // Topology discovery said transactions should be supported, but starting one
-            // still failed (e.g. driver/server version mismatch); fall back defensively.
-            _clientSession?.Dispose();
-            _clientSession = null;
+            // Topology discovery said transactions should be supported, but starting one still
+            // failed (e.g. driver/server version mismatch). Keep the client session (reads still
+            // benefit from causal consistency) but stop trying to open transactions on it.
             _store.Features.SupportsTransactions = false;
-        }
-        catch (MongoException)
-        {
-            // StartSessionAsync round-trips for server selection and can fail independently
-            // of the topology check above (e.g. transient network error); degrade rather
-            // than fail the write.
-            _clientSession?.Dispose();
-            _clientSession = null;
         }
     }
 

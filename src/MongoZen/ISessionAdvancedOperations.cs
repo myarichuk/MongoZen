@@ -31,7 +31,9 @@ public interface ISessionAdvancedOperations
     ValueTask RefreshAsync<T>(T entity, CancellationToken ct = default);
 
     /// <summary>
-    /// Gets a value indicating whether a transaction is currently active for this session.
+    /// Gets a value indicating whether a transaction is currently open on this session. A
+    /// transaction is opened by <see cref="IDocumentSession.SaveChangesAsync"/> (and committed before
+    /// it returns) or by an attachment write awaiting the next save; it is never opened by a read.
     /// </summary>
     bool IsTransactional { get; }
 

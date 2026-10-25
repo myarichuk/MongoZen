@@ -37,12 +37,11 @@ public class ImplicitTransactionTests : TestcontainersIntegrationTestBase
     }
 
     [SkippableFact]
-    public async Task Load_Should_Participate_In_Implicit_Transaction()
+    public async Task Load_Does_Not_Open_A_Transaction_And_SaveChanges_Closes_The_One_It_Opens()
     {
         Skip.IfNot(SkipReason is null, SkipReason);
         var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
-        
-        // Setup
+
         using (var session = store.OpenSession())
         {
             session.Store(new SimpleDoc { Id = 2, Value = "v1" });
@@ -51,44 +50,21 @@ public class ImplicitTransactionTests : TestcontainersIntegrationTestBase
 
         using (var session = store.OpenSession())
         {
-            // First load starts the transaction
-            var doc1 = await session.LoadAsync<SimpleDoc>(2);
-            Assert.NotNull(doc1);
-            
-            // Modify outside of session
-            await Database.GetCollection<SimpleDoc>("SimpleDocs").UpdateOneAsync(
-                Builders<SimpleDoc>.Filter.Eq(x => x.Id, 2),
-                Builders<SimpleDoc>.Update.Set(x => x.Value, "v2")
-            );
+            // The unit of work is SaveChangesAsync, not the session: reads run outside any
+            // transaction (otherwise the server's transaction lifetime clock would start ticking on
+            // the first Load and a long-lived session would fail its save with NoSuchTransaction).
+            var doc = await session.LoadAsync<SimpleDoc>(2);
+            Assert.NotNull(doc);
+            Assert.False(session.Advanced.IsTransactional);
 
-            // Second load in same session should NOT see the change if isolation works 
-            // Wait, MongoDB "snapshot" isolation in transactions means we see the state at the start of the transaction.
-            // But wait, Identity Map will return the same object anyway!
-            
-            // To test isolation, let's load a DIFFERENT document that was modified.
-            await Database.GetCollection<SimpleDoc>("SimpleDocs").InsertOneAsync(new SimpleDoc { Id = 3, Value = "other-v1" });
+            doc!.Value = "v2";
+            await session.SaveChangesAsync();
+            Assert.False(session.Advanced.IsTransactional);
+        }
 
-            // Now in another session, modify Id=3
-            await Database.GetCollection<SimpleDoc>("SimpleDocs").UpdateOneAsync(
-                Builders<SimpleDoc>.Filter.Eq(x => x.Id, 3),
-                Builders<SimpleDoc>.Update.Set(x => x.Value, "other-v2")
-            );
-
-            // If we load Id=3 now in the FIRST session (which started a transaction during Load of Id=2),
-            // it should see "other-v1" if isolation is working (assuming snapshot read).
-            // Actually, MongoDB transactions use snapshot isolation.
-            
-            var doc3 = await session.LoadAsync<SimpleDoc>(3);
-            
-            // Note: MongoDB transactions started with StartTransaction() default to ReadConcerns/WriteConcerns.
-            // If the replica set has enough nodes, snapshot isolation should hold.
-            
-            // In our Testcontainers setup (single node replica set), snapshot isolation should work.
-            // But wait, if doc3 was inserted AFTER the transaction started, would we see it?
-            // Snapshot isolation means we see data as of the transaction start time. 
-            // Since we inserted doc3 AFTER session.LoadAsync<SimpleDoc>(2), doc3 might not even be visible!
-            
-            // Assert.Null(doc3); // This would be true if snapshot isolation is strict.
+        using (var verify = store.OpenSession())
+        {
+            Assert.Equal("v2", (await verify.LoadAsync<SimpleDoc>(2))!.Value);
         }
     }
 

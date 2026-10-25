@@ -20,15 +20,19 @@ public class AttachmentTests : TestcontainersIntegrationTestBase
         var content = "Hello MongoZen!";
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
 
-        // Store
+        // Store, then commit via SaveChangesAsync — an attachment write is part of the unit of work
+        // and is not durable until the session saves.
         await session.Attachments.StoreAsync(documentId, attachmentName, stream, "text/plain");
+        await session.SaveChangesAsync();
 
-        // Get Names
-        var names = await session.Attachments.GetNamesAsync(documentId);
+        // Read back from a *fresh* session so the assertion proves the write was committed, not
+        // merely visible inside the writing session's own transaction.
+        using var readSession = store.OpenSession();
+        var names = await readSession.Attachments.GetNamesAsync(documentId);
         Assert.Contains(attachmentName, names);
 
         // Get Content
-        using var result = await session.Attachments.GetAsync(documentId, attachmentName);
+        using var result = await readSession.Attachments.GetAsync(documentId, attachmentName);
         Assert.Equal(attachmentName, result.Name);
         Assert.Equal("text/plain", result.ContentType);
 
@@ -50,14 +54,17 @@ public class AttachmentTests : TestcontainersIntegrationTestBase
         using var stream = new MemoryStream([1, 2, 3]);
 
         await session.Attachments.StoreAsync(documentId, attachmentName, stream);
+        await session.SaveChangesAsync();
 
         var names = await session.Attachments.GetNamesAsync(documentId);
         Assert.Contains(attachmentName, names);
 
-        // Delete
+        // Delete, commit, and verify from a fresh session.
         await session.Attachments.DeleteAsync(documentId, attachmentName);
+        await session.SaveChangesAsync();
 
-        names = await session.Attachments.GetNamesAsync(documentId);
+        using var verifySession = store.OpenSession();
+        names = await verifySession.Attachments.GetNamesAsync(documentId);
         Assert.DoesNotContain(attachmentName, names);
     }
 
@@ -106,7 +113,8 @@ public class AttachmentTests : TestcontainersIntegrationTestBase
 
             await session.Attachments.StoreAsync(documentId, attachmentName, stream);
 
-            // Abort the transaction explicitly or throw
+            // Bail out before SaveChangesAsync: disposing the session aborts the transaction that
+            // the attachment write opened, so nothing may reach the database.
             throw new Exception("Simulated failure");
         }
         catch

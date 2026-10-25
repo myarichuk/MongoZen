@@ -44,6 +44,12 @@ Process(attachment.Stream);
 session.Delete(user);
 await session.SaveChangesAsync(); // Deletes document AND its GridFS files
 ```
+Attachment writes (`StoreAsync`, `DeleteAsync`, `DeleteAllAsync`) are part of the session's unit of
+work: on a replica set or sharded cluster they run inside the transaction that the next
+`SaveChangesAsync()` commits, and disposing the session without saving rolls them back. Call
+`SaveChangesAsync()` after attachment writes even if no entities changed. Reads (`GetAsync`,
+`GetNamesAsync`) never open a transaction. On a standalone server, where MongoDB has no
+transactions, attachment writes execute immediately.
 
 ### 4. Hi/Lo ID Generation
 ```csharp
@@ -87,10 +93,16 @@ await session.Advanced.UpdateManyAsync<User>(
 await session.Advanced.DeleteManyAsync<User>(Builders<User>.Filter.Eq(u => u.Active, false));
 ```
 
-### 7. Transaction Requirement
-A `SaveChangesAsync()` touching more than one distinct `(collection, operation type)` group is
-non-atomic by default (today's opportunistic, silently-degrading transaction attempt). Set
-`RequireTransactions` to fail loudly instead:
+### 7. Transactions
+Each `SaveChangesAsync()` is one transaction when the deployment supports them (replica set or
+sharded cluster): it is started by the save (or earlier, by an attachment write), committed before
+the save returns, and aborted if anything throws. A session can call `SaveChangesAsync()` any number
+of times and each call gets its own transaction. Loads, queries and attachment reads do not open a
+transaction; `session.Advanced.IsTransactional` reports whether one is currently open.
+
+On a standalone server there are no transactions, so a `SaveChangesAsync()` touching more than one
+distinct `(collection, operation type)` group is non-atomic. Set `RequireTransactions` to fail
+loudly instead of silently degrading:
 ```csharp
 var store = new DocumentStore(connectionString, "MyDatabase",
     new DocumentConventions { RequireTransactions = true });
