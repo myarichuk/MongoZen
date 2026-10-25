@@ -111,20 +111,51 @@ var store = new DocumentStore(connectionString, "MyDatabase",
 // for a multi-group save, instead of silently falling back to non-atomic writes.
 ```
 
+## Supported Property Types
+
+Both tiers share one type model. A property, a collection element and a dictionary value of the same
+type are always serialized identically.
+
+| .NET type | BSON |
+| :--- | :--- |
+| `int`, `short`, `ushort`, `byte`, `sbyte`, `char` | Int32 |
+| `long`, `uint`, `ulong` | Int64 |
+| `double`, `float` | Double |
+| `bool`, `string`, `ObjectId`, `DateTime` (ms precision, UTC), `Guid` (subtype 4), `decimal` (Decimal128) | the matching BSON type |
+| enums | underlying Int32/Int64 |
+| `Nullable<T>` of the above | the value, or Null |
+| `byte[]` | Binary (subtype 0) |
+| arrays and anything implementing `IEnumerable<T>` | Array (read back into arrays, `List<T>`, interfaces, or any type with an `IEnumerable<T>` constructor) |
+| `IDictionary<string, V>` / `IReadOnlyDictionary<string, V>` | Document keyed by the dictionary keys |
+| your own classes and structs | nested Document (classes carrying driver attributes such as `[BsonRepresentation]` go through the official driver's serializer) |
+
+Null references and empty `Nullable<T>`s are written as BSON null, as the official driver does.
+Get-only (computed) properties are not serialized. Anything else (`TimeSpan`, `DateTimeOffset`,
+`DateOnly`, `object`, dictionaries with non-string keys, ...) throws a `NotSupportedException`
+naming the offending member on first use of the entity type, in the reflection tier, or an `MZ001`
+compile error from the source generator. Register an `IBlittableConverter<T>` through
+`BlittableConverter<T>.Register` before first use to add a type yourself.
+
+## Identity Map
+
+A session tracks exactly one instance per `(collection, id)`. `LoadAsync` returns the tracked
+instance when there is one; numeric ids are normalized to the entity's id type, so loading a `long`
+id with an `int` finds the same instance. `Store` of the instance already tracked is a no-op; `Store`
+of a *different* instance with a tracked id throws (`Advanced.Evict` the first one if you really
+mean to replace it). Deleting an entity removes it from the map once `SaveChangesAsync` runs.
+
 ## Architectural Tiers
 
 *   **Tier 1 (Source Gen)**: Compile-time non-allocating diffing.
 *   **Tier 2 (Dynamic Reflection)**: Compiled Expression Trees for zero-allocation runtime serialization.
 *   **Tier 3 (Driver Bridge)**: 100% compatibility fallback for complex custom driver configurations.
 
-Tier 2 recognizes collection/dictionary-shaped properties structurally — any type implementing
-`IList<T>`/`IReadOnlyList<T>`/`ICollection<T>`/`IEnumerable<T>`, or `IDictionary<string,V>`/
-`IReadOnlyDictionary<string,V>`, not just `List<T>`/`Dictionary<string,V>` themselves. This means
-third-party collection types (e.g. Google.Protobuf's `RepeatedField<T>`/`MapField<K,V>`) are picked
-up as collections/dictionaries on write rather than being serialized as an empty-looking nested
-document. Reading back into one of these properties is still only guaranteed for arrays and
-`List<T>`; other concrete collection types (again, `RepeatedField<T>` is an example) don't have a
-matching constructor and will throw on deserialization rather than silently dropping data.
+Collections and dictionaries are recognized structurally (anything implementing `IEnumerable<T>` or
+`IDictionary<string,V>`/`IReadOnlyDictionary<string,V>`), so third-party collection types such as
+Google.Protobuf's `RepeatedField<T>`/`MapField<K,V>` are written correctly. Reading back needs the
+property type to be an array, an interface, or a type with a public `IEnumerable<T>` (or
+`IDictionary<string,V>`) constructor; otherwise the serializer for that entity throws a
+`NotSupportedException` saying so.
 
 ## Performance vs. Official Driver
 

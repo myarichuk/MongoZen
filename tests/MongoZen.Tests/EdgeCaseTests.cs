@@ -47,7 +47,9 @@ public class EdgeCaseTests : IntegrationTestBase
         Assert.NotNull(doc);
         Assert.Equal(25, doc["Age"].AsInt32);
         Assert.Equal(user.ExternalId, doc["ExternalId"].AsGuid);
-        Assert.False(doc.Contains("Profile"));
+        // Null references are written as BSON null (like the official driver), not omitted: an omitted
+        // field made every null string/object look dirty on the next SaveChangesAsync.
+        Assert.True(doc["Profile"].IsBsonNull);
 
         // Load and verify
         using var session2 = store.OpenSession();
@@ -172,8 +174,10 @@ public class EdgeCaseTests : IntegrationTestBase
         var doc = await collection.Find(new BsonDocument("_id", user.Id)).FirstOrDefaultAsync();
 
         Assert.NotNull(doc);
-        // My implementation uses $unset for documents
-        Assert.False(doc.Contains("Profile"));
+        // Setting a nested object to null is persisted as `$set: null`, the same shape an insert of a
+        // null writes, so the refreshed snapshot and the stored document agree afterwards.
+        Assert.True(doc.Contains("Profile"));
+        Assert.True(doc["Profile"].IsBsonNull);
     }
 
     [Fact]

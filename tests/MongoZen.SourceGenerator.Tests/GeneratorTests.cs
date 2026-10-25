@@ -28,6 +28,7 @@ public struct ArenaBsonWriter {
     public void WriteEndDocument() {}
     public void WriteInt32(System.ReadOnlySpan<char> name, int value) {}
     public void WriteString(System.ReadOnlySpan<char> name, System.ReadOnlySpan<char> value) {}
+    public void WriteNull(System.ReadOnlySpan<char> name) {}
 }
 public struct BlittableBsonDocument {
     public bool TryGetElementOffset(System.ReadOnlySpan<char> name, out int offset) { offset = 0; return false; }
@@ -35,12 +36,16 @@ public struct BlittableBsonDocument {
     public string GetString(int offset) => """";
     public BlittableBsonDocument GetDocument(int offset, SharpArena.Allocators.ArenaAllocator arena) => default;
 }
+public static class BlittableBsonConstants { public enum BsonType : byte { Document = 0x03, Null = 0x0A } }
+public static class ArenaBsonReader { public static BlittableBsonConstants.BsonType GetElementType(BlittableBsonDocument doc, int offset) => default; }
 ";
 
     private const string ChangeTrackingSource = @"
 namespace MongoZen.ChangeTracking;
 public struct ArenaUpdateDefinitionBuilder {
     public void Set<T>(System.ReadOnlySpan<char> path, T value) {}
+    public void SetValue<T>(System.ReadOnlySpan<char> path, T value) {}
+    public void SetNull(System.ReadOnlySpan<char> path) {}
 }
 ";
 
@@ -86,7 +91,7 @@ partial class SimpleEntity : IBlittableDocument<SimpleEntity>
     {
         writer.WriteStartDocument();
         writer.WriteInt32(""_id"", entity.Id);
-        if (entity.Name != null) writer.WriteString(""Name"", entity.Name.AsSpan());
+        if (entity.Name != null) writer.WriteString(""Name"", entity.Name.AsSpan()); else writer.WriteNull(""Name"");
         writer.WriteEndDocument();
     }
 
@@ -99,7 +104,7 @@ partial class SimpleEntity : IBlittableDocument<SimpleEntity>
         }
         if (doc.TryGetElementOffset(""Name"", out var offset_Name))
         {
-            entity.Name = doc.GetString(offset_Name);
+            entity.Name = ArenaBsonReader.GetElementType(doc, offset_Name) == BlittableBsonConstants.BsonType.Null ? null! : doc.GetString(offset_Name);
         }
         return entity;
     }
@@ -112,31 +117,41 @@ partial class SimpleEntity : IBlittableDocument<SimpleEntity>
         }
         if (doc.TryGetElementOffset(""Name"", out var offset_Name))
         {
-            entity.Name = doc.GetString(offset_Name);
+            entity.Name = ArenaBsonReader.GetElementType(doc, offset_Name) == BlittableBsonConstants.BsonType.Null ? null! : doc.GetString(offset_Name);
         }
     }
 
     public static void BuildUpdate(SimpleEntity entity, BlittableBsonDocument snapshot, ref ArenaUpdateDefinitionBuilder builder, SharpArena.Allocators.ArenaAllocator arena, ReadOnlySpan<char> pathPrefix)
     {
+        Span<char> fullPath_Id = stackalloc char[pathPrefix.Length + 3 + 1];
+        int len_Id = 0;
+        if (pathPrefix.Length > 0) { pathPrefix.CopyTo(fullPath_Id); fullPath_Id[pathPrefix.Length] = '.'; len_Id = pathPrefix.Length + 1; }
+        ""_id"".AsSpan().CopyTo(fullPath_Id.Slice(len_Id));
+        var path_Id = fullPath_Id.Slice(0, len_Id + 3);
         if (snapshot.TryGetElementOffset(""_id"", out var off_Id))
         {
-            Span<char> fullPath_Id = stackalloc char[pathPrefix.Length + 3 + 1];
-            int len_Id = 0;
-            if (pathPrefix.Length > 0) { pathPrefix.CopyTo(fullPath_Id); fullPath_Id[pathPrefix.Length] = '.'; len_Id = pathPrefix.Length + 1; }
-            ""_id"".AsSpan().CopyTo(fullPath_Id.Slice(len_Id));
-            var path_Id = fullPath_Id.Slice(0, len_Id + 3);
-            if (entity.Id != snapshot.GetInt32(off_Id))
+            var type_Id = ArenaBsonReader.GetElementType(snapshot, off_Id);
+            if (type_Id == BlittableBsonConstants.BsonType.Null || entity.Id != snapshot.GetInt32(off_Id))
                 builder.Set(path_Id, entity.Id);
         }
+        else
+        {
+            builder.Set(path_Id, entity.Id);
+        }
+        Span<char> fullPath_Name = stackalloc char[pathPrefix.Length + 4 + 1];
+        int len_Name = 0;
+        if (pathPrefix.Length > 0) { pathPrefix.CopyTo(fullPath_Name); fullPath_Name[pathPrefix.Length] = '.'; len_Name = pathPrefix.Length + 1; }
+        ""Name"".AsSpan().CopyTo(fullPath_Name.Slice(len_Name));
+        var path_Name = fullPath_Name.Slice(0, len_Name + 4);
         if (snapshot.TryGetElementOffset(""Name"", out var off_Name))
         {
-            Span<char> fullPath_Name = stackalloc char[pathPrefix.Length + 4 + 1];
-            int len_Name = 0;
-            if (pathPrefix.Length > 0) { pathPrefix.CopyTo(fullPath_Name); fullPath_Name[pathPrefix.Length] = '.'; len_Name = pathPrefix.Length + 1; }
-            ""Name"".AsSpan().CopyTo(fullPath_Name.Slice(len_Name));
-            var path_Name = fullPath_Name.Slice(0, len_Name + 4);
-            if (!object.Equals(snapshot.GetString(off_Name), entity.Name))
+            var type_Name = ArenaBsonReader.GetElementType(snapshot, off_Name);
+            if (!object.Equals(type_Name == BlittableBsonConstants.BsonType.Null ? null : snapshot.GetString(off_Name), entity.Name))
                 builder.Set(path_Name, entity.Name);
+        }
+        else
+        {
+            if (entity.Name != null) builder.SetValue(path_Name, entity.Name);
         }
     }
 }

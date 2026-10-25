@@ -33,6 +33,8 @@ public unsafe struct EntityEntry
     public int BsonLen;
     public Guid ExpectedETag;
     public int DispatcherId;
+    /// <summary>Index into the tracker's collection-name table; a document id is only unique per collection.</summary>
+    public int CollectionId;
     public byte Flags; // 1 = IsNew, 2 = IsDeleted
 
     public bool IsNew
@@ -67,8 +69,8 @@ public unsafe struct ChangeTracker
     private ArenaList<EntityEntry> _entries;
     private object[] _entities;
     private int _count;
-    private readonly Dictionary<object, int> _entityIndex;   // reference → slot index
-    private readonly Dictionary<DocId, int> _docIdIndex;     // DocId → slot index
+    private readonly Dictionary<object, int> _entityIndex;        // reference → slot index
+    private readonly Dictionary<TrackedKey, int> _docIdIndex;     // (collection, DocId) → slot index
     private readonly Dictionary<string, int> _collectionNameToId;
     private readonly List<string> _collectionNamesById;      // reverse: id → name
 
@@ -80,7 +82,7 @@ public unsafe struct ChangeTracker
         _entities = ArrayPool<object>.Shared.Rent(64);
         _count = 0;
         _entityIndex = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
-        _docIdIndex = new Dictionary<DocId, int>();
+        _docIdIndex = new Dictionary<TrackedKey, int>();
         _collectionNameToId = new Dictionary<string, int>();
         _collectionNamesById = new List<string>();
     }
@@ -121,8 +123,14 @@ public unsafe struct ChangeTracker
     private int FindIndex(object entity) =>
         _entityIndex.TryGetValue(entity, out var idx) ? idx : -1;
 
-    private int FindIndex(DocId id) =>
-        _docIdIndex.TryGetValue(id, out var idx) ? idx : -1;
+    private int FindIndex(TrackedKey key) =>
+        _docIdIndex.TryGetValue(key, out var idx) ? idx : -1;
+
+    private TrackedKey KeyFor(object entity, out int collectionId)
+    {
+        collectionId = GetCollectionId(_conventions.GetCollectionName(entity.GetType()));
+        return new TrackedKey(collectionId, EntityIdAccessor.GetDocId(entity));
+    }
 
     public void Track<T>(T entity, BlittableBsonDocument? snapshot = null)
     {
@@ -150,9 +158,9 @@ public unsafe struct ChangeTracker
             return;
         }
 
-        // Check by ID as well just in case, although DocumentSession should prevent this
-        var docId = EntityIdAccessor.GetDocId(entity);
-        index = FindIndex(docId);
+        // Check by (collection, id) as well just in case, although DocumentSession should prevent this
+        var key = KeyFor(entity, out var collectionId);
+        index = FindIndex(key);
         if (index != -1)
         {
             // Already tracking another object with same ID — update the entity reference.
@@ -161,7 +169,7 @@ public unsafe struct ChangeTracker
             _entityIndex.Remove(oldEntity);
             _entityIndex[entity] = index;
             ref var entry = ref _entries[index];
-            entry.DispatcherId = EntityDispatcherCache.GetId(typeof(T));
+            entry.DispatcherId = EntityDispatcherCache.GetId(entity.GetType());
             return;
         }
 
@@ -172,8 +180,9 @@ public unsafe struct ChangeTracker
 
         var newEntry = new EntityEntry
         {
-            Id = docId,
-            DispatcherId = EntityDispatcherCache.GetId(typeof(T)),
+            Id = key.Id,
+            CollectionId = collectionId,
+            DispatcherId = EntityDispatcherCache.GetId(entity.GetType()),
             IsNew = !snapshot.HasValue || snapshot.Value.IsDefault
         };
 
@@ -187,7 +196,7 @@ public unsafe struct ChangeTracker
         }
 
         _entries.Add(newEntry);
-        _docIdIndex[docId] = index;
+        _docIdIndex[key] = index;
     }
 
     public void Track(object entity, Guid expectedEtag)
@@ -203,7 +212,7 @@ public unsafe struct ChangeTracker
             return;
         }
 
-        var docId = EntityIdAccessor.GetDocId(entity);
+        var key = KeyFor(entity, out var collectionId);
         EnsureCapacity();
         index = _count++;
         _entities[index] = entity;
@@ -211,14 +220,15 @@ public unsafe struct ChangeTracker
 
         var newEntry = new EntityEntry
         {
-            Id = docId,
+            Id = key.Id,
+            CollectionId = collectionId,
             DispatcherId = EntityDispatcherCache.GetId(entity.GetType()),
             ExpectedETag = expectedEtag,
             IsNew = false
         };
 
         _entries.Add(newEntry);
-        _docIdIndex[docId] = index;
+        _docIdIndex[key] = index;
     }
 
     public void Evict(object? entity)
@@ -229,7 +239,7 @@ public unsafe struct ChangeTracker
         if (index == -1) return;
 
         _entityIndex.Remove(entity);
-        _docIdIndex.Remove(_entries[index].Id);
+        _docIdIndex.Remove(new TrackedKey(_entries[index].CollectionId, _entries[index].Id));
 
         var lastIndex = _count - 1;
         if (index != lastIndex)
@@ -240,7 +250,7 @@ public unsafe struct ChangeTracker
             _entities[index] = movedEntity;
             _entries[index] = movedEntry;
             _entityIndex[movedEntity] = index;
-            _docIdIndex[movedEntry.Id] = index;
+            _docIdIndex[new TrackedKey(movedEntry.CollectionId, movedEntry.Id)] = index;
         }
 
         _entities[lastIndex] = null!;
@@ -268,9 +278,9 @@ public unsafe struct ChangeTracker
         }
         else
         {
-            var docId = EntityIdAccessor.GetDocId(entity);
-            // Check by ID too
-            index = FindIndex(docId);
+            var key = KeyFor(entity, out var collectionId);
+            // Check by (collection, id) too
+            index = FindIndex(key);
             if (index != -1)
             {
                 var oldEntity = _entities[index];
@@ -289,13 +299,14 @@ public unsafe struct ChangeTracker
 
             var newEntry = new EntityEntry
             {
-                Id = docId,
-                DispatcherId = EntityDispatcherCache.GetId(typeof(T)),
+                Id = key.Id,
+                CollectionId = collectionId,
+                DispatcherId = EntityDispatcherCache.GetId(entity.GetType()),
                 IsDeleted = true
             };
 
             _entries.Add(newEntry);
-            _docIdIndex[docId] = index;
+            _docIdIndex[key] = index;
         }
     }
 
@@ -348,19 +359,21 @@ public unsafe struct ChangeTracker
         for (int i = 0; i < newCount; i++)
         {
             _entityIndex[_entities[i]] = i;
-            _docIdIndex[newEntries[i].Id] = i;
+            _docIdIndex[new TrackedKey(newEntries[i].CollectionId, newEntries[i].Id)] = i;
         }
     }
 
-    public void CollectDeletedIds(List<object> ids)
+    /// <summary>
+    /// Every entity marked deleted, including ones that were stored and deleted in the same unit of
+    /// work (never written, but still sitting in the session's identity map until purged).
+    /// </summary>
+    public void CollectDeletedEntities(List<object> entities)
     {
         for (int i = 0; i < _count; i++)
         {
-            ref var entry = ref _entries[i];
-            if (entry.IsDeleted && !entry.IsNew)
+            if (_entries[i].IsDeleted)
             {
-                var id = EntityIdAccessor.GetId(_entities[i]);
-                if (id != null) ids.Add(id);
+                entities.Add(_entities[i]);
             }
         }
     }
@@ -391,8 +404,7 @@ public unsafe struct ChangeTracker
             }
 
             var dispatcher = EntityDispatcherCache.GetDispatcher(entry.DispatcherId);
-            var collectionName = _conventions.GetCollectionName(entity.GetType());
-            var collectionId = GetCollectionId(collectionName);
+            var collectionId = entry.CollectionId; // resolved once at Track time
 
             if (entry.IsDeleted)
             {
@@ -479,6 +491,9 @@ public unsafe struct ChangeTracker
         return count;
     }
 }
+
+/// <summary>Tracker-internal identity: an id is unique only within its collection.</summary>
+internal readonly record struct TrackedKey(int CollectionId, DocId Id);
 
 public interface IEntityDispatcher
 {

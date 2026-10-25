@@ -5,58 +5,64 @@ using MongoDB.Bson.Serialization;
 
 namespace MongoZen.Bson;
 
+/// <summary>
+/// Value-level converter: reads from / writes to the element *data* only. <see cref="BsonType"/> is the
+/// element type byte the writer must emit before <see cref="Write"/> (Document by default; a converter
+/// that writes, say, a Binary payload must say so or the resulting BSON is corrupt).
+/// </summary>
 public unsafe interface IBlittableConverter<T>
 {
     T Read(byte* p, BlittableBsonConstants.BsonType type, int length);
     void Write(ref ArenaBsonWriter writer, T value);
+    BlittableBsonConstants.BsonType BsonType => BlittableBsonConstants.BsonType.Document;
 }
 
+/// <summary>
+/// Registry for custom <see cref="IBlittableConverter{T}"/>s. A converter registered here is used by
+/// <see cref="ElementCodec{T}"/> for every position of <typeparamref name="T"/>, provided it is
+/// registered before the first serializer touching <typeparamref name="T"/> is compiled.
+/// </summary>
 public static class BlittableConverter<T>
 {
     private static IBlittableConverter<T>? _instance;
+    private static bool _hasCustom;
 
     public static IBlittableConverter<T> Instance
     {
         get => _instance ??= CreateDefault();
-        set => _instance = value;
+        set
+        {
+            _instance = value;
+            _hasCustom = true;
+        }
     }
 
-    public static void Register(IBlittableConverter<T> converter) => _instance = converter;
+    /// <summary>True once user code registered a converter for <typeparamref name="T"/>.</summary>
+    public static bool HasCustom => _hasCustom;
+
+    public static void Register(IBlittableConverter<T> converter) => Instance = converter;
 
     private static IBlittableConverter<T> CreateDefault()
     {
-        var type = typeof(T);
-        if (type.IsClass || (type.IsValueType && !type.IsPrimitive && !type.IsEnum && type != typeof(decimal)))
+        return BsonTypeModel.Classify(typeof(T), out _) switch
         {
-            // For complex types, use the dynamic serializer if it's not a known MongoDB type
-            // AND it doesn't have MongoDB attributes (which require the official driver's logic)
-            bool isMongoType = type.Namespace?.StartsWith("MongoDB.Bson") ?? false;
-            if (!isMongoType && !HasBsonAttributes(type))
-            {
-                return new DynamicBlittableConverter<T>();
-            }
-        }
-
-        return new BsonSerializerBridge<T>();
+            BsonTypeKind.Document => new DynamicBlittableConverter<T>(),
+            BsonTypeKind.DriverBridged => new BsonSerializerBridge<T>(),
+            // Scalars and collections are handled by ElementCodec<T>; a converter for them only
+            // exists if the user registered one.
+            _ => new UnsupportedConverter<T>(),
+        };
     }
+}
 
-    private static bool HasBsonAttributes(Type type)
-    {
-        if (System.Reflection.CustomAttributeExtensions.GetCustomAttributes(type, true).Any(a => a.GetType().Namespace?.StartsWith("MongoDB.Bson.Serialization.Attributes") ?? false))
-        {
-            return true;
-        }
+internal sealed unsafe class UnsupportedConverter<T> : IBlittableConverter<T>
+{
+    public T Read(byte* p, BlittableBsonConstants.BsonType type, int length) => throw Error();
+    public void Write(ref ArenaBsonWriter writer, T value) => throw Error();
 
-        foreach (var prop in type.GetProperties())
-        {
-            if (System.Reflection.CustomAttributeExtensions.GetCustomAttributes(prop, true).Any(a => a.GetType().Namespace?.StartsWith("MongoDB.Bson.Serialization.Attributes") ?? false))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    private static NotSupportedException Error() => new(
+        $"No IBlittableConverter<{typeof(T).Name}> is registered and the type is not a document type. Use ElementCodec<{typeof(T).Name}> " +
+        "for built-in scalars/collections, or register a converter via BlittableConverter<T>.Register.");
 }
 
 internal sealed unsafe class DynamicBlittableConverter<T> : IBlittableConverter<T>
