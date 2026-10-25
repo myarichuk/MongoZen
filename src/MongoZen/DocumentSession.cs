@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using SharpArena.Allocators;
 using MongoDB.Driver;
@@ -18,7 +17,11 @@ public sealed class DocumentSession : IDocumentSession
     private readonly DocumentStore _store;
     private readonly IMongoDatabase _database;
     private ChangeTracker _changeTracker;
-    private readonly ConcurrentDictionary<object, object> _identityMap = new();
+    // Keyed by (collection, id): a document id is only unique within its collection, so `Order` 7 and
+    // `User` 7 must not collide, and the id is normalized to the entity's id property type so that
+    // LoadAsync<T>(4) with an int finds an entity whose id is the long 4. A plain Dictionary on
+    // purpose: a session is a unit of work for one logical thread, like the rest of its state.
+    private readonly Dictionary<IdentityKey, object> _identityMap = new();
     private readonly ArenaAllocator _arena;
     private ArenaAllocator? _snapshotArena;
     private readonly int _initialArenaSize;
@@ -43,7 +46,7 @@ public sealed class DocumentSession : IDocumentSession
         Attachments = new AttachmentsSessionOperations(this);
     }
 
-    private void ThrowIfDisposed()
+    internal void ThrowIfDisposed()
     {
         if (_disposed) throw new ObjectDisposedException(nameof(DocumentSession));
     }
@@ -51,12 +54,15 @@ public sealed class DocumentSession : IDocumentSession
     public async ValueTask<T?> LoadAsync<T>(object id, CancellationToken ct = default)
     {
         ThrowIfDisposed();
-        if (_identityMap.TryGetValue(id, out var existing))
+        ArgumentNullException.ThrowIfNull(id);
+
+        var collectionName = _store.Conventions.GetCollectionName(typeof(T));
+        id = NormalizeId<T>(id);
+        if (_identityMap.TryGetValue(new IdentityKey(collectionName, id), out var existing))
         {
             return (T)existing;
         }
 
-        var collectionName = _store.Conventions.GetCollectionName(typeof(T));
         var collection = _store.GetRawCollection(collectionName);
         var filter = Builders<RawBsonDocument>.Filter.Eq("_id", _store.Conventions.CreateBsonValue(id));
 
@@ -70,7 +76,7 @@ public sealed class DocumentSession : IDocumentSession
             return default;
         }
 
-        return MaterializeTracked<T>(rawBson, id);
+        return MaterializeTracked<T>(rawBson, collectionName, id);
     }
 
     public void Store<T>(T entity)
@@ -81,13 +87,15 @@ public sealed class DocumentSession : IDocumentSession
             throw new ArgumentNullException(nameof(entity));
         }
 
+        // The runtime type decides the collection (that is what the change tracker writes to), so the
+        // Hi/Lo tag and the identity-map key must be derived from it as well.
+        var collectionName = _store.Conventions.GetCollectionName(entity.GetType());
         var id = EntityIdAccessor.GetId(entity);
         if (id is null || (id is string s && string.IsNullOrEmpty(s)))
         {
             if (EntityIdAccessorUtility<T>.HasSettableStringId)
             {
-                var tag = _store.Conventions.GetCollectionName(typeof(T));
-                id = _store.HiLo.GenerateNextId(tag);
+                id = _store.HiLo.GenerateNextId(collectionName);
                 EntityIdAccessorUtility<T>.SetId(entity, (string)id);
             }
             else
@@ -96,7 +104,7 @@ public sealed class DocumentSession : IDocumentSession
             }
         }
 
-        if (_identityMap.TryAdd(id, entity))
+        if (AddToIdentityMap(new IdentityKey(collectionName, id), entity))
         {
             _changeTracker.Track(entity);
         }
@@ -114,13 +122,13 @@ public sealed class DocumentSession : IDocumentSession
             throw new ArgumentNullException(nameof(entity));
         }
 
+        var collectionName = _store.Conventions.GetCollectionName(entity.GetType());
         var id = EntityIdAccessor.GetId(entity);
         if (id is null || (id is string s && string.IsNullOrEmpty(s)))
         {
             if (EntityIdAccessorUtility<T>.HasSettableStringId)
             {
-                var tag = _store.Conventions.GetCollectionName(typeof(T));
-                id = await _store.HiLo.GenerateNextIdAsync(tag, ct);
+                id = await _store.HiLo.GenerateNextIdAsync(collectionName, ct);
                 EntityIdAccessorUtility<T>.SetId(entity, (string)id);
             }
             else
@@ -129,11 +137,67 @@ public sealed class DocumentSession : IDocumentSession
             }
         }
 
-        if (_identityMap.TryAdd(id, entity))
+        if (AddToIdentityMap(new IdentityKey(collectionName, id), entity))
         {
             _changeTracker.Track(entity);
         }
     }
+
+    /// <summary>
+    /// Returns false when <paramref name="entity"/> is already the tracked instance for this key (a
+    /// repeated Store is a no-op); throws when a *different* instance is tracked under the same key,
+    /// because silently keeping the first and ignoring the second meant the second was never saved.
+    /// </summary>
+    private bool AddToIdentityMap(IdentityKey key, object entity)
+    {
+        if (_identityMap.TryGetValue(key, out var existing))
+        {
+            if (ReferenceEquals(existing, entity))
+            {
+                return false;
+            }
+
+            throw new InvalidOperationException(
+                $"Attempted to associate a different object with id '{key.Id}' in collection '{key.Collection}'. " +
+                "A session tracks exactly one instance per document; Evict the tracked instance first if you really mean to replace it.");
+        }
+
+        _identityMap.Add(key, entity);
+        return true;
+    }
+
+    private IdentityKey KeyFor(object entity)
+    {
+        var id = EntityIdAccessor.GetId(entity) ?? throw new InvalidOperationException("Entity must have an ID.");
+        return new IdentityKey(_store.Conventions.GetCollectionName(entity.GetType()), id);
+    }
+
+    /// <summary>
+    /// Converts a caller-supplied id to the entity's id property type when both are numeric, so the
+    /// identity-map lookup and the <c>_id</c> filter use the same representation the entity carries.
+    /// </summary>
+    private static object NormalizeId<T>(object id)
+    {
+        var targetType = EntityIdAccessorUtility<T>.IdPropertyType;
+        if (targetType == null || id.GetType() == targetType || !IsNumeric(id.GetType()) || !IsNumeric(targetType))
+        {
+            return id;
+        }
+
+        try
+        {
+            return Convert.ChangeType(id, targetType, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (OverflowException)
+        {
+            return id; // cannot exist under the entity's id type; let the lookup miss
+        }
+    }
+
+    private static bool IsNumeric(Type type) =>
+        type == typeof(int) || type == typeof(long) || type == typeof(short) || type == typeof(byte)
+        || type == typeof(uint) || type == typeof(ulong) || type == typeof(ushort) || type == typeof(sbyte)
+        || type == typeof(decimal) || type == typeof(double) || type == typeof(float);
 
     public void Delete<T>(T entity)
     {
@@ -146,19 +210,37 @@ public sealed class DocumentSession : IDocumentSession
         _changeTracker.TrackDelete(entity);
     }
 
+    /// <summary>
+    /// Persists all pending changes. Each call owns exactly one transaction (on deployments that
+    /// support them): it is started here, or earlier by an attachment write that joined this unit of
+    /// work, and is committed before this method returns or aborted if anything throws. A call with
+    /// no tracked entity changes still commits any attachment writes made since the last save.
+    /// </summary>
     public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
         var trackedCount = _changeTracker.TrackedCount;
-        if (trackedCount == 0) return;
+        if (trackedCount == 0)
+        {
+            await CommitPendingTransactionAsync(cancellationToken);
+            return;
+        }
 
         var buffer = ArrayPool<PendingOperation>.Shared.Rent(trackedCount);
         var entities = ArrayPool<object>.Shared.Rent(trackedCount);
         try
         {
             var count = _changeTracker.GetPendingUpdates(buffer, entities, _arena);
-            if (count == 0) return;
+            if (count == 0)
+            {
+                // Nothing to write, but entities stored and deleted within this unit of work are
+                // still tracked and still in the identity map; drop them so a later LoadAsync does
+                // not hand back an instance that was never persisted.
+                PurgeDeletedEntities();
+                await CommitPendingTransactionAsync(cancellationToken);
+                return;
+            }
 
             // Sort buffer by CollectionId then Type to group operations
             Array.Sort(buffer, 0, count, Comparer<PendingOperation>.Create((a, b) =>
@@ -295,9 +377,9 @@ public sealed class DocumentSession : IDocumentSession
                 await _clientSession.CommitTransactionAsync(cancellationToken);
             }
 
-            // Collect deleted IDs before snapshot refresh removes them from the tracker
-            var deletedIds = new List<object>();
-            _changeTracker.CollectDeletedIds(deletedIds);
+            // Collect deleted entities before snapshot refresh removes them from the tracker
+            var deletedEntities = new List<object>();
+            _changeTracker.CollectDeletedEntities(deletedEntities);
 
             // Refresh snapshots into a new arena; old snapshot arena can be freed after migration
             var newArena = new ArenaAllocator((nuint)_initialArenaSize);
@@ -306,23 +388,79 @@ public sealed class DocumentSession : IDocumentSession
             _snapshotArena = newArena;
 
             // Purge deleted entities from the identity map so subsequent LoadAsync hits the DB
-            foreach (var deletedId in deletedIds)
+            foreach (var deletedEntity in deletedEntities)
             {
-                _identityMap.TryRemove(deletedId, out _);
+                _identityMap.Remove(KeyFor(deletedEntity));
             }
         }
         catch
         {
-            if (_clientSession is { IsInTransaction: true })
-            {
-                await _clientSession.AbortTransactionAsync(cancellationToken);
-            }
+            await AbortPendingTransactionAsync();
             throw;
         }
         finally
         {
             ArrayPool<PendingOperation>.Shared.Return(buffer);
             ArrayPool<object>.Shared.Return(entities);
+        }
+    }
+
+    private void PurgeDeletedEntities()
+    {
+        var deleted = new List<object>();
+        _changeTracker.CollectDeletedEntities(deleted);
+        foreach (var entity in deleted)
+        {
+            _identityMap.Remove(KeyFor(entity));
+            _changeTracker.Evict(entity);
+        }
+    }
+
+    /// <summary>
+    /// Commits the transaction left open by attachment writes when the save itself has nothing to
+    /// write. Without this, <c>Attachments.StoreAsync(...)</c> followed by a <c>SaveChangesAsync()</c>
+    /// that tracks no entity changes would leave the transaction open until Dispose aborts it, and
+    /// the attachment would silently vanish on replica sets.
+    /// </summary>
+    private async Task CommitPendingTransactionAsync(CancellationToken cancellationToken)
+    {
+        if (_clientSession is not { IsInTransaction: true })
+        {
+            return;
+        }
+
+        try
+        {
+            await _clientSession.CommitTransactionAsync(cancellationToken);
+        }
+        catch
+        {
+            await AbortPendingTransactionAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort abort used on the failure path. The driver marks the transaction as finished
+    /// even when the abort round-trip itself fails, and the caller is about to rethrow the original
+    /// exception, so a failing abort must never replace it.
+    /// </summary>
+    private async Task AbortPendingTransactionAsync()
+    {
+        if (_clientSession is not { IsInTransaction: true })
+        {
+            return;
+        }
+
+        try
+        {
+            // Deliberately not the caller's token: if the save failed *because* that token fired,
+            // we still want the abort to go out rather than throw OperationCanceledException here.
+            await _clientSession.AbortTransactionAsync(CancellationToken.None);
+        }
+        catch (MongoException)
+        {
+            // Swallowed on purpose; see summary. The transaction is dead either way.
         }
     }
 
@@ -358,9 +496,18 @@ public sealed class DocumentSession : IDocumentSession
         return groupCount;
     }
 
+    /// <summary>
+    /// Makes sure a transaction is open on this session's client session, if the deployment
+    /// supports transactions. Safe to call repeatedly: a transaction already in progress is reused,
+    /// and once it is committed or aborted the next call starts a fresh one on the same client
+    /// session. (The previous implementation returned early whenever a client session existed at
+    /// all, which meant only the very first <see cref="SaveChangesAsync"/> of a session was ever
+    /// transactional.) Degrades to non-transactional, without throwing, when topology discovery or
+    /// session creation fails.
+    /// </summary>
     internal async Task EnsureTransactionStartedAsync(CancellationToken token = default)
     {
-        if (_clientSession != null)
+        if (_clientSession is { IsInTransaction: true })
         {
             return;
         }
@@ -385,26 +532,31 @@ public sealed class DocumentSession : IDocumentSession
             return;
         }
 
+        if (_clientSession == null)
+        {
+            try
+            {
+                _clientSession = await _database.Client.StartSessionAsync(cancellationToken: token);
+            }
+            catch (MongoException)
+            {
+                // StartSessionAsync round-trips for server selection and can fail independently
+                // of the topology check above (e.g. transient network error); degrade rather
+                // than fail the write.
+                return;
+            }
+        }
+
         try
         {
-            _clientSession = await _database.Client.StartSessionAsync(cancellationToken: token);
             _clientSession.StartTransaction();
         }
         catch (NotSupportedException)
         {
-            // Topology discovery said transactions should be supported, but starting one
-            // still failed (e.g. driver/server version mismatch); fall back defensively.
-            _clientSession?.Dispose();
-            _clientSession = null;
+            // Topology discovery said transactions should be supported, but starting one still
+            // failed (e.g. driver/server version mismatch). Keep the client session (reads still
+            // benefit from causal consistency) but stop trying to open transactions on it.
             _store.Features.SupportsTransactions = false;
-        }
-        catch (MongoException)
-        {
-            // StartSessionAsync round-trips for server selection and can fail independently
-            // of the topology check above (e.g. transient network error); degrade rather
-            // than fail the write.
-            _clientSession?.Dispose();
-            _clientSession = null;
         }
     }
 
@@ -473,17 +625,24 @@ public sealed class DocumentSession : IDocumentSession
     /// <summary>
     /// Materialize a RawBsonDocument into a tracked entity, preserving identity map coherence.
     /// </summary>
-    private T MaterializeTracked<T>(RawBsonDocument rawBson, object? precomputedId = null)
+    private T MaterializeTracked<T>(RawBsonDocument rawBson, string collectionName, object? precomputedId = null)
     {
         var slice = rawBson.Slice;
         var doc = ArenaBsonReader.Read(slice.AccessBackingBytes(0), _arena);
         var entity = DynamicBlittableSerializer<T>.DeserializeDelegate(doc, _arena);
         var id = precomputedId ?? EntityIdAccessor.GetId(entity!);
 
-        if (id != null && _identityMap.TryGetValue(id, out var existing))
-            return (T)existing; // Return existing tracked instance to preserve in-flight edits
+        if (id != null)
+        {
+            var key = new IdentityKey(collectionName, id);
+            if (_identityMap.TryGetValue(key, out var existing))
+            {
+                return (T)existing; // Return existing tracked instance to preserve in-flight edits
+            }
 
-        if (id != null) _identityMap[id] = entity!;
+            _identityMap[key] = entity!;
+        }
+
         _changeTracker.Track(entity, doc);
         return entity!;
     }
@@ -523,7 +682,7 @@ public sealed class DocumentSession : IDocumentSession
         while (await cursor.MoveNextAsync(ct))
         {
             foreach (var rawBson in cursor.Current)
-                results.Add(MaterializeTracked<T>(rawBson));
+                results.Add(MaterializeTracked<T>(rawBson, collectionName));
         }
         return results;
     }
@@ -684,13 +843,7 @@ public sealed class DocumentSession : IDocumentSession
                 throw new ArgumentNullException(nameof(entity));
             }
 
-            var id = EntityIdAccessor.GetId(entity);
-            if (id == null)
-            {
-                throw new InvalidOperationException("Entity must have an ID.");
-            }
-
-            session._identityMap[id] = entity;
+            session.AddToIdentityMap(session.KeyFor(entity), entity);
             session._changeTracker.Track(entity, expectedEtag);
         }
 
@@ -701,10 +854,10 @@ public sealed class DocumentSession : IDocumentSession
                 return;
             }
 
-            var id = EntityIdAccessor.GetId(entity);
-            if (id != null)
+            session.ThrowIfDisposed();
+            if (EntityIdAccessor.GetId(entity) != null)
             {
-                session._identityMap.TryRemove(id, out _);
+                session._identityMap.Remove(session.KeyFor(entity));
             }
 
             session._changeTracker.Evict(entity);
@@ -785,3 +938,6 @@ public sealed class DocumentSession : IDocumentSession
         _disposed = true;
     }
 }
+
+/// <summary>Identity-map key: a document id is unique only within its collection.</summary>
+internal readonly record struct IdentityKey(string Collection, object Id);

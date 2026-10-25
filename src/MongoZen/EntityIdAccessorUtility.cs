@@ -71,6 +71,9 @@ public static class EntityIdAccessorUtility<T>
 {
     public static readonly bool HasETag;
     public static readonly bool HasSettableStringId;
+
+    /// <summary>The id property's type with <c>Nullable&lt;&gt;</c> unwrapped, or null when the type has no id property.</summary>
+    public static readonly Type? IdPropertyType;
     private static readonly Action<T, Guid> _etagSetter;
     private static readonly Action<T, string> _idSetter;
 
@@ -97,6 +100,7 @@ public static class EntityIdAccessorUtility<T>
 
         var convention = DefaultIdConvention.Instance;
         var idProp = convention.ResolveIdProperty<T>();
+        IdPropertyType = idProp == null ? null : Nullable.GetUnderlyingType(idProp.PropertyType) ?? idProp.PropertyType;
         HasSettableStringId = idProp != null && idProp.PropertyType == typeof(string) && idProp.CanWrite;
         if (HasSettableStringId)
         {

@@ -5,6 +5,14 @@ using MongoZen.Bson;
 
 namespace MongoZen;
 
+/// <summary>
+/// GridFS-backed attachments scoped to a <see cref="DocumentSession"/>.
+/// Writes (<see cref="StoreAsync"/>, <see cref="DeleteAsync"/>, <see cref="DeleteAllAsync"/>) join the
+/// session's unit of work: on a deployment with transactions they execute inside the transaction
+/// that the next <see cref="DocumentSession.SaveChangesAsync"/> commits (or that Dispose aborts), so
+/// an attachment is only durable once SaveChangesAsync has returned. Reads never open a transaction;
+/// they run on the session's client session so they see this session's own uncommitted writes.
+/// </summary>
 internal sealed class AttachmentsSessionOperations(DocumentSession session) : IAttachmentsSessionOperations
 {
     private readonly DocumentSession _session = session;
@@ -14,6 +22,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
 
     public async ValueTask StoreAsync(object documentId, string name, Stream stream, string? contentType = null, CancellationToken cancellationToken = default)
     {
+        _session.ThrowIfDisposed();
         await _session.EnsureTransactionStartedAsync(cancellationToken);
         var filesId = ObjectId.GenerateNewId();
 
@@ -104,7 +113,9 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
 
     public async ValueTask<AttachmentResult> GetAsync(object documentId, string name, CancellationToken cancellationToken = default)
     {
-        await _session.EnsureTransactionStartedAsync(cancellationToken);
+        _session.ThrowIfDisposed();
+        // Read: must not open a transaction. Doing so used to start the server-side transaction
+        // clock (60s default lifetime) on a mere read and leave it running until SaveChangesAsync.
 
         var filter = Builders<BsonDocument>.Filter.And(
             Builders<BsonDocument>.Filter.Eq("filename", name),
@@ -132,6 +143,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
 
     public async ValueTask DeleteAsync(object documentId, string name, CancellationToken cancellationToken = default)
     {
+        _session.ThrowIfDisposed();
         await _session.EnsureTransactionStartedAsync(cancellationToken);
 
         var filter = Builders<BsonDocument>.Filter.And(
@@ -161,6 +173,7 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
 
     public async ValueTask DeleteAllAsync(object documentId, CancellationToken cancellationToken = default)
     {
+        _session.ThrowIfDisposed();
         await _session.EnsureTransactionStartedAsync(cancellationToken);
 
         var filter = Builders<BsonDocument>.Filter.Eq("metadata.documentId", _session.Conventions.CreateBsonValue(documentId));
@@ -190,7 +203,8 @@ internal sealed class AttachmentsSessionOperations(DocumentSession session) : IA
 
     public async ValueTask<IEnumerable<string>> GetNamesAsync(object documentId, CancellationToken cancellationToken = default)
     {
-        await _session.EnsureTransactionStartedAsync(cancellationToken);
+        _session.ThrowIfDisposed();
+        // Read: see GetAsync — no transaction is opened here.
 
         var filter = Builders<BsonDocument>.Filter.Eq("metadata.documentId", _session.Conventions.CreateBsonValue(documentId));
         var cursor = _session.ClientSession != null

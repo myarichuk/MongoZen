@@ -1,18 +1,26 @@
 using System.Collections.Immutable;
 using System.Text;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 
 namespace MongoZen.SourceGenerator;
 
+/// <summary>
+/// Generates <c>IBlittableDocument&lt;T&gt;</c> implementations (Tier 1) for <c>[Document]</c> classes.
+/// The type model mirrors the runtime's <c>BsonTypeModel</c> one for one: scalars, enums, Nullable of
+/// those, string, byte[], collections, string-keyed dictionaries and user documents. Anything else is an
+/// MZ001 error at compile time rather than a silently dropped or mangled field at runtime, and
+/// null-handling / missing-from-snapshot semantics are identical to the reflection tier.
+/// </summary>
 [Generator]
 public class ShadowGenerator : IIncrementalGenerator
 {
     private static readonly DiagnosticDescriptor UnsupportedTypeDiagnostic = new(
         id: "MZ001",
         title: "Unsupported type in Document",
-        messageFormat: "Type '{0}' is not supported for change tracking. Only unmanaged types, strings, collections, dictionaries, or other Documents are supported.",
+        messageFormat: "Type '{0}' is not supported for change tracking. Supported: int/long/short/ushort/byte/sbyte/char/uint/ulong, double/float, bool, string, ObjectId, DateTime, Guid, decimal, enums, Nullable<T> of those, byte[], arrays/IEnumerable<T> of a supported type, IDictionary<string, V> of a supported V, and your own classes/structs.",
         category: "MongoZen",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -64,141 +72,269 @@ public class ShadowGenerator : IIncrementalGenerator
     private bool AnalyzeType(TypeInfo info, Queue<INamedTypeSymbol> queue, SourceProductionContext context)
     {
         var members = info.Symbol.GetMembers().OfType<IPropertySymbol>()
-            .Where(p => !p.IsStatic && p.DeclaredAccessibility == Accessibility.Public && !p.IsReadOnly);
+            .Where(p => !p.IsStatic && p.DeclaredAccessibility == Accessibility.Public && !p.IsReadOnly && !p.IsIndexer);
 
         foreach (var prop in members)
         {
-            if (prop.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == "MongoDB.Bson.Serialization.Attributes.BsonIgnoreAttribute" || a.AttributeClass?.Name == "BsonIgnoreAttribute"))
+            if (HasAttribute(prop, "BsonIgnoreAttribute"))
             {
                 continue;
             }
 
-            var category = CategorizeType(prop.Type, out var nestedType, out var secondaryNestedType);
-
-            if (category == TypeCategory.Unsupported)
+            var shape = Categorize(prop.Type);
+            if (!IsFullySupported(shape))
             {
                 context.ReportDiagnostic(Diagnostic.Create(UnsupportedTypeDiagnostic, prop.Locations.FirstOrDefault(), prop.Type.ToDisplayString()));
-                return false; 
+                return false;
             }
 
             var elementName = prop.Name;
-            var bsonElementAttr = prop.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == "BsonElementAttribute" || a.AttributeClass?.ToDisplayString() == "MongoDB.Bson.Serialization.Attributes.BsonElementAttribute");
+            var bsonElementAttr = prop.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == "BsonElementAttribute");
             if (bsonElementAttr != null && bsonElementAttr.ConstructorArguments.Length > 0)
             {
                 elementName = bsonElementAttr.ConstructorArguments[0].Value?.ToString() ?? prop.Name;
             }
-            var bsonIdAttr = prop.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == "BsonIdAttribute" || a.AttributeClass?.ToDisplayString() == "MongoDB.Bson.Serialization.Attributes.BsonIdAttribute");
-            if (bsonIdAttr != null || prop.Name == "Id")
+
+            // Case-insensitive, like DefaultIdConvention at runtime: `public int ID` is the id too.
+            if (HasAttribute(prop, "BsonIdAttribute") || string.Equals(prop.Name, "Id", StringComparison.OrdinalIgnoreCase))
             {
                 elementName = "_id";
             }
-            var concurrencyCheckAttr = prop.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == "ConcurrencyCheckAttribute" || a.AttributeClass?.ToDisplayString() == "MongoZen.ConcurrencyCheckAttribute");
-            if (concurrencyCheckAttr != null)
+
+            if (HasAttribute(prop, "ConcurrencyCheckAttribute"))
             {
                 elementName = "_etag";
             }
 
-            if (category == TypeCategory.Document && nestedType is INamedTypeSymbol namedNested)
-            {
-                queue.Enqueue(namedNested);
-            }
-
-            info.Properties.Add(new PropertyInfo(prop, elementName, category, nestedType, secondaryNestedType));
+            EnqueueDocuments(shape, queue);
+            info.Properties.Add(new PropertyInfo(prop, elementName, shape));
         }
 
         return true;
     }
 
-    private TypeCategory CategorizeType(ITypeSymbol type, out ITypeSymbol? nestedType, out ITypeSymbol? secondaryNestedType)
-    {
-        nestedType = null;
-        secondaryNestedType = null;
+    private static bool HasAttribute(ISymbol symbol, string attributeName) =>
+        symbol.GetAttributes().Any(a => a.AttributeClass?.Name == attributeName);
 
+    private static void EnqueueDocuments(Shape shape, Queue<INamedTypeSymbol> queue)
+    {
+        if (shape.Category == Category.Document && shape.Inner is INamedTypeSymbol named)
+        {
+            queue.Enqueue(named);
+        }
+
+        if (shape.InnerShape != null)
+        {
+            EnqueueDocuments(shape.InnerShape, queue);
+        }
+    }
+
+    private static bool IsFullySupported(Shape shape) =>
+        shape.Category != Category.Unsupported && (shape.InnerShape == null || IsFullySupported(shape.InnerShape));
+
+    // ------------------------------------------------------------------ type model
+
+    private enum Category
+    {
+        Scalar,
+        Enum,
+        String,
+        Nullable,
+        ByteArray,
+        Collection,
+        Dictionary,
+        Document,
+        /// <summary>Supported by the runtime codec but with no dedicated generated code (e.g. Nullable of a struct document); delegated to ElementCodec&lt;T&gt;.</summary>
+        Codec,
+        Unsupported,
+    }
+
+    /// <summary>Scalar mapping: writer/reader method plus the casts between the .NET type and the BSON-side type.</summary>
+    private sealed class ScalarSpec(string write, string read, string writeCast, string readCast, string bsonSideType)
+    {
+        public string Write { get; } = write;
+        public string Read { get; } = read;
+        public string BsonSideType { get; } = bsonSideType;
+        public string CastForWrite(string expr) => string.Format(writeCast, expr);
+        public string CastForRead(string expr) => string.Format(readCast, expr);
+    }
+
+    private sealed class Shape(Category category, ITypeSymbol type)
+    {
+        public Category Category { get; } = category;
+        public ITypeSymbol Type { get; } = type;
+        /// <summary>Element type (Collection), value type (Dictionary), underlying type (Nullable/Enum), the type itself (Document).</summary>
+        public ITypeSymbol? Inner { get; set; }
+        public Shape? InnerShape { get; set; }
+        public ScalarSpec? Scalar { get; set; }
+    }
+
+    private static ScalarSpec? GetScalar(ITypeSymbol type)
+    {
+        var fullName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        if (fullName == "global::System.Guid") return new("WriteGuid", "GetGuid", "{0}", "{0}", "System.Guid");
+        if (type.ContainingNamespace?.ToDisplayString() == "MongoDB.Bson" && type.Name == "ObjectId") return new("WriteObjectId", "GetObjectId", "{0}", "{0}", "MongoDB.Bson.ObjectId");
+
+        return type.SpecialType switch
+        {
+            SpecialType.System_Int32 => new("WriteInt32", "GetInt32", "{0}", "{0}", "int"),
+            SpecialType.System_Int16 => new("WriteInt32", "GetInt32", "(int){0}", "(short){0}", "int"),
+            SpecialType.System_UInt16 => new("WriteInt32", "GetInt32", "(int){0}", "(ushort){0}", "int"),
+            SpecialType.System_Byte => new("WriteInt32", "GetInt32", "(int){0}", "(byte){0}", "int"),
+            SpecialType.System_SByte => new("WriteInt32", "GetInt32", "(int){0}", "(sbyte){0}", "int"),
+            SpecialType.System_Char => new("WriteInt32", "GetInt32", "(int){0}", "(char){0}", "int"),
+            SpecialType.System_Int64 => new("WriteInt64", "GetInt64", "{0}", "{0}", "long"),
+            SpecialType.System_UInt32 => new("WriteInt64", "GetInt64", "(long){0}", "(uint){0}", "long"),
+            SpecialType.System_UInt64 => new("WriteInt64", "GetInt64", "unchecked((long){0})", "unchecked((ulong){0})", "long"),
+            SpecialType.System_Double => new("WriteDouble", "GetDouble", "{0}", "{0}", "double"),
+            SpecialType.System_Single => new("WriteDouble", "GetDouble", "(double){0}", "(float){0}", "double"),
+            SpecialType.System_Boolean => new("WriteBoolean", "GetBoolean", "{0}", "{0}", "bool"),
+            SpecialType.System_DateTime => new("WriteDateTime", "GetDateTime", "{0}", "{0}", "System.DateTime"),
+            SpecialType.System_Decimal => new("WriteDecimal128", "GetDecimal128", "{0}", "{0}", "decimal"),
+            _ => null,
+        };
+    }
+
+    private static Shape Categorize(ITypeSymbol type)
+    {
         if (type.SpecialType == SpecialType.System_String)
         {
-            return TypeCategory.String;
+            return new Shape(Category.String, type);
+        }
+
+        if (type is IArrayTypeSymbol array)
+        {
+            if (array.Rank != 1)
+            {
+                return new Shape(Category.Unsupported, type);
+            }
+
+            if (array.ElementType.SpecialType == SpecialType.System_Byte)
+            {
+                return new Shape(Category.ByteArray, type);
+            }
+
+            return new Shape(Category.Collection, type) { Inner = array.ElementType, InnerShape = Categorize(array.ElementType) };
         }
 
         if (type is INamedTypeSymbol named && named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
         {
-            nestedType = named.TypeArguments[0];
-            return TypeCategory.Nullable;
+            var inner = named.TypeArguments[0];
+            var innerShape = Categorize(inner);
+            return innerShape.Category switch
+            {
+                Category.Scalar or Category.Enum => new Shape(Category.Nullable, type) { Inner = inner, InnerShape = innerShape, Scalar = innerShape.Scalar },
+                Category.Document => new Shape(Category.Codec, type) { Inner = inner, InnerShape = innerShape },
+                _ => new Shape(Category.Unsupported, type),
+            };
         }
 
         if (type.TypeKind == TypeKind.Enum)
         {
-            return TypeCategory.Enum;
+            var underlying = ((INamedTypeSymbol)type).EnumUnderlyingType!;
+            var spec = GetScalar(underlying);
+            return spec == null
+                ? new Shape(Category.Unsupported, type)
+                : new Shape(Category.Enum, type) { Inner = underlying, Scalar = spec };
         }
 
-        var fullName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-        if (fullName == "global::System.Guid" || fullName == "global::System.Decimal" || type.SpecialType != SpecialType.None)
+        var scalar = GetScalar(type);
+        if (scalar != null)
         {
-            return TypeCategory.Primitive;
+            return new Shape(Category.Scalar, type) { Scalar = scalar };
         }
 
-        if (IsDictionary(type, out var keyType, out var valueType))
+        if (type.SpecialType != SpecialType.None || type.TypeKind == TypeKind.Pointer || type.TypeKind == TypeKind.FunctionPointer)
         {
-            nestedType = keyType;
-            secondaryNestedType = valueType;
-            return TypeCategory.Dictionary;
+            return new Shape(Category.Unsupported, type); // object, IntPtr, Enum, ValueType, Array, Delegate, ...
         }
 
-        if (IsCollection(type, out var elementType))
+        if (TryGetDictionaryTypes(type, out var keyType, out var valueType))
         {
-            nestedType = elementType;
-            return TypeCategory.Collection;
+            if (keyType!.SpecialType != SpecialType.System_String)
+            {
+                return new Shape(Category.Unsupported, type);
+            }
+
+            return new Shape(Category.Dictionary, type) { Inner = valueType, InnerShape = Categorize(valueType!) };
+        }
+
+        if (TryGetCollectionElementType(type, out var elementType))
+        {
+            return new Shape(Category.Collection, type) { Inner = elementType, InnerShape = Categorize(elementType!) };
         }
 
         if (type.TypeKind is TypeKind.Class or TypeKind.Struct)
         {
-            var ns = type.ContainingNamespace.ToDisplayString();
-            if (!ns.StartsWith("System") && !ns.StartsWith("MongoDB") && !ns.StartsWith("Microsoft"))
+            var ns = type.ContainingNamespace?.ToDisplayString() ?? "";
+            if (ns == "System" || ns.StartsWith("System.") || ns == "MongoDB" || ns.StartsWith("MongoDB.") || ns == "Microsoft" || ns.StartsWith("Microsoft."))
             {
-                nestedType = type;
-                return TypeCategory.Document;
+                // TimeSpan, DateTimeOffset, DateOnly, Uri, BsonDocument, ...: no representation chosen yet.
+                return new Shape(Category.Unsupported, type);
             }
-            
-            if (ns == "MongoDB.Bson" && type.Name == "ObjectId")
+
+            return new Shape(Category.Document, type) { Inner = type };
+        }
+
+        return new Shape(Category.Unsupported, type);
+    }
+
+    private static bool TryGetDictionaryTypes(ITypeSymbol type, out ITypeSymbol? keyType, out ITypeSymbol? valueType)
+    {
+        foreach (var iface in InterfacesIncludingSelf(type))
+        {
+            if (!iface.IsGenericType)
             {
-                return TypeCategory.Primitive;
+                continue;
+            }
+
+            var def = iface.ConstructedFrom.ToDisplayString();
+            if (def == "System.Collections.Generic.IDictionary<TKey, TValue>" || def == "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>")
+            {
+                keyType = iface.TypeArguments[0];
+                valueType = iface.TypeArguments[1];
+                return true;
             }
         }
 
-        return TypeCategory.Unsupported;
-    }
-
-    private bool IsDictionary(ITypeSymbol type, out ITypeSymbol? keyType, out ITypeSymbol? valueType)
-    {
         keyType = null;
         valueType = null;
-        var dictInterface = type.AllInterfaces.FirstOrDefault(i => i.IsGenericType && (i.ConstructedFrom.ToDisplayString() == "System.Collections.Generic.IDictionary<TKey, TValue>" || i.ConstructedFrom.ToDisplayString() == "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>"));
-        if (dictInterface != null)
-        {
-            keyType = dictInterface.TypeArguments[0];
-            valueType = dictInterface.TypeArguments[1];
-            return true;
-        }
         return false;
     }
 
-    private static bool IsCollection(ITypeSymbol type, out ITypeSymbol? elementType)
+    private static bool TryGetCollectionElementType(ITypeSymbol type, out ITypeSymbol? elementType)
     {
+        foreach (var iface in InterfacesIncludingSelf(type))
+        {
+            if (iface.IsGenericType && iface.ConstructedFrom.ToDisplayString() == "System.Collections.Generic.IEnumerable<T>")
+            {
+                elementType = iface.TypeArguments[0];
+                return true;
+            }
+        }
+
         elementType = null;
-        var collectionInterface = type.AllInterfaces.FirstOrDefault(i => i.IsGenericType && i.ConstructedFrom.ToDisplayString() == "System.Collections.Generic.ICollection<T>");
-        if (collectionInterface != null)
-        {
-            elementType = collectionInterface.TypeArguments[0];
-            return true;
-        }
-
-        if (type is IArrayTypeSymbol arrayType)
-        {
-            elementType = arrayType.ElementType;
-            return true;
-        }
-
         return false;
     }
+
+    private static IEnumerable<INamedTypeSymbol> InterfacesIncludingSelf(ITypeSymbol type)
+    {
+        if (type is INamedTypeSymbol { TypeKind: TypeKind.Interface } self)
+        {
+            yield return self;
+        }
+
+        foreach (var iface in type.AllInterfaces)
+        {
+            yield return iface;
+        }
+    }
+
+    // ------------------------------------------------------------------ emission
+
+    private static string Lit(string s) => SymbolDisplay.FormatLiteral(s, quote: true);
+
+    private static string TypeName(ITypeSymbol type) => type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
     private void GenerateBlittableImplementation(TypeInfo info, SourceProductionContext context)
     {
@@ -216,7 +352,8 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine();
         sb.AppendLine($"namespace {info.Symbol.ContainingNamespace.ToDisplayString()};");
         sb.AppendLine();
-        sb.AppendLine($"partial class {info.Name} : IBlittableDocument<{info.Name}>");
+        var keyword = info.Symbol.TypeKind == TypeKind.Struct ? "struct" : "class";
+        sb.AppendLine($"partial {keyword} {info.Name} : IBlittableDocument<{info.Name}>");
         sb.AppendLine("{");
 
         // Serialize
@@ -225,8 +362,7 @@ public class ShadowGenerator : IIncrementalGenerator
         sb.AppendLine("        writer.WriteStartDocument();");
         foreach (var prop in info.Properties)
         {
-            var access = $"entity.{prop.Symbol.Name}";
-            GenerateWriteCall(sb, prop, access);
+            GenerateWriteCall(sb, prop, $"entity.{prop.Symbol.Name}");
         }
         sb.AppendLine("        writer.WriteEndDocument();");
         sb.AppendLine("    }");
@@ -265,7 +401,6 @@ public class ShadowGenerator : IIncrementalGenerator
         }
         sb.AppendLine("    }");
 
-
         sb.AppendLine("}");
 
         context.AddSource($"{info.Name}.Blittable.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
@@ -273,220 +408,281 @@ public class ShadowGenerator : IIncrementalGenerator
 
     private void GenerateWriteCall(StringBuilder sb, PropertyInfo prop, string access)
     {
-        var name = prop.ElementName;
-        switch (prop.Category)
+        var n = Lit(prop.ElementName);
+        var shape = prop.Shape;
+        switch (shape.Category)
         {
-            case TypeCategory.Enum:
-                var underlyingType = ((INamedTypeSymbol)prop.Symbol.Type).EnumUnderlyingType!;
-                var enumMethod = GetWriteMethod(underlyingType);
-                sb.AppendLine($"        writer.{enumMethod}(\"{name}\", ({underlyingType.ToDisplayString()}){access});");
+            case Category.Scalar:
+                sb.AppendLine($"        writer.{shape.Scalar!.Write}({n}, {shape.Scalar.CastForWrite(access)});");
                 break;
-            case TypeCategory.Primitive:
-                var method = GetWriteMethod(prop.Symbol.Type);
-                sb.AppendLine($"        writer.{method}(\"{name}\", {access});");
+            case Category.Enum:
+                sb.AppendLine($"        writer.{shape.Scalar!.Write}({n}, ({shape.Scalar.BsonSideType}){access});");
                 break;
-            case TypeCategory.String:
-                sb.AppendLine($"        if ({access} != null) writer.WriteString(\"{name}\", {access}.AsSpan());");
+            case Category.String:
+                sb.AppendLine($"        if ({access} != null) writer.WriteString({n}, {access}.AsSpan()); else writer.WriteNull({n});");
                 break;
-            case TypeCategory.Nullable:
-                sb.AppendLine($"        if ({access}.HasValue) {{ writer.{GetWriteMethod(prop.NestedType!)}(\"{name}\", {access}.Value); }} else {{ writer.WriteNull(\"{name}\"); }}");
+            case Category.Nullable:
+            {
+                var valueExpr = shape.InnerShape!.Category == Category.Enum
+                    ? $"({shape.Scalar!.BsonSideType}){access}.Value"
+                    : shape.Scalar!.CastForWrite($"{access}.Value");
+                sb.AppendLine($"        if ({access}.HasValue) writer.{shape.Scalar!.Write}({n}, {valueExpr}); else writer.WriteNull({n});");
                 break;
-            case TypeCategory.Document:
-                sb.AppendLine($"        if ({access} != null) {{ writer.WriteName(\"{name}\", BlittableBsonConstants.BsonType.Document); {prop.NestedType!.Name}.Serialize(ref writer, {access}); }}");
+            }
+            case Category.ByteArray:
+                sb.AppendLine($"        if ({access} != null) writer.WriteBinary({n}, {access}); else writer.WriteNull({n});");
                 break;
-            case TypeCategory.Collection:
-                sb.AppendLine($"        if ({access} != null) CollectionHelper<{prop.NestedType!.ToDisplayString()}>.WriteArray(ref writer, \"{name}\".AsSpan(), {access});");
+            case Category.Document:
+            {
+                var write = $"writer.WriteName({n}, BlittableBsonConstants.BsonType.Document); {TypeName(shape.Inner!)}.Serialize(ref writer, {access});";
+                if (shape.Type.IsValueType)
+                {
+                    sb.AppendLine($"        {write}");
+                }
+                else
+                {
+                    sb.AppendLine($"        if ({access} != null) {{ {write} }} else writer.WriteNull({n});");
+                }
                 break;
-            case TypeCategory.Dictionary:
-                sb.AppendLine($"        if ({access} != null) DictionaryHelper<{prop.SecondaryNestedType!.ToDisplayString()}>.WriteDictionary(ref writer, \"{name}\".AsSpan(), {access});");
+            }
+            case Category.Collection:
+            {
+                var write = $"CollectionHelper<{TypeName(shape.Inner!)}>.WriteArray(ref writer, {n}.AsSpan(), {access});";
+                sb.AppendLine(shape.Type.IsValueType ? $"        {write}" : $"        if ({access} != null) {write} else writer.WriteNull({n});");
+                break;
+            }
+            case Category.Dictionary:
+            {
+                var write = $"DictionaryHelper<{TypeName(shape.Inner!)}>.WriteDictionary(ref writer, {n}.AsSpan(), {access});";
+                sb.AppendLine(shape.Type.IsValueType ? $"        {write}" : $"        if ({access} != null) {write} else writer.WriteNull({n});");
+                break;
+            }
+            case Category.Codec:
+                sb.AppendLine($"        ElementCodec<{TypeName(shape.Type)}>.Write(ref writer, {n}.AsSpan(), {access});");
                 break;
         }
     }
 
     private void GenerateReadCall(StringBuilder sb, PropertyInfo prop, string target, string docVar, string arenaVar)
     {
-        var name = prop.ElementName;
-        
-        sb.AppendLine($"        if ({docVar}.TryGetElementOffset(\"{name}\", out var offset_{prop.Symbol.Name}))");
+        var n = Lit(prop.ElementName);
+        var shape = prop.Shape;
+        var off = $"offset_{prop.Symbol.Name}";
+        var isNull = $"ArenaBsonReader.GetElementType({docVar}, {off}) == BlittableBsonConstants.BsonType.Null";
+
+        sb.AppendLine($"        if ({docVar}.TryGetElementOffset({n}, out var {off}))");
         sb.AppendLine("        {");
-        
-        switch (prop.Category)
+
+        switch (shape.Category)
         {
-            case TypeCategory.Enum:
-                var underlyingType = ((INamedTypeSymbol)prop.Symbol.Type).EnumUnderlyingType!;
-                var enumMethod = GetReadMethod(underlyingType);
-                sb.AppendLine($"            {target} = ({prop.Symbol.Type.ToDisplayString()}){docVar}.{enumMethod}(offset_{prop.Symbol.Name});");
+            case Category.Scalar:
+                sb.AppendLine($"            {target} = {shape.Scalar!.CastForRead($"{docVar}.{shape.Scalar.Read}({off})")};");
                 break;
-            case TypeCategory.Primitive:
-                var method = GetReadMethod(prop.Symbol.Type);
-                sb.AppendLine($"            {target} = {docVar}.{method}(offset_{prop.Symbol.Name});");
+            case Category.Enum:
+                sb.AppendLine($"            {target} = ({TypeName(shape.Type)}){docVar}.{shape.Scalar!.Read}({off});");
                 break;
-            case TypeCategory.String:
-                sb.AppendLine($"            {target} = {docVar}.GetString(offset_{prop.Symbol.Name});");
+            case Category.String:
+                sb.AppendLine($"            {target} = {isNull} ? null! : {docVar}.GetString({off});");
                 break;
-            case TypeCategory.Nullable:
-                sb.AppendLine($"            {target} = {docVar}.{GetReadMethod(prop.NestedType!)}(offset_{prop.Symbol.Name});");
+            case Category.Nullable:
+            {
+                var read = shape.InnerShape!.Category == Category.Enum
+                    ? $"({TypeName(shape.Inner!)}){docVar}.{shape.Scalar!.Read}({off})"
+                    : shape.Scalar!.CastForRead($"{docVar}.{shape.Scalar.Read}({off})");
+                sb.AppendLine($"            {target} = {isNull} ? null : {read};");
                 break;
-            case TypeCategory.Document:
-                sb.AppendLine($"            {target} = {prop.NestedType!.Name}.Deserialize({docVar}.GetDocument(offset_{prop.Symbol.Name}, {arenaVar}), {arenaVar});");
+            }
+            case Category.ByteArray:
+                sb.AppendLine($"            {target} = {isNull} ? null! : {docVar}.GetBinary({off});");
                 break;
-            case TypeCategory.Collection:
-                var arrayCall = $"{docVar}.GetArray(offset_{prop.Symbol.Name}, {arenaVar})";
-                if (prop.Symbol.Type is IArrayTypeSymbol)
+            case Category.Document:
+            {
+                var read = $"{TypeName(shape.Inner!)}.Deserialize({docVar}.GetDocument({off}, {arenaVar}), {arenaVar})";
+                sb.AppendLine($"            {target} = {isNull} ? {(shape.Type.IsValueType ? "default" : "null!")} : {read};");
+                break;
+            }
+            case Category.Collection:
+            {
+                var array = $"CollectionHelper<{TypeName(shape.Inner!)}>.ReadArray({docVar}.GetArray({off}, {arenaVar}), {arenaVar})";
+                var list = $"CollectionHelper<{TypeName(shape.Inner!)}>.ReadList({docVar}.GetArray({off}, {arenaVar}), {arenaVar})";
+                string read;
+                if (shape.Type is IArrayTypeSymbol || shape.Type.TypeKind == TypeKind.Interface)
                 {
-                    sb.AppendLine($"            {target} = CollectionHelper<{prop.NestedType!.ToDisplayString()}>.ReadArray({arrayCall}, {arenaVar});");
+                    read = array;
+                }
+                else if (shape.Type is INamedTypeSymbol { IsGenericType: true } named && named.ConstructedFrom.ToDisplayString() == "System.Collections.Generic.List<T>")
+                {
+                    read = list;
                 }
                 else
                 {
-                    sb.AppendLine($"            {target} = CollectionHelper<{prop.NestedType!.ToDisplayString()}>.ReadList({arrayCall}, {arenaVar});");
+                    read = $"new {TypeName(shape.Type)}({array})";
                 }
+
+                sb.AppendLine($"            {target} = {isNull} ? {(shape.Type.IsValueType ? "default" : "null!")} : {read};");
                 break;
-            case TypeCategory.Dictionary:
-                sb.AppendLine($"            {target} = DictionaryHelper<{prop.SecondaryNestedType!.ToDisplayString()}>.ReadDictionary({docVar}.GetDocument(offset_{prop.Symbol.Name}, {arenaVar}), {arenaVar});");
+            }
+            case Category.Dictionary:
+            {
+                var dict = $"DictionaryHelper<{TypeName(shape.Inner!)}>.ReadDictionary({docVar}.GetDocument({off}, {arenaVar}), {arenaVar})";
+                string read;
+                if (shape.Type.TypeKind == TypeKind.Interface
+                    || (shape.Type is INamedTypeSymbol { IsGenericType: true } named && named.ConstructedFrom.ToDisplayString() == "System.Collections.Generic.Dictionary<TKey, TValue>"))
+                {
+                    read = dict;
+                }
+                else
+                {
+                    read = $"new {TypeName(shape.Type)}({dict})";
+                }
+
+                sb.AppendLine($"            {target} = {isNull} ? {(shape.Type.IsValueType ? "default" : "null!")} : {read};");
+                break;
+            }
+            case Category.Codec:
+                sb.AppendLine($"            {target} = {docVar}.Read<{TypeName(shape.Type)}>({off}, {arenaVar});");
                 break;
         }
-        
+
         sb.AppendLine("        }");
     }
 
     private void EmitPropertyDiff(StringBuilder sb, PropertyInfo prop, string entityVar, string snapVar, string builderVar, string prefixVar)
     {
         var name = prop.ElementName;
-        var propAccess = $"{entityVar}.{prop.Symbol.Name}";
-        
-        sb.AppendLine($"        if ({snapVar}.TryGetElementOffset(\"{name}\", out var off_{prop.Symbol.Name}))");
-        sb.AppendLine("        {");
-        sb.AppendLine($"            Span<char> fullPath_{prop.Symbol.Name} = stackalloc char[{prefixVar}.Length + {name.Length} + 1];");
-        sb.AppendLine($"            int len_{prop.Symbol.Name} = 0;");
-        sb.AppendLine($"            if ({prefixVar}.Length > 0) {{ {prefixVar}.CopyTo(fullPath_{prop.Symbol.Name}); fullPath_{prop.Symbol.Name}[{prefixVar}.Length] = '.'; len_{prop.Symbol.Name} = {prefixVar}.Length + 1; }}");
-        sb.AppendLine($"            \"{name}\".AsSpan().CopyTo(fullPath_{prop.Symbol.Name}.Slice(len_{prop.Symbol.Name}));");
-        sb.AppendLine($"            var path_{prop.Symbol.Name} = fullPath_{prop.Symbol.Name}.Slice(0, len_{prop.Symbol.Name} + {name.Length});");
+        var n = Lit(name);
+        var shape = prop.Shape;
+        var id = prop.Symbol.Name;
+        var access = $"{entityVar}.{id}";
+        var off = $"off_{id}";
+        var type = $"type_{id}";
+        var path = $"path_{id}";
+        var isNull = $"{type} == BlittableBsonConstants.BsonType.Null";
 
-        switch (prop.Category)
+        sb.AppendLine($"        Span<char> fullPath_{id} = stackalloc char[{prefixVar}.Length + {name.Length} + 1];");
+        sb.AppendLine($"        int len_{id} = 0;");
+        sb.AppendLine($"        if ({prefixVar}.Length > 0) {{ {prefixVar}.CopyTo(fullPath_{id}); fullPath_{id}[{prefixVar}.Length] = '.'; len_{id} = {prefixVar}.Length + 1; }}");
+        sb.AppendLine($"        {n}.AsSpan().CopyTo(fullPath_{id}.Slice(len_{id}));");
+        sb.AppendLine($"        var {path} = fullPath_{id}.Slice(0, len_{id} + {name.Length});");
+        sb.AppendLine($"        if ({snapVar}.TryGetElementOffset({n}, out var {off}))");
+        sb.AppendLine("        {");
+        sb.AppendLine($"            var {type} = ArenaBsonReader.GetElementType({snapVar}, {off});");
+
+        switch (shape.Category)
         {
-            case TypeCategory.Enum:
-                var underlyingType = ((INamedTypeSymbol)prop.Symbol.Type).EnumUnderlyingType!;
-                var enumMethod = GetReadMethod(underlyingType);
-                sb.AppendLine($"            if (({underlyingType.ToDisplayString()}){propAccess} != {snapVar}.{enumMethod}(off_{prop.Symbol.Name}))");
-                sb.AppendLine($"                {builderVar}.Set(path_{prop.Symbol.Name}, ({underlyingType.ToDisplayString()}){propAccess});");
+            case Category.Scalar:
+            {
+                var spec = shape.Scalar!;
+                var compare = spec.Read == "GetDateTime"
+                    ? $"!BsonDateTimeUtil.Equal({access}, {snapVar}.GetDateTime({off}))"
+                    : $"{spec.CastForWrite(access)} != {snapVar}.{spec.Read}({off})";
+                sb.AppendLine($"            if ({isNull} || {compare})");
+                sb.AppendLine($"                {builderVar}.Set({path}, {spec.CastForWrite(access)});");
                 break;
-            case TypeCategory.Primitive:
-                var method = GetReadMethod(prop.Symbol.Type);
-                sb.AppendLine($"            if ({propAccess} != {snapVar}.{method}(off_{prop.Symbol.Name}))");
-                sb.AppendLine($"                {builderVar}.Set(path_{prop.Symbol.Name}, {propAccess});");
+            }
+            case Category.Enum:
+            {
+                var spec = shape.Scalar!;
+                sb.AppendLine($"            if ({isNull} || ({spec.BsonSideType}){access} != {snapVar}.{spec.Read}({off}))");
+                sb.AppendLine($"                {builderVar}.Set({path}, ({spec.BsonSideType}){access});");
                 break;
-            case TypeCategory.String:
-                sb.AppendLine($"            if (!object.Equals({snapVar}.GetString(off_{prop.Symbol.Name}), {propAccess}))");
-                sb.AppendLine($"                {builderVar}.Set(path_{prop.Symbol.Name}, {propAccess});");
+            }
+            case Category.String:
+                sb.AppendLine($"            if (!object.Equals({isNull} ? null : {snapVar}.GetString({off}), {access}))");
+                sb.AppendLine($"                {builderVar}.Set({path}, {access});");
                 break;
-            case TypeCategory.Nullable:
-                var nMethod = GetReadMethod(prop.NestedType!);
-                sb.AppendLine($"            var snap_{prop.Symbol.Name} = {snapVar}.{nMethod}(off_{prop.Symbol.Name});");
-                sb.AppendLine($"            if (!object.Equals({propAccess}, snap_{prop.Symbol.Name}))");
-                sb.AppendLine($"                {builderVar}.SetObject<{prop.Symbol.Type.ToDisplayString()}>(path_{prop.Symbol.Name}, {propAccess});");
+            case Category.Nullable:
+            case Category.ByteArray:
+            case Category.Codec:
+                sb.AppendLine($"            if (!ElementCodec<{TypeName(shape.Type)}>.EqualsAt({access}, {snapVar}, {off}, arena))");
+                sb.AppendLine($"                {builderVar}.SetValue({path}, {access});");
                 break;
-            case TypeCategory.Document:
-                sb.AppendLine($"            if ({propAccess} != null)");
+            case Category.Document:
+            {
+                if (!shape.Type.IsValueType)
+                {
+                    sb.AppendLine($"            if ({access} == null)");
+                    sb.AppendLine("            {");
+                    sb.AppendLine($"                if (!({isNull})) {builderVar}.SetNull({path});");
+                    sb.AppendLine("            }");
+                    sb.AppendLine($"            else if ({type} != BlittableBsonConstants.BsonType.Document)");
+                }
+                else
+                {
+                    sb.AppendLine($"            if ({type} != BlittableBsonConstants.BsonType.Document)");
+                }
+
+                sb.AppendLine($"                {builderVar}.SetValue({path}, {access});");
+                sb.AppendLine("            else");
                 sb.AppendLine("            {");
-                sb.AppendLine($"                var nestedSnap_{prop.Symbol.Name} = {snapVar}.GetDocument(off_{prop.Symbol.Name}, arena);");
-                sb.AppendLine($"                {prop.NestedType!.Name}.BuildUpdate({propAccess}, nestedSnap_{prop.Symbol.Name}, ref {builderVar}, arena, path_{prop.Symbol.Name});");
+                sb.AppendLine($"                var nestedSnap_{id} = {snapVar}.GetDocument({off}, arena);");
+                sb.AppendLine($"                {TypeName(shape.Inner!)}.BuildUpdate({access}, nestedSnap_{id}, ref {builderVar}, arena, {path});");
                 sb.AppendLine("            }");
                 break;
-            case TypeCategory.Collection:
-                sb.AppendLine($"            if ({propAccess} != null)");
-                sb.AppendLine("            {");
-                sb.AppendLine($"                if (!CollectionHelper<{prop.NestedType!.ToDisplayString()}>.EqualsSnapshotAtOffset({propAccess}, {snapVar}, off_{prop.Symbol.Name}, arena))");
-                sb.AppendLine($"                    {builderVar}.Set(path_{prop.Symbol.Name}, CollectionHelper<{prop.NestedType!.ToDisplayString()}>.ToBsonValue({propAccess}));");
-                sb.AppendLine("            }");
-                sb.AppendLine($"            else if (ArenaBsonReader.GetElementType({snapVar}, off_{prop.Symbol.Name}) != BlittableBsonConstants.BsonType.Null)");
-                sb.AppendLine($"                {builderVar}.Unset(path_{prop.Symbol.Name});");
+            }
+            case Category.Collection:
+            case Category.Dictionary:
+            {
+                var helper = shape.Category == Category.Collection
+                    ? $"CollectionHelper<{TypeName(shape.Inner!)}>"
+                    : $"DictionaryHelper<{TypeName(shape.Inner!)}>";
+                if (!shape.Type.IsValueType)
+                {
+                    sb.AppendLine($"            if ({access} == null)");
+                    sb.AppendLine("            {");
+                    sb.AppendLine($"                if (!({isNull})) {builderVar}.SetNull({path});");
+                    sb.AppendLine("            }");
+                    sb.AppendLine($"            else if (!{helper}.EqualsSnapshotAtOffset({access}, {snapVar}, {off}, arena))");
+                }
+                else
+                {
+                    sb.AppendLine($"            if (!{helper}.EqualsSnapshotAtOffset({access}, {snapVar}, {off}, arena))");
+                }
+
+                sb.AppendLine($"                {builderVar}.SetValue({path}, {access});");
                 break;
-            case TypeCategory.Dictionary:
-                sb.AppendLine($"            if ({propAccess} != null)");
-                sb.AppendLine("            {");
-                sb.AppendLine($"                if (!DictionaryHelper<{prop.SecondaryNestedType!.ToDisplayString()}>.EqualsSnapshotAtOffset({propAccess}, {snapVar}, off_{prop.Symbol.Name}, arena))");
-                sb.AppendLine($"                    {builderVar}.Set(path_{prop.Symbol.Name}, DictionaryHelper<{prop.SecondaryNestedType!.ToDisplayString()}>.ToBsonValue({propAccess}));");
-                sb.AppendLine("            }");
-                sb.AppendLine($"            else if (ArenaBsonReader.GetElementType({snapVar}, off_{prop.Symbol.Name}) != BlittableBsonConstants.BsonType.Null)");
-                sb.AppendLine($"                {builderVar}.Unset(path_{prop.Symbol.Name});");
+            }
+        }
+
+        sb.AppendLine("        }");
+        sb.AppendLine("        else");
+        sb.AppendLine("        {");
+
+        // Missing from the snapshot: a non-null value is new information, a null one is not.
+        switch (shape.Category)
+        {
+            case Category.Scalar:
+                sb.AppendLine($"            {builderVar}.Set({path}, {shape.Scalar!.CastForWrite(access)});");
+                break;
+            case Category.Enum:
+                sb.AppendLine($"            {builderVar}.Set({path}, ({shape.Scalar!.BsonSideType}){access});");
                 break;
             default:
-                sb.AppendLine($"            {builderVar}.Set(path_{prop.Symbol.Name}, BsonValue.Create({propAccess}));");
+                if (shape.Type.IsValueType && shape.Category != Category.Nullable)
+                {
+                    sb.AppendLine($"            {builderVar}.SetValue({path}, {access});");
+                }
+                else
+                {
+                    sb.AppendLine($"            if ({access} != null) {builderVar}.SetValue({path}, {access});");
+                }
                 break;
         }
-        
+
         sb.AppendLine("        }");
     }
 
-    private string GetWriteMethod(ITypeSymbol type)
-    {
-        var fullName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-        if (fullName == "global::System.Guid") return "WriteGuid";
-        if (fullName == "global::System.Decimal") return "WriteDecimal128";
-
-        var name = type.Name;
-        if (type.ContainingNamespace?.ToDisplayString() == "MongoDB.Bson" && name == "ObjectId")
-            return "WriteObjectId";
-
-        return type.SpecialType switch
-        {
-            SpecialType.System_Int32 => "WriteInt32",
-            SpecialType.System_Int64 => "WriteInt64",
-            SpecialType.System_Double => "WriteDouble",
-            SpecialType.System_Boolean => "WriteBoolean",
-            SpecialType.System_DateTime => "WriteDateTime",
-            SpecialType.System_Decimal => "WriteDecimal128",
-            _ => "WriteBinary"
-        };
-    }
-
-    private string GetReadMethod(ITypeSymbol type)
-    {
-        var fullName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-        if (fullName == "global::System.Guid") return "GetGuid";
-        if (fullName == "global::System.Decimal") return "GetDecimal128";
-
-        var name = type.Name;
-        if (type.ContainingNamespace?.ToDisplayString() == "MongoDB.Bson" && name == "ObjectId")
-            return "GetObjectId";
-
-        return type.SpecialType switch
-        {
-            SpecialType.System_Int32 => "GetInt32",
-            SpecialType.System_Int64 => "GetInt64",
-            SpecialType.System_Double => "GetDouble",
-            SpecialType.System_Boolean => "GetBoolean",
-            SpecialType.System_DateTime => "GetDateTime",
-            SpecialType.System_Decimal => "GetDecimal128",
-            _ => $"Get<{type.ToDisplayString()}>"
-        };
-    }
-
-    private class TypeInfo(INamedTypeSymbol symbol)
+    private sealed class TypeInfo(INamedTypeSymbol symbol)
     {
         public INamedTypeSymbol Symbol { get; } = symbol;
         public string Name => Symbol.Name;
         public List<PropertyInfo> Properties { get; } = [];
     }
 
-    private class PropertyInfo(IPropertySymbol symbol, string elementName, TypeCategory category, ITypeSymbol? nestedType, ITypeSymbol? secondaryNestedType)
+    private sealed class PropertyInfo(IPropertySymbol symbol, string elementName, Shape shape)
     {
         public IPropertySymbol Symbol { get; } = symbol;
         public string ElementName { get; } = elementName;
-        public TypeCategory Category { get; } = category;
-        public ITypeSymbol? NestedType { get; } = nestedType;
-        public ITypeSymbol? SecondaryNestedType { get; } = secondaryNestedType;
-    }
-
-    private enum TypeCategory
-    {
-        Primitive,
-        String,
-        Nullable,
-        Collection,
-        Dictionary,
-        Document,
-        Enum,
-        Unsupported
+        public Shape Shape { get; } = shape;
     }
 }

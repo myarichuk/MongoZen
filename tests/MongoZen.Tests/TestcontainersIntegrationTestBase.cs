@@ -15,6 +15,12 @@ namespace MongoZen.Tests;
 /// </summary>
 public abstract class TestcontainersIntegrationTestBase : IAsyncLifetime
 {
+    /// <summary>
+    /// Set this to a connection string of an existing replica set to run these tests without Docker
+    /// (e.g. a locally started <c>mongod --replSet</c>). When unset, a Testcontainers replica set is used.
+    /// </summary>
+    public const string ConnectionStringEnvVar = "MONGOZEN_TEST_CONNECTION_STRING";
+
     private static readonly Lazy<Task<(MongoDbContainer? Container, string? SkipReason)>> ContainerLazy = new(async () =>
     {
         try
@@ -52,14 +58,25 @@ public abstract class TestcontainersIntegrationTestBase : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        var (container, skipReason) = await ContainerLazy.Value;
-        SkipReason = skipReason;
-        if (container == null)
+        var external = Environment.GetEnvironmentVariable(ConnectionStringEnvVar);
+        string connectionString;
+        if (!string.IsNullOrWhiteSpace(external))
         {
-            return;
+            connectionString = external;
+        }
+        else
+        {
+            var (container, skipReason) = await ContainerLazy.Value;
+            SkipReason = skipReason;
+            if (container == null)
+            {
+                return;
+            }
+
+            connectionString = container.GetConnectionString();
         }
 
-        _mongoClient = new MongoClient(container.GetConnectionString());
+        _mongoClient = new MongoClient(connectionString);
         _databaseName = $"test_{Guid.NewGuid():N}";
         Database = _mongoClient.GetDatabase(_databaseName);
     }

@@ -251,108 +251,19 @@ public unsafe struct ArenaUpdateDefinitionBuilder
         }
     }
 
-    public void SetObject<T>(ReadOnlySpan<char> path, T value)
+    /// <summary>
+    /// <c>$set</c> of any supported value, written by the same <see cref="ElementCodec{T}"/> the insert
+    /// path uses, so an update and an insert of the same value produce byte-identical BSON. A null
+    /// value is written as BSON null.
+    /// </summary>
+    public void SetValue<T>(ReadOnlySpan<char> path, T value)
     {
         EnsureSetStarted();
-        if (value == null)
-        {
-            _writer.WriteNull(path);
-            return;
-        }
-
-        if (TypeCache<T>.IsString) { _writer.WriteString(path, (value as string).AsSpan()); return; }
-        if (TypeCache<T>.IsInt) { _writer.WriteInt32(path, (int)(object)value); return; }
-        if (TypeCache<T>.IsLong) { _writer.WriteInt64(path, (long)(object)value); return; }
-        if (TypeCache<T>.IsDouble) { _writer.WriteDouble(path, (double)(object)value); return; }
-        if (TypeCache<T>.IsBool) { _writer.WriteBoolean(path, (bool)(object)value); return; }
-        if (TypeCache<T>.IsObjectId) { _writer.WriteObjectId(path, (ObjectId)(object)value); return; }
-        if (TypeCache<T>.IsGuid) { _writer.WriteGuid(path, (Guid)(object)value); return; }
-        if (TypeCache<T>.IsDateTime) { _writer.WriteDateTime(path, (DateTime)(object)value); return; }
-        if (TypeCache<T>.IsDecimal) { _writer.WriteDecimal128(path, (decimal)(object)value); return; }
-
-        if (TypeCache<T>.IsCollection || TypeCache<T>.IsDictionary)
-        {
-            _writer.WriteName(path, TypeCache<T>.BsonType);
-            BlittableConverter<T>.Instance.Write(ref _writer, value);
-            return;
-        }
-
-        _writer.WriteName(path, BlittableBsonConstants.BsonType.Document);
-        BlittableConverter<T>.Instance.Write(ref _writer, value);
+        ElementCodec<T>.Write(ref _writer, path, value);
     }
 
-    private static class TypeCache<T>
-    {
-        public static readonly bool IsString = typeof(T) == typeof(string);
-        public static readonly bool IsInt = typeof(T) == typeof(int);
-        public static readonly bool IsLong = typeof(T) == typeof(long);
-        public static readonly bool IsDouble = typeof(T) == typeof(double);
-        public static readonly bool IsBool = typeof(T) == typeof(bool);
-        public static readonly bool IsObjectId = typeof(T) == typeof(ObjectId);
-        public static readonly bool IsGuid = typeof(T) == typeof(Guid);
-        public static readonly bool IsDateTime = typeof(T) == typeof(DateTime);
-        public static readonly bool IsDecimal = typeof(T) == typeof(decimal);
-        public static readonly bool IsCollection;
-        public static readonly bool IsDictionary;
-        public static readonly BlittableBsonConstants.BsonType BsonType;
-
-        static TypeCache()
-        {
-            IsCollection = ArenaUpdateDefinitionBuilder.IsCollection(typeof(T), out _);
-            IsDictionary = ArenaUpdateDefinitionBuilder.IsDictionary(typeof(T), out _);
-            BsonType = IsCollection ? BlittableBsonConstants.BsonType.Array : BlittableBsonConstants.BsonType.Document;
-        }
-    }
-
-    private static bool IsDictionary(Type type, out Type valueType)
-    {
-        if (type.IsGenericType)
-        {
-            var def = type.GetGenericTypeDefinition();
-            if (def == typeof(Dictionary<,>) || 
-                def == typeof(IDictionary<,>) || 
-                def == typeof(IReadOnlyDictionary<,>))
-            {
-                var args = type.GetGenericArguments();
-                if (args[0] == typeof(string))
-                {
-                    valueType = args[1];
-                    return true;
-                }
-            }
-        }
-
-        valueType = null!;
-        return false;
-    }
-
-    private static bool IsCollection(Type type, out Type elementType)
-    {
-        if (type == typeof(string))
-        {
-            elementType = null!;
-            return false;
-        }
-
-        if (type.IsArray)
-        {
-            elementType = type.GetElementType()!;
-            return true;
-        }
-
-        if (type.IsGenericType)
-        {
-            var def = type.GetGenericTypeDefinition();
-            if (def == typeof(List<>) || def == typeof(IEnumerable<>) || def == typeof(IReadOnlyList<>) || def == typeof(ICollection<>))
-            {
-                elementType = type.GetGenericArguments()[0];
-                return true;
-            }
-        }
-
-        elementType = null!;
-        return false;
-    }
+    /// <summary>Kept for source compatibility; identical to <see cref="SetValue{T}"/>.</summary>
+    public void SetObject<T>(ReadOnlySpan<char> path, T value) => SetValue(path, value);
 
     // ArenaUtf8String overloads — use with CombinePathUtf8 to avoid double UTF-8 encoding on deep paths
     public void Set(ArenaUtf8String path, int value) { EnsureSetStarted(); _writer.WriteName(path, BlittableBsonConstants.BsonType.Int32); _writer.WriteInt32Value(value); }

@@ -3,6 +3,11 @@ using MongoDB.Bson;
 
 namespace MongoZen;
 
+/// <summary>
+/// Attachment operations for a session. Writes become durable when the session's next
+/// <see cref="IDocumentSession.SaveChangesAsync"/> commits (on deployments with transaction
+/// support they are rolled back if the session is disposed first); reads do not start a transaction.
+/// </summary>
 public interface IAttachmentsSessionOperations
 {
     ValueTask StoreAsync(object documentId, string name, Stream stream, string? contentType = null, CancellationToken cancellationToken = default);

@@ -40,4 +40,6 @@ public unsafe class GuidConverter : IBlittableConverter<Guid>
     {
         writer.WriteGuidValue(value);
     }
+
+    public BlittableBsonConstants.BsonType BsonType => BlittableBsonConstants.BsonType.Binary;
 }

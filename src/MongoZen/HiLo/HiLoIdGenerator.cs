@@ -65,7 +65,7 @@ public sealed class HiLoIdGenerator
                 _gate.Wait();
                 try
                 {
-                    if (Interlocked.Read(ref _current) > _high)
+                    if (Interlocked.Read(ref _current) > Interlocked.Read(ref _high))
                     {
                         RefillRange(tag, database, conventions);
                     }
@@ -90,7 +90,7 @@ public sealed class HiLoIdGenerator
                 await _gate.WaitAsync(ct);
                 try
                 {
-                    if (Interlocked.Read(ref _current) > _high)
+                    if (Interlocked.Read(ref _current) > Interlocked.Read(ref _high))
                     {
                         await RefillRangeAsync(tag, database, conventions, ct);
                     }
@@ -145,8 +145,15 @@ public sealed class HiLoIdGenerator
                 // Range is (low, high] so a fresh range of size HiLoCapacity yields exactly
                 // HiLoCapacity ids: low+1 .. high.
                 long low = max - conventions.HiLoCapacity;
-                _high = max;
+
+                // Order matters. Readers on the lock-free fast path do Increment(_current) and then
+                // compare against _high. If _high were published first, a reader could increment the
+                // *old* counter past the old high, pass the new-high check, be handed an id, and then
+                // have _current reset below that id — which is handed out a second time. Resetting
+                // _current first means a racing reader sees low+1 against the old high, fails, waits on
+                // the gate and loops; at worst an id is skipped, never duplicated.
                 Interlocked.Exchange(ref _current, low);
+                Interlocked.Exchange(ref _high, max);
             }
         }
     }

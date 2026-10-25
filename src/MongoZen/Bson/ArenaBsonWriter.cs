@@ -275,8 +275,9 @@ public unsafe struct ArenaBsonWriter(ArenaAllocator arena, int initialCapacity =
 
     public void WriteDateTimeValue(DateTime value)
     {
-        long ms = (long)(value.ToUniversalTime() - DateTime.UnixEpoch).TotalMilliseconds;
-        WriteInt64Value(ms);
+        // Integer tick arithmetic shared with the change detector (BsonDateTimeUtil), so a value
+        // written here compares equal to itself after the millisecond truncation BSON imposes.
+        WriteInt64Value(BsonDateTimeUtil.ToMillisecondsSinceEpoch(value));
     }
 
     public void WriteBinaryValue(ReadOnlySpan<byte> bytes, byte subtype = 0)

@@ -49,6 +49,17 @@ public abstract class AbstractIndexCreationTask<T> : IAbstractIndexCreationTask 
         if (single != null) yield return single;
     }
 
+    /// <summary>
+    /// The server reports a same-name/different-definition clash as either 85 (IndexOptionsConflict,
+    /// "already exists with different options", older servers) or 86 (IndexKeySpecsConflict, "An existing
+    /// index has the same name as the requested index", MongoDB 5+). Both mean the same thing for us.
+    /// </summary>
+    private static bool IsIndexConflict(MongoCommandException ex) =>
+        ex.Code is 85 or 86
+        || ex.CodeName is "IndexOptionsConflict" or "IndexKeySpecsConflict"
+        || ex.Message.Contains("already exists with different options", StringComparison.Ordinal)
+        || ex.Message.Contains("has the same name as the requested index", StringComparison.Ordinal);
+
     async ValueTask IAbstractIndexCreationTask.ExecuteAsync(DocumentStore store, CancellationToken cancellationToken)
     {
         var collectionName = CollectionName ?? store.Conventions.GetCollectionName(typeof(T));
@@ -72,7 +83,7 @@ public abstract class AbstractIndexCreationTask<T> : IAbstractIndexCreationTask 
         {
             await collection.Indexes.CreateManyAsync(models, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
-        catch (MongoCommandException ex) when (ex.CodeName == "IndexOptionsConflict" || ex.Message.Contains("already exists with different options"))
+        catch (MongoCommandException ex) when (IsIndexConflict(ex))
         {
             if (ForceRecreate)
             {

@@ -115,88 +115,29 @@ public readonly unsafe struct BlittableBsonArray : IReadOnlyList<BlittableBsonAr
 
         public BlittableBsonConstants.BsonType Type => _type;
 
-        public int GetInt32() => _type switch
-        {
-            BlittableBsonConstants.BsonType.Int32 => *(int*)_p,
-            BlittableBsonConstants.BsonType.Int64 => (int)*(long*)_p,
-            BlittableBsonConstants.BsonType.Double => (int)*(double*)_p,
-            _ => throw new InvalidCastException($"Cannot cast {_type} to Int32")
-        };
+        /// <summary>Pointer at the element's data (after type byte and index name).</summary>
+        public byte* Pointer => _p;
 
-        public string GetString()
-        {
-            if (_type != BlittableBsonConstants.BsonType.String)
-            {
-                throw new InvalidCastException($"Cannot cast {_type} to String");
-            }
+        /// <summary>Length of the element's data in bytes.</summary>
+        public int Length => _length;
 
-            int len = *(int*)_p;
-            return System.Text.Encoding.UTF8.GetString(_p + 4, len - 1);
-        }
+        public int GetInt32() => BsonValueReader.ReadInt32(_p, _type);
+
+        public string GetString() => BsonValueReader.ReadString(_p, _type);
 
         public T Get<T>()
         {
-            if (typeof(T) == typeof(int))
-            {
-                return (T)(object)GetInt32();
-            }
-
-            if (typeof(T) == typeof(string))
-            {
-                return (T)(object)GetString();
-            }
-
-            if (typeof(T) == typeof(long))
-            {
-                if (_type != BlittableBsonConstants.BsonType.Int64)
-                {
-                    throw new InvalidCastException($"Cannot cast {_type} to Int64");
-                }
-
-                return (T)(object)*(long*)_p;
-            }
-            if (typeof(T) == typeof(double))
-            {
-                if (_type != BlittableBsonConstants.BsonType.Double)
-                {
-                    throw new InvalidCastException($"Cannot cast {_type} to Double");
-                }
-
-                return (T)(object)*(double*)_p;
-            }
-            if (typeof(T) == typeof(bool))
-            {
-                if (_type != BlittableBsonConstants.BsonType.Boolean)
-                {
-                    throw new InvalidCastException($"Cannot cast {_type} to Boolean");
-                }
-
-                return (T)(object)(*_p != 0);
-            }
-            if (typeof(T) == typeof(ObjectId))
-            {
-                if (_type != BlittableBsonConstants.BsonType.ObjectId)
-                {
-                    throw new InvalidCastException($"Cannot cast {_type} to ObjectId");
-                }
-
-                byte[] bytes = new byte[12];
-                for(int i=0; i<12; i++)
-                {
-                    bytes[i] = _p[i];
-                }
-
-                return (T)(object)new ObjectId(bytes);
-            }
-            if (typeof(T) == typeof(DateTime))
-            {
-                if (_type != BlittableBsonConstants.BsonType.DateTime)
-                {
-                    throw new InvalidCastException($"Cannot cast {_type} to DateTime");
-                }
-
-                return (T)(object)DateTime.UnixEpoch.AddMilliseconds(*(long*)_p);
-            }
+            // Same coercion rules as BlittableBsonDocument's typed getters (Int32/Int64/Double interchangeable).
+            if (typeof(T) == typeof(int)) return (T)(object)BsonValueReader.ReadInt32(_p, _type);
+            if (typeof(T) == typeof(string)) return (T)(object)BsonValueReader.ReadString(_p, _type);
+            if (typeof(T) == typeof(long)) return (T)(object)BsonValueReader.ReadInt64(_p, _type);
+            if (typeof(T) == typeof(double)) return (T)(object)BsonValueReader.ReadDouble(_p, _type);
+            if (typeof(T) == typeof(bool)) return (T)(object)BsonValueReader.ReadBoolean(_p, _type);
+            if (typeof(T) == typeof(ObjectId)) return (T)(object)BsonValueReader.ReadObjectId(_p, _type);
+            if (typeof(T) == typeof(DateTime)) return (T)(object)BsonValueReader.ReadDateTime(_p, _type);
+            if (typeof(T) == typeof(Guid)) return (T)(object)BsonValueReader.ReadGuid(_p, _type);
+            if (typeof(T) == typeof(decimal)) return (T)(object)BsonValueReader.ReadDecimal128(_p, _type);
+            if (typeof(T) == typeof(byte[])) return (T)(object)BsonValueReader.ReadBinary(_p, _type);
 
             return BlittableConverter<T>.Instance.Read(_p, _type, _length);
         }

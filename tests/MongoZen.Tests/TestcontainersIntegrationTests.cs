@@ -112,25 +112,29 @@ public class ConcurrencyConflictRealServerTests : TestcontainersIntegrationTestB
 
 public class IndexConflictAndRecreateTests : TestcontainersIntegrationTestBase
 {
-    public class IndexedEntity
+    // Deliberately *not* named IndexedEntity: IndexCreationTests.IndexedEntity maps to the same collection
+    // name, and IndexCreationTests scans this whole assembly, so any task here that shared that
+    // collection and an index name with it made that test's outcome depend on Task.WhenAll ordering.
+    // Each task below also has its own index name for the same reason.
+    public class ConflictIndexedEntity
     {
         public string Id { get; set; } = null!;
         public string Email { get; set; } = null!;
     }
 
-    public class IndexedEntity_ByEmail_Unique : AbstractIndexCreationTask<IndexedEntity>
+    public class ConflictIndexedEntity_ByEmail_Unique : AbstractIndexCreationTask<ConflictIndexedEntity>
     {
-        public override string IndexName => "IndexedEntity_ByEmail";
-        public override CreateIndexModel<IndexedEntity>? CreateIndexModel() =>
-            new(Builders<IndexedEntity>.IndexKeys.Ascending(x => x.Email), new CreateIndexOptions { Unique = true });
+        public override string IndexName => "ConflictIndexedEntity_ByEmail_Unique";
+        public override CreateIndexModel<ConflictIndexedEntity>? CreateIndexModel() =>
+            new(Builders<ConflictIndexedEntity>.IndexKeys.Ascending(x => x.Email), new CreateIndexOptions { Unique = true });
     }
 
-    public class IndexedEntity_ByEmail_NonUnique_ForceRecreate : AbstractIndexCreationTask<IndexedEntity>
+    public class ConflictIndexedEntity_ByEmail_NonUnique_ForceRecreate : AbstractIndexCreationTask<ConflictIndexedEntity>
     {
-        public override string IndexName => "IndexedEntity_ByEmail";
+        public override string IndexName => "ConflictIndexedEntity_ByEmail_Recreate";
         public override bool ForceRecreate => true;
-        public override CreateIndexModel<IndexedEntity>? CreateIndexModel() =>
-            new(Builders<IndexedEntity>.IndexKeys.Ascending(x => x.Email), new CreateIndexOptions { Unique = false });
+        public override CreateIndexModel<ConflictIndexedEntity>? CreateIndexModel() =>
+            new(Builders<ConflictIndexedEntity>.IndexKeys.Ascending(x => x.Email), new CreateIndexOptions { Unique = false });
     }
 
     [SkippableFact]
@@ -139,15 +143,16 @@ public class IndexConflictAndRecreateTests : TestcontainersIntegrationTestBase
         Skip.IfNot(SkipReason is null, SkipReason);
 
         using var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
-        var collectionName = store.Conventions.GetCollectionName(typeof(IndexedEntity));
-        var collection = Database.GetCollection<IndexedEntity>(collectionName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(ConflictIndexedEntity));
+        var collection = Database.GetCollection<ConflictIndexedEntity>(collectionName);
 
-        await collection.Indexes.CreateOneAsync(new CreateIndexModel<IndexedEntity>(
-            Builders<IndexedEntity>.IndexKeys.Ascending(x => x.Email),
-            new CreateIndexOptions { Name = "IndexedEntity_ByEmail", Unique = false }));
+        await collection.Indexes.CreateOneAsync(new CreateIndexModel<ConflictIndexedEntity>(
+            Builders<ConflictIndexedEntity>.IndexKeys.Ascending(x => x.Email),
+            new CreateIndexOptions { Name = "ConflictIndexedEntity_ByEmail_Unique", Unique = false }));
 
-        // Same name, different options (unique vs. non-unique): the server rejects this as a conflict.
-        IAbstractIndexCreationTask conflicting = new IndexedEntity_ByEmail_Unique();
+        // Same name, different options (unique vs. non-unique): the server rejects this as a conflict
+        // (code 86 IndexKeySpecsConflict on MongoDB 5+, 85 IndexOptionsConflict before that).
+        IAbstractIndexCreationTask conflicting = new ConflictIndexedEntity_ByEmail_Unique();
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => conflicting.ExecuteAsync(store, CancellationToken.None).AsTask());
     }
@@ -158,18 +163,18 @@ public class IndexConflictAndRecreateTests : TestcontainersIntegrationTestBase
         Skip.IfNot(SkipReason is null, SkipReason);
 
         using var store = new DocumentStore(Client, Database.DatabaseNamespace.DatabaseName);
-        var collectionName = store.Conventions.GetCollectionName(typeof(IndexedEntity));
-        var collection = Database.GetCollection<IndexedEntity>(collectionName);
+        var collectionName = store.Conventions.GetCollectionName(typeof(ConflictIndexedEntity));
+        var collection = Database.GetCollection<ConflictIndexedEntity>(collectionName);
 
-        await collection.Indexes.CreateOneAsync(new CreateIndexModel<IndexedEntity>(
-            Builders<IndexedEntity>.IndexKeys.Ascending(x => x.Email),
-            new CreateIndexOptions { Name = "IndexedEntity_ByEmail", Unique = true }));
+        await collection.Indexes.CreateOneAsync(new CreateIndexModel<ConflictIndexedEntity>(
+            Builders<ConflictIndexedEntity>.IndexKeys.Ascending(x => x.Email),
+            new CreateIndexOptions { Name = "ConflictIndexedEntity_ByEmail_Recreate", Unique = true }));
 
-        IAbstractIndexCreationTask task = new IndexedEntity_ByEmail_NonUnique_ForceRecreate();
+        IAbstractIndexCreationTask task = new ConflictIndexedEntity_ByEmail_NonUnique_ForceRecreate();
         await task.ExecuteAsync(store, CancellationToken.None);
 
         var indexes = await (await collection.Indexes.ListAsync()).ToListAsync();
-        var recreated = Assert.Single(indexes, i => i.GetValue("name", "").AsString == "IndexedEntity_ByEmail");
+        var recreated = Assert.Single(indexes, i => i.GetValue("name", "").AsString == "ConflictIndexedEntity_ByEmail_Recreate");
         Assert.False(recreated.GetValue("unique", false).ToBoolean());
     }
 }

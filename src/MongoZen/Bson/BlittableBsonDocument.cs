@@ -27,6 +27,9 @@ public readonly unsafe struct BlittableBsonDocument
 
     public bool ContainsKey(ReadOnlySpan<char> name) => TryGetElementOffset(name, out _);
 
+    /// <summary>Number of top-level elements.</summary>
+    public int Count => _length == 0 ? 0 : _index.Count;
+
     public ReadOnlySpan<byte> AsReadOnlySpan() => new(_bsonBytes, _length);
 
     public KeysCollection Keys => new(_index);
@@ -58,6 +61,32 @@ public readonly unsafe struct BlittableBsonDocument
             return false;
         }
         return _index.TryGetValue(name, out offset);
+    }
+
+    public bool TryGetElementOffset(ArenaUtf8String name, out int offset)
+    {
+        if (_length == 0)
+        {
+            offset = 0;
+            return false;
+        }
+        return _index.TryGetValue(name, out offset);
+    }
+
+    /// <summary>Reads a BSON Binary element as a managed array.</summary>
+    public byte[] GetBinary(ReadOnlySpan<char> name)
+    {
+        if (!TryGetElementOffset(name, out var offset))
+        {
+            throw new KeyNotFoundException($"Property '{name.ToString()}' not found.");
+        }
+        return GetBinary(offset);
+    }
+
+    public byte[] GetBinary(int offset)
+    {
+        var p = GetElementData(offset, out var type, out _);
+        return BsonValueReader.ReadBinary(p, type);
     }
 
     public int GetInt32(ReadOnlySpan<char> name)
@@ -183,142 +212,29 @@ public readonly unsafe struct BlittableBsonDocument
         return System.Text.Encoding.UTF8.GetString(bytes);
     }
 
-    public int GetInt32(int offset)
-    {
-        var p = GetDataPointerAtOffset(offset, out var type, out _);
-        return type switch
-        {
-            BlittableBsonConstants.BsonType.Int32 => *(int*)p,
-            BlittableBsonConstants.BsonType.Int64 => (int)*(long*)p,
-            BlittableBsonConstants.BsonType.Double => (int)*(double*)p,
-            _ => throw new InvalidCastException($"Cannot cast {type} to Int32")
-        };
-    }
+    public int GetInt32(int offset) => BsonValueReader.ReadInt32(GetElementData(offset, out var type, out _), type);
 
-    public long GetInt64(int offset)
-    {
-        var p = GetDataPointerAtOffset(offset, out var type, out _);
-        return type switch
-        {
-            BlittableBsonConstants.BsonType.Int64 => *(long*)p,
-            BlittableBsonConstants.BsonType.Int32 => *(int*)p,
-            BlittableBsonConstants.BsonType.Double => (long)*(double*)p,
-            _ => throw new InvalidCastException($"Cannot cast {type} to Int64")
-        };
-    }
+    public long GetInt64(int offset) => BsonValueReader.ReadInt64(GetElementData(offset, out var type, out _), type);
 
-    public double GetDouble(int offset)
-    {
-        var p = GetDataPointerAtOffset(offset, out var type, out _);
-        return type switch
-        {
-            BlittableBsonConstants.BsonType.Double => *(double*)p,
-            BlittableBsonConstants.BsonType.Int32 => *(int*)p,
-            BlittableBsonConstants.BsonType.Int64 => *(long*)p,
-            _ => throw new InvalidCastException($"Cannot cast {type} to Double")
-        };
-    }
+    public double GetDouble(int offset) => BsonValueReader.ReadDouble(GetElementData(offset, out var type, out _), type);
 
-    public bool GetBoolean(int offset)
-    {
-        var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.Boolean)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to Boolean");
-        }
+    public bool GetBoolean(int offset) => BsonValueReader.ReadBoolean(GetElementData(offset, out var type, out _), type);
 
-        return *p != 0;
-    }
+    public ReadOnlySpan<byte> GetStringBytes(int offset) => BsonValueReader.ReadStringBytes(GetElementData(offset, out var type, out _), type);
 
-    public ReadOnlySpan<byte> GetStringBytes(int offset)
-    {
-        var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.String)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to String");
-        }
+    public string GetString(int offset) => BsonValueReader.ReadString(GetElementData(offset, out var type, out _), type);
 
-        int strLen = *(int*)p;
-        return new ReadOnlySpan<byte>(p + 4, strLen - 1);
-    }
+    public ObjectId GetObjectId(int offset) => BsonValueReader.ReadObjectId(GetElementData(offset, out var type, out _), type);
 
-    public string GetString(int offset) => System.Text.Encoding.UTF8.GetString(GetStringBytes(offset));
+    public DateTime GetDateTime(int offset) => BsonValueReader.ReadDateTime(GetElementData(offset, out var type, out _), type);
 
-    public ObjectId GetObjectId(int offset)
-    {
-        var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.ObjectId)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to ObjectId");
-        }
+    public Guid GetGuid(int offset) => BsonValueReader.ReadGuid(GetElementData(offset, out var type, out _), type);
 
-        byte[] bytes = new byte[12];
-        for (int i = 0; i < 12; i++)
-        {
-            bytes[i] = p[i];
-        }
-
-        return new ObjectId(bytes);
-    }
-
-    public DateTime GetDateTime(int offset)
-    {
-        var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.DateTime)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to DateTime");
-        }
-
-        long ms = *(long*)p;
-        return DateTime.UnixEpoch.AddMilliseconds(ms);
-    }
-
-    public Guid GetGuid(int offset)
-    {
-        var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.Binary)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to Guid");
-        }
-
-        int len = *(int*)p;
-        byte subtype = p[4];
-        if (len != 16)
-        {
-            throw new InvalidOperationException($"Invalid Guid length: {len}");
-        }
-
-        var span = new ReadOnlySpan<byte>(p + 5, 16);
-        if (subtype == 4)
-        {
-            return new Guid(span, bigEndian: true);
-        }
-
-        if (subtype == 3)
-        {
-            return new Guid(span);
-        }
-
-        throw new InvalidOperationException($"Unsupported Guid subtype: {subtype}");
-    }
-
-    public decimal GetDecimal128(int offset)
-    {
-        var p = GetDataPointerAtOffset(offset, out var type, out _);
-        if (type != BlittableBsonConstants.BsonType.Decimal128)
-        {
-            throw new InvalidCastException($"Cannot cast {type} to Decimal128");
-        }
-
-        long low = *(long*)p;
-        long high = *(long*)(p + 8);
-        var d128 = Decimal128.FromIEEEBits((ulong)high, (ulong)low);
-        return Decimal128.ToDecimal(d128);
-    }
+    public decimal GetDecimal128(int offset) => BsonValueReader.ReadDecimal128(GetElementData(offset, out var type, out _), type);
 
     public BlittableBsonDocument GetDocument(int offset, ArenaAllocator arena)
     {
-        var p = GetDataPointerAtOffset(offset, out var type, out var length);
+        var p = GetElementData(offset, out var type, out var length);
         if (type != BlittableBsonConstants.BsonType.Document)
         {
             throw new InvalidCastException($"Cannot cast {type} to Document");
@@ -329,7 +245,7 @@ public readonly unsafe struct BlittableBsonDocument
 
     public BlittableBsonArray GetArray(int offset, ArenaAllocator arena)
     {
-        var p = GetDataPointerAtOffset(offset, out var type, out var length);
+        var p = GetElementData(offset, out var type, out var length);
         if (type != BlittableBsonConstants.BsonType.Array)
         {
             throw new InvalidCastException($"Cannot cast {type} to Array");
@@ -394,11 +310,15 @@ public readonly unsafe struct BlittableBsonDocument
             return (T)(object)GetDecimal128(offset);
         }
 
-        var p = GetDataPointerAtOffset(offset, out var type, out var length);
+        var p = GetElementData(offset, out var type, out var length);
         return BlittableConverter<T>.Instance.Read(p, type, length);
     }
 
-    private byte* GetDataPointerAtOffset(int offset, out BlittableBsonConstants.BsonType type, out int length)
+    /// <summary>
+    /// Resolves an element offset (position of its type byte, as returned by <see cref="TryGetElementOffset(ReadOnlySpan{char}, out int)"/>)
+    /// to a pointer at its data, with the element's type and data length.
+    /// </summary>
+    public byte* GetElementData(int offset, out BlittableBsonConstants.BsonType type, out int length)
     {
         type = (BlittableBsonConstants.BsonType)_bsonBytes[offset];
         var ptr = _bsonBytes + offset + 1;
@@ -409,4 +329,15 @@ public readonly unsafe struct BlittableBsonDocument
         length = endPos - dataPos;
         return dataPtr;
     }
+
+    /// <summary>Reads the element at <paramref name="offset"/> as <typeparamref name="T"/> through <see cref="ElementCodec{T}"/> (used by generated code).</summary>
+    public T Read<T>(int offset, ArenaAllocator arena)
+    {
+        var p = GetElementData(offset, out var type, out var length);
+        return ElementCodec<T>.ReadAt(p, type, length, arena);
+    }
+
+    /// <summary>Same as <see cref="GetElementData"/> for compiled expression trees, which cannot use pointer types.</summary>
+    public nint GetElementDataPtr(int offset, out BlittableBsonConstants.BsonType type, out int length) =>
+        (nint)GetElementData(offset, out type, out length);
 }
